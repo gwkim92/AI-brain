@@ -241,58 +241,45 @@ flowchart LR
 3. 모든 요청/응답에 `request_id`
 4. 오류 포맷 통일
 
-### 7.1 Tasks
+### 7.1 현재 구현된 엔드포인트 (2026-02-23 기준)
+Core:
+1. `GET /health`
+
+AI:
+1. `GET /api/v1/providers`
+2. `POST /api/v1/ai/respond`
+
+Tasks:
 1. `POST /api/v1/tasks`
 2. `GET /api/v1/tasks`
-3. `GET /api/v1/tasks/{task_id}`
-4. `POST /api/v1/tasks/{task_id}/cancel`
-5. `POST /api/v1/tasks/{task_id}/retry`
-6. `GET /api/v1/tasks/{task_id}/events` (SSE)
-7. `GET /api/v1/tasks/{task_id}/artifacts`
+3. `GET /api/v1/tasks/{taskId}`
+4. `GET /api/v1/tasks/{taskId}/events` (SSE)
 
-### 7.2 Council / Reports
-1. `POST /api/v1/councils`
-2. `GET /api/v1/councils/{council_id}`
-3. `GET /api/v1/councils/{council_id}/rounds`
-4. `GET /api/v1/reports/{report_id}`
-
-### 7.3 Code / Compute
-1. `POST /api/v1/executions/code`
-2. `POST /api/v1/executions/compute`
-3. `GET /api/v1/executions/{execution_id}`
-4. `GET /api/v1/executions/{execution_id}/logs`
-5. `GET /api/v1/executions/{execution_id}/repro`
-
-### 7.4 Approvals
-1. `GET /api/v1/approvals`
-2. `GET /api/v1/approvals/{approval_id}`
-3. `POST /api/v1/approvals/{approval_id}/decisions`
-
-### 7.5 Memory
-1. `GET /api/v1/memory/facts`
-2. `POST /api/v1/memory/facts`
-3. `DELETE /api/v1/memory/facts/{fact_id}`
-4. `GET /api/v1/memory/search`
-
-### 7.6 Connectors
-1. `GET /api/v1/connectors`
-2. `POST /api/v1/connectors/{provider}/oauth/start`
-3. `GET /api/v1/connectors/{provider}/oauth/callback`
-4. `DELETE /api/v1/connectors/{provider}/{account_id}`
-
-### 7.7 Tech Radar
+Tech Radar:
 1. `POST /api/v1/radar/ingest`
 2. `GET /api/v1/radar/items`
 3. `POST /api/v1/radar/evaluate`
 4. `GET /api/v1/radar/recommendations`
 5. `POST /api/v1/radar/reports/telegram`
 
-### 7.8 Upgrade Orchestration
+Upgrade Orchestration:
 1. `GET /api/v1/upgrades/proposals`
-2. `POST /api/v1/upgrades/proposals/{proposal_id}/approve`
+2. `POST /api/v1/upgrades/proposals/{proposalId}/approve`
 3. `POST /api/v1/upgrades/runs` (사용자 명령: `작업 시작`)
-4. `GET /api/v1/upgrades/runs/{run_id}`
-5. `POST /api/v1/upgrades/runs/{run_id}/rollback`
+4. `GET /api/v1/upgrades/runs/{runId}`
+
+Integrations:
+1. `POST /api/v1/integrations/openai/webhook`
+2. `POST /api/v1/integrations/telegram/webhook`
+
+### 7.2 후속 구현 예정 엔드포인트 (백로그)
+1. `POST /api/v1/tasks/{taskId}/cancel`
+2. `POST /api/v1/tasks/{taskId}/retry`
+3. `GET /api/v1/tasks/{taskId}/artifacts`
+4. `POST /api/v1/upgrades/runs/{runId}/rollback`
+5. Council/Reports API (`/api/v1/councils`, `/api/v1/reports`)
+6. Code/Compute 실행 API (`/api/v1/executions/*`)
+7. Memory/Connectors API (`/api/v1/memory/*`, `/api/v1/connectors/*`)
 
 ## 8) API 응답 표준
 

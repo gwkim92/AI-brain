@@ -1,19 +1,170 @@
 openapi: 3.1.0
 info:
   title: JARVIS Backend API
-  version: 1.0.0
+  version: 1.1.0
   description: |
-    v1 API contract for task orchestration, tech radar, and upgrade workflows.
+    v1 API contract aligned with currently implemented Fastify routes.
 servers:
   - url: https://api.jarvis.local
     description: Default server
 
 tags:
+  - name: Core
+  - name: AI
+  - name: Tasks
   - name: Radar
   - name: Upgrades
+  - name: Integrations
   - name: Events
 
 paths:
+  /health:
+    get:
+      tags: [Core]
+      summary: Service health check
+      operationId: getHealth
+      responses:
+        '200':
+          description: Health payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessHealth'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /api/v1/providers:
+    get:
+      tags: [AI]
+      summary: List AI provider availability
+      operationId: listProviders
+      responses:
+        '200':
+          description: Provider availability
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessProviders'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /api/v1/ai/respond:
+    post:
+      tags: [AI]
+      summary: Generate AI response with provider routing
+      operationId: aiRespond
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AiRespondRequest'
+      responses:
+        '200':
+          description: AI response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessAiRespond'
+        '422':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /api/v1/tasks:
+    post:
+      tags: [Tasks]
+      summary: Create task
+      operationId: createTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskCreateRequest'
+      responses:
+        '201':
+          description: Task created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessTask'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+    get:
+      tags: [Tasks]
+      summary: List tasks
+      operationId: listTasks
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [queued, running, blocked, retrying, done, failed, cancelled]
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: Task list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessTaskList'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /api/v1/tasks/{taskId}:
+    get:
+      tags: [Tasks]
+      summary: Get single task
+      operationId: getTask
+      parameters:
+        - in: path
+          name: taskId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Task detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessTask'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /api/v1/tasks/{taskId}/events:
+    get:
+      tags: [Events]
+      summary: Stream task events over SSE
+      operationId: streamTaskEvents
+      parameters:
+        - in: path
+          name: taskId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: text/event-stream payload
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        default:
+          $ref: '#/components/responses/ApiError'
+
   /api/v1/radar/ingest:
     post:
       tags: [Radar]
@@ -24,15 +175,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                source_filter:
-                  type: array
-                  items:
-                    type: string
-                force:
-                  type: boolean
-                  default: false
+              $ref: '#/components/schemas/RadarIngestRequest'
       responses:
         '202':
           description: Ingestion accepted
@@ -54,10 +197,6 @@ paths:
           schema:
             type: string
             enum: [new, scored, archived]
-        - in: query
-          name: cursor
-          schema:
-            type: string
         - in: query
           name: limit
           schema:
@@ -93,9 +232,6 @@ paths:
                   minItems: 1
                   items:
                     type: string
-                scoring_profile:
-                  type: string
-                  default: default
       responses:
         '202':
           description: Evaluation accepted
@@ -142,10 +278,6 @@ paths:
               properties:
                 chat_id:
                   type: string
-                recommendation_ids:
-                  type: array
-                  items:
-                    type: string
       responses:
         '202':
           description: Report enqueue accepted
@@ -177,14 +309,14 @@ paths:
         default:
           $ref: '#/components/responses/ApiError'
 
-  /api/v1/upgrades/proposals/{proposal_id}/approve:
+  /api/v1/upgrades/proposals/{proposalId}/approve:
     post:
       tags: [Upgrades]
-      summary: Approve proposal for execution
-      operationId: approveUpgradeProposal
+      summary: Approve or reject a proposal
+      operationId: decideUpgradeProposal
       parameters:
         - in: path
-          name: proposal_id
+          name: proposalId
           required: true
           schema:
             type: string
@@ -193,17 +325,10 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required: [decision]
-              properties:
-                decision:
-                  type: string
-                  enum: [approve, reject]
-                reason:
-                  type: string
+              $ref: '#/components/schemas/ProposalDecisionRequest'
       responses:
         '200':
-          description: Approval decision recorded
+          description: Decision recorded
           content:
             application/json:
               schema:
@@ -221,14 +346,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required: [proposal_id, start_command]
-              properties:
-                proposal_id:
-                  type: string
-                start_command:
-                  type: string
-                  enum: [작업 시작]
+              $ref: '#/components/schemas/UpgradeRunRequest'
       responses:
         '202':
           description: Upgrade run accepted
@@ -239,14 +357,14 @@ paths:
         default:
           $ref: '#/components/responses/ApiError'
 
-  /api/v1/upgrades/runs/{run_id}:
+  /api/v1/upgrades/runs/{runId}:
     get:
       tags: [Upgrades]
       summary: Get single upgrade run
       operationId: getUpgradeRun
       parameters:
         - in: path
-          name: run_id
+          name: runId
           required: true
           schema:
             type: string
@@ -257,57 +375,52 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiSuccessUpgradeRun'
+        '404':
+          $ref: '#/components/responses/ApiError'
         default:
           $ref: '#/components/responses/ApiError'
 
-  /api/v1/upgrades/runs/{run_id}/rollback:
+  /api/v1/integrations/openai/webhook:
     post:
-      tags: [Upgrades]
-      summary: Trigger rollback for an upgrade run
-      operationId: rollbackUpgradeRun
-      parameters:
-        - in: path
-          name: run_id
-          required: true
-          schema:
-            type: string
+      tags: [Integrations]
+      summary: OpenAI webhook callback endpoint
+      operationId: openaiWebhook
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
             schema:
               type: object
-              properties:
-                reason:
-                  type: string
+              additionalProperties: true
       responses:
-        '202':
-          description: Rollback accepted
+        '200':
+          description: Webhook accepted
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ApiSuccessUpgradeRun'
+                $ref: '#/components/schemas/ApiSuccessAccepted'
         default:
           $ref: '#/components/responses/ApiError'
 
-  /api/v1/tasks/{task_id}/events:
-    get:
-      tags: [Events]
-      summary: Stream task events over SSE
-      operationId: streamTaskEvents
-      parameters:
-        - in: path
-          name: task_id
-          required: true
-          schema:
-            type: string
+  /api/v1/integrations/telegram/webhook:
+    post:
+      tags: [Integrations]
+      summary: Telegram webhook callback endpoint
+      operationId: telegramWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
       responses:
         '200':
-          description: text/event-stream payload
+          description: Telegram command handled
           content:
-            text/event-stream:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/ApiSuccessTelegramCommand'
         default:
           $ref: '#/components/responses/ApiError'
 
@@ -321,6 +434,10 @@ components:
             $ref: '#/components/schemas/ApiErrorEnvelope'
 
   schemas:
+    ApiMeta:
+      type: object
+      additionalProperties: true
+
     ApiErrorEnvelope:
       type: object
       required: [request_id, error]
@@ -336,40 +453,171 @@ components:
             message:
               type: string
             details:
-              type: array
-              items:
-                type: object
-                additionalProperties: true
+              type: object
+              additionalProperties: true
 
-    ApiMeta:
+    Health:
       type: object
-      additionalProperties: true
-
-    ApiSuccessRadarIngest:
-      type: object
-      required: [request_id, data, meta]
+      required: [status, service, env, store, db, now]
       properties:
-        request_id:
+        status:
           type: string
-        data:
-          type: object
-          required: [ingest_job_id, status]
-          properties:
-            ingest_job_id:
-              type: string
-            status:
-              type: string
-              enum: [queued]
-        meta:
-          $ref: '#/components/schemas/ApiMeta'
+          enum: [ok]
+        service:
+          type: string
+        env:
+          type: string
+          enum: [development, test, production]
+        store:
+          type: string
+          enum: [memory, postgres]
+        db:
+          type: string
+          enum: [up, down, n/a]
+        now:
+          type: string
+          format: date-time
 
-    RadarItem:
+    ProviderAvailability:
       type: object
-      required: [id, title, source_url, published_at, confidence_score, status]
+      required: [provider, enabled]
+      properties:
+        provider:
+          type: string
+          enum: [openai, gemini, anthropic, local]
+        enabled:
+          type: boolean
+        model:
+          type: string
+        reason:
+          type: string
+
+    ProviderAttempt:
+      type: object
+      required: [provider, status]
+      properties:
+        provider:
+          type: string
+          enum: [openai, gemini, anthropic, local]
+        status:
+          type: string
+          enum: [success, failed, skipped]
+        latencyMs:
+          type: integer
+        error:
+          type: string
+
+    Usage:
+      type: object
+      properties:
+        inputTokens:
+          type: integer
+        outputTokens:
+          type: integer
+
+    AiRespondRequest:
+      type: object
+      required: [prompt]
+      properties:
+        prompt:
+          type: string
+        system_prompt:
+          type: string
+        provider:
+          type: string
+          enum: [auto, openai, gemini, anthropic, local]
+          default: auto
+        strict_provider:
+          type: boolean
+          default: false
+        task_type:
+          type: string
+          enum: [chat, execute, council, code, compute, long_run, high_risk, radar_review, upgrade_execution]
+          default: chat
+        model:
+          type: string
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+        max_output_tokens:
+          type: integer
+          minimum: 1
+          maximum: 32000
+
+    AiRespondResult:
+      type: object
+      required: [provider, model, output, attempts, used_fallback]
+      properties:
+        provider:
+          type: string
+          enum: [openai, gemini, anthropic, local]
+        model:
+          type: string
+        output:
+          type: string
+        usage:
+          $ref: '#/components/schemas/Usage'
+        attempts:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProviderAttempt'
+        used_fallback:
+          type: boolean
+
+    Task:
+      type: object
+      required: [id, userId, mode, status, title, input, idempotencyKey, createdAt, updatedAt]
       properties:
         id:
           type: string
+        userId:
+          type: string
+        mode:
+          type: string
+          enum: [chat, execute, council, code, compute, long_run, high_risk, radar_review, upgrade_execution]
+        status:
+          type: string
+          enum: [queued, running, blocked, retrying, done, failed, cancelled]
         title:
+          type: string
+        input:
+          type: object
+          additionalProperties: true
+        idempotencyKey:
+          type: string
+        traceId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    TaskCreateRequest:
+      type: object
+      required: [title]
+      properties:
+        mode:
+          type: string
+          enum: [chat, execute, council, code, compute, long_run, high_risk, radar_review, upgrade_execution]
+          default: execute
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        input:
+          type: object
+          additionalProperties: true
+
+    RadarIngestItem:
+      type: object
+      required: [title, source_url]
+      properties:
+        title:
+          type: string
+        summary:
           type: string
         source_url:
           type: string
@@ -381,82 +629,241 @@ components:
           type: number
           minimum: 0
           maximum: 1
+
+    RadarIngestRequest:
+      type: object
+      properties:
+        source_name:
+          type: string
+          default: manual
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RadarIngestItem'
+
+    RadarItem:
+      type: object
+      required: [id, title, summary, sourceUrl, sourceName, confidenceScore, status]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        summary:
+          type: string
+        sourceUrl:
+          type: string
+          format: uri
+        sourceName:
+          type: string
+        publishedAt:
+          type: string
+          format: date-time
+          nullable: true
+        confidenceScore:
+          type: number
+          minimum: 0
+          maximum: 1
         status:
           type: string
           enum: [new, scored, archived]
 
     RadarRecommendation:
       type: object
-      required: [id, item_id, decision, score_total, expected_benefit, migration_cost, risk]
+      required: [id, itemId, decision, totalScore, expectedBenefit, migrationCost, riskLevel, evaluatedAt]
       properties:
         id:
           type: string
-        item_id:
+        itemId:
           type: string
         decision:
           type: string
           enum: [adopt, hold, discard]
-        score_total:
+        totalScore:
           type: number
-        expected_benefit:
+        expectedBenefit:
           type: string
-        migration_cost:
+        migrationCost:
           type: string
-        risk:
+        riskLevel:
           type: string
-
-    UpgradeProposal:
-      type: object
-      required: [id, recommendation_id, status, created_at]
-      properties:
-        id:
-          type: string
-        recommendation_id:
-          type: string
-        status:
-          type: string
-          enum: [proposed, approved, rejected]
-        created_at:
+        evaluatedAt:
           type: string
           format: date-time
 
-    UpgradeRun:
+    UpgradeProposal:
       type: object
-      required: [id, proposal_id, status, created_at]
+      required: [id, recommendationId, proposalTitle, status, createdAt]
       properties:
         id:
           type: string
-        proposal_id:
+        recommendationId:
+          type: string
+        proposalTitle:
           type: string
         status:
           type: string
-          enum: [planning, running, verifying, deployed, failed, rolled_back, rejected]
-        baseline_metrics:
-          type: object
-          additionalProperties: true
-        post_metrics:
-          type: object
-          additionalProperties: true
-        rollback_ref:
+          enum: [proposed, approved, planning, running, verifying, deployed, failed, rolled_back, rejected]
+        createdAt:
           type: string
-        created_at:
+          format: date-time
+        approvedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    ProposalDecisionRequest:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [approve, reject]
+        reason:
+          type: string
+
+    UpgradeRunRequest:
+      type: object
+      required: [proposal_id, start_command]
+      properties:
+        proposal_id:
+          type: string
+          format: uuid
+        start_command:
+          type: string
+          enum: [작업 시작]
+        eval:
+          type: object
+          properties:
+            accuracy:
+              type: number
+              minimum: 0
+              maximum: 1
+            safety:
+              type: number
+              minimum: 0
+              maximum: 1
+            cost_delta_pct:
+              type: number
+              minimum: 0
+
+    UpgradeRun:
+      type: object
+      required: [id, proposalId, status, startCommand, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        proposalId:
+          type: string
+        status:
+          type: string
+          enum: [proposed, approved, planning, running, verifying, deployed, failed, rolled_back, rejected]
+        startCommand:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
           type: string
           format: date-time
 
     TelegramReport:
       type: object
-      required: [id, chat_id, status, created_at]
+      required: [id, chatId, status, createdAt]
       properties:
         id:
           type: string
-        chat_id:
+        chatId:
           type: string
         status:
           type: string
           enum: [queued, sent, failed]
-        created_at:
+        createdAt:
           type: string
           format: date-time
+
+    ApiSuccessHealth:
+      type: object
+      required: [request_id, data, meta]
+      properties:
+        request_id:
+          type: string
+        data:
+          $ref: '#/components/schemas/Health'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+
+    ApiSuccessProviders:
+      type: object
+      required: [request_id, data, meta]
+      properties:
+        request_id:
+          type: string
+        data:
+          type: object
+          required: [providers]
+          properties:
+            providers:
+              type: array
+              items:
+                $ref: '#/components/schemas/ProviderAvailability'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+
+    ApiSuccessAiRespond:
+      type: object
+      required: [request_id, data, meta]
+      properties:
+        request_id:
+          type: string
+        data:
+          $ref: '#/components/schemas/AiRespondResult'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+
+    ApiSuccessTask:
+      type: object
+      required: [request_id, data, meta]
+      properties:
+        request_id:
+          type: string
+        data:
+          $ref: '#/components/schemas/Task'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+
+    ApiSuccessTaskList:
+      type: object
+      required: [request_id, data, meta]
+      properties:
+        request_id:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Task'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+
+    ApiSuccessRadarIngest:
+      type: object
+      required: [request_id, data, meta]
+      properties:
+        request_id:
+          type: string
+        data:
+          type: object
+          required: [ingest_job_id, status, accepted_count]
+          properties:
+            ingest_job_id:
+              type: string
+            status:
+              type: string
+              enum: [queued]
+            accepted_count:
+              type: integer
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
 
     ApiSuccessRadarItems:
       type: object
@@ -483,13 +890,15 @@ components:
           type: string
         data:
           type: object
-          required: [evaluation_job_id, status]
+          required: [evaluation_job_id, status, recommendation_count]
           properties:
             evaluation_job_id:
               type: string
             status:
               type: string
               enum: [queued]
+            recommendation_count:
+              type: integer
         meta:
           $ref: '#/components/schemas/ApiMeta'
 
@@ -557,5 +966,79 @@ components:
           type: string
         data:
           $ref: '#/components/schemas/UpgradeRun'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+
+    ApiSuccessAccepted:
+      type: object
+      required: [request_id, data, meta]
+      properties:
+        request_id:
+          type: string
+        data:
+          type: object
+          required: [accepted]
+          properties:
+            accepted:
+              type: boolean
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+
+    TelegramCommandResult:
+      oneOf:
+        - type: object
+          required: [status, type, run]
+          properties:
+            status:
+              type: string
+              enum: [accepted]
+            type:
+              type: string
+              enum: [start]
+            run:
+              type: object
+              required: [id, proposalId, status]
+              properties:
+                id:
+                  type: string
+                proposalId:
+                  type: string
+                status:
+                  type: string
+        - type: object
+          required: [status, type]
+          properties:
+            status:
+              type: string
+              enum: [accepted]
+            type:
+              type: string
+              enum: [status_digest, proposal_summary]
+        - type: object
+          required: [status, reason]
+          properties:
+            status:
+              type: string
+              enum: [rejected]
+            reason:
+              type: string
+              enum: [proposal_not_found, proposal_not_approved, invalid_command]
+
+    ApiSuccessTelegramCommand:
+      type: object
+      required: [request_id, data, meta]
+      properties:
+        request_id:
+          type: string
+        data:
+          oneOf:
+            - $ref: '#/components/schemas/TelegramCommandResult'
+            - type: object
+              required: [accepted, ignored]
+              properties:
+                accepted:
+                  type: boolean
+                ignored:
+                  type: boolean
         meta:
           $ref: '#/components/schemas/ApiMeta'
