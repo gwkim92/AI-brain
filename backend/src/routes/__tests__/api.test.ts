@@ -353,9 +353,14 @@ describe('API routes', () => {
 
     const stream = await app.inject({
       method: 'GET',
-      url: `/api/v1/assistant/contexts/${contextId}/events/stream`
+      url: `/api/v1/assistant/contexts/${contextId}/events/stream`,
+      headers: {
+        origin: 'http://localhost:3000'
+      }
     });
     expect(stream.statusCode).toBe(200);
+    expect(stream.headers['access-control-allow-origin']).toBe('http://localhost:3000');
+    expect(stream.headers['access-control-allow-credentials']).toBe('true');
     expect(stream.body).toContain('event: stream.open');
     expect(stream.body).toContain('event: assistant.context.event');
     expect(stream.body).toContain('"eventType":"assistant.context.run.completed"');
@@ -461,18 +466,55 @@ describe('API routes', () => {
     await app.close();
   });
 
+  it('returns provider registry and policies for memory store', async () => {
+    const { app } = await buildServer();
+
+    const registry = await app.inject({
+      method: 'GET',
+      url: '/api/v1/providers/registry'
+    });
+    expect(registry.statusCode).toBe(200);
+    const registryBody = registry.json() as {
+      data: {
+        models: unknown[];
+        source?: string;
+      };
+    };
+    expect(Array.isArray(registryBody.data.models)).toBe(true);
+    expect(registryBody.data.source).toBe('memory_store');
+
+    const policies = await app.inject({
+      method: 'GET',
+      url: '/api/v1/providers/policies'
+    });
+    expect(policies.statusCode).toBe(200);
+    const policiesBody = policies.json() as {
+      data: {
+        policies: unknown[];
+        source?: string;
+      };
+    };
+    expect(Array.isArray(policiesBody.data.policies)).toBe(true);
+    expect(policiesBody.data.source).toBe('memory_store');
+
+    await app.close();
+  });
+
   it('streams dashboard overview snapshots over SSE', async () => {
     const { app } = await buildServer();
 
     const stream = await app.inject({
       method: 'GET',
-      url: '/api/v1/dashboard/events?task_limit=20&pending_approval_limit=10&running_task_limit=10&poll_ms=200&timeout_ms=1200',
+      url: '/api/v1/dashboard/events?task_limit=20&pending_approval_limit=10&running_task_limit=10&poll_ms=3000&timeout_ms=1200',
       headers: {
-        'x-user-role': 'operator'
+        'x-user-role': 'operator',
+        origin: 'http://localhost:3000'
       }
     });
 
     expect(stream.statusCode).toBe(200);
+    expect(stream.headers['access-control-allow-origin']).toBe('http://localhost:3000');
+    expect(stream.headers['access-control-allow-credentials']).toBe('true');
     expect(stream.headers['content-type']).toContain('text/event-stream');
     expect(stream.body).toContain('event: stream.open');
     expect(stream.body).toContain('event: dashboard.updated');
@@ -602,6 +644,17 @@ describe('API routes', () => {
       }
     });
     expect(deniedReports.statusCode).toBe(403);
+
+    const spoofedReports = await app.inject({
+      method: 'GET',
+      url: '/api/v1/reports/overview',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'x-user-role': 'admin',
+        'x-user-id': '00000000-0000-4000-8000-000000000001'
+      }
+    });
+    expect(spoofedReports.statusCode).toBe(403);
 
     const deniedRadar = await app.inject({
       method: 'POST',
@@ -1979,9 +2032,14 @@ describe('API routes', () => {
     const listEvents = await app.inject({
       method: 'GET',
       url: '/api/v1/radar/reports/telegram/events?limit=10',
-      headers: authHeaders
+      headers: {
+        ...authHeaders,
+        origin: 'http://localhost:3000'
+      }
     });
     expect(listEvents.statusCode).toBe(200);
+    expect(listEvents.headers['access-control-allow-origin']).toBe('http://localhost:3000');
+    expect(listEvents.headers['access-control-allow-credentials']).toBe('true');
     expect(listEvents.headers['content-type']).toContain('text/event-stream');
     expect(listEvents.body).toContain('event: stream.open');
     expect(listEvents.body).toContain('event: telegram.reports.updated');
@@ -1990,9 +2048,14 @@ describe('API routes', () => {
     const detailEvents = await app.inject({
       method: 'GET',
       url: `/api/v1/radar/reports/telegram/${reportId}/events`,
-      headers: authHeaders
+      headers: {
+        ...authHeaders,
+        origin: 'http://localhost:3000'
+      }
     });
     expect(detailEvents.statusCode).toBe(200);
+    expect(detailEvents.headers['access-control-allow-origin']).toBe('http://localhost:3000');
+    expect(detailEvents.headers['access-control-allow-credentials']).toBe('true');
     expect(detailEvents.headers['content-type']).toContain('text/event-stream');
     expect(detailEvents.body).toContain('event: stream.open');
     expect(detailEvents.body).toContain('event: telegram.report.updated');

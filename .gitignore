@@ -1,0 +1,10 @@
+# backend build/dependency artifacts
+backend/node_modules/
+backend/.pnpm-store/
+backend/coverage/
+backend/.turbo/
+backend/.vite/
+backend/*.log
+
+# macOS
+.DS_Store

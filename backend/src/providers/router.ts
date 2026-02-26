@@ -8,7 +8,7 @@ import type {
   ProviderGenerateRequest,
   ProviderGenerateResult
 } from './types';
-import { getPolicyScoresForTask, type PolicyScoreEntry } from './task-model-policy';
+import { getPolicyScoresForTask } from './task-model-policy';
 
 export type ProviderRouterRequest = ProviderGenerateRequest & {
   provider?: ProviderName | 'auto';

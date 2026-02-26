@@ -1,5 +1,5 @@
 import { runDag, type DagStep } from './dag-runner';
-import type { JarvisStore, MissionRecord, MissionStepRecord, MissionStepStatus, MissionStepType } from '../store/types';
+import type { JarvisStore, MissionRecord, MissionStepRecord, MissionStepStatus } from '../store/types';
 import type { ProviderRouter } from '../providers/router';
 import type { RoutingTaskType } from '../providers/types';
 import { runContextPipeline } from '../context/pipeline';

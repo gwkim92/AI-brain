@@ -1,21 +1,16 @@
 import { randomUUID } from 'node:crypto';
 
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 
-import { createSessionToken, hashPassword, hashSessionToken, verifyPassword } from '../auth/crypto';
-import { decryptSecretValue, encryptSecretValue } from '../auth/secrets';
 import type { AppEnv } from '../config/env';
-import { sendError, sendSuccess } from '../lib/http';
+import { sendError } from '../lib/http';
 import type { ProviderRouter } from '../providers/router';
 import type { NotificationService } from '../notifications/proactive';
 import type {
   CouncilRole,
-  CouncilRunRecord,
   JarvisStore,
   MissionRecord,
-  MissionStepRecord,
   ProviderCredentialProvider,
-  TaskMode,
   UserRole
 } from '../store/types';
 
@@ -214,6 +209,19 @@ export function normalizeUserRole(value: string | null | undefined): UserRole {
   const normalized = value?.trim().toLowerCase();
   if (normalized === 'member' || normalized === 'operator' || normalized === 'admin') return normalized;
   return 'member';
+}
+
+export function applySseCorsHeaders(request: FastifyRequest, reply: FastifyReply, env: AppEnv): void {
+  const originHeader = request.headers.origin;
+  if (typeof originHeader === 'string' && env.allowedOrigins.includes(originHeader)) {
+    reply.raw.setHeader('Access-Control-Allow-Origin', originHeader);
+    reply.raw.setHeader('Access-Control-Allow-Credentials', 'true');
+    reply.raw.setHeader('Vary', 'Origin');
+  }
+
+  reply.raw.setHeader('Content-Type', 'text/event-stream');
+  reply.raw.setHeader('Cache-Control', 'no-cache');
+  reply.raw.setHeader('Connection', 'keep-alive');
 }
 
 export type MissionDomain = 'code' | 'research' | 'finance' | 'news' | 'mixed';

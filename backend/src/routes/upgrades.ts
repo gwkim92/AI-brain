@@ -41,7 +41,7 @@ export async function upgradeRoutes(app: FastifyInstance, ctx: RouteContext) {
       : undefined;
 
     const proposals = await store.listUpgradeProposals(statusFilter);
-    return sendSuccess(reply, request, 200, proposals);
+    return sendSuccess(reply, request, 200, { proposals });
   });
 
   app.post('/api/v1/upgrades/proposals/:proposalId/approve', async (request, reply) => {
@@ -94,12 +94,35 @@ export async function upgradeRoutes(app: FastifyInstance, ctx: RouteContext) {
         startCommand: parsed.data.start_command
       },
       store.createUpgradeExecutorGateway(),
-      { evaluateGate: async () => evalResult }
+      {
+        evaluateGate: async () => evalResult,
+        isProposalExpired: (proposal) => {
+          const approvedAtMs = proposal.approvedAt ? Date.parse(proposal.approvedAt) : Number.NaN;
+          if (!Number.isFinite(approvedAtMs)) {
+            return true;
+          }
+
+          if (ctx.env.APPROVAL_MAX_AGE_HOURS <= 0) {
+            return true;
+          }
+
+          const expiresAtMs = approvedAtMs + ctx.env.APPROVAL_MAX_AGE_HOURS * 60 * 60 * 1000;
+          return Date.now() >= expiresAtMs;
+        }
+      }
     );
 
     if (result.status === 'rejected') {
-      return sendError(reply, request, 409, 'CONFLICT', 'upgrade run rejected', {
+      const details: { reason: string; approval_max_age_hours?: number } = {
         reason: result.reason
+      };
+
+      if (result.reason === 'approval_expired') {
+        details.approval_max_age_hours = ctx.env.APPROVAL_MAX_AGE_HOURS;
+      }
+
+      return sendError(reply, request, 409, 'CONFLICT', 'upgrade run rejected', {
+        ...details
       });
     }
 
@@ -117,7 +140,7 @@ export async function upgradeRoutes(app: FastifyInstance, ctx: RouteContext) {
     }
 
     const runs = await store.listUpgradeRuns(parsed.data.limit);
-    return sendSuccess(reply, request, 200, runs);
+    return sendSuccess(reply, request, 200, { runs });
   });
 
   app.get('/api/v1/upgrades/runs/:runId', async (request, reply) => {
