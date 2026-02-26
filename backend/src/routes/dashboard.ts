@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { sendError, sendSuccess } from '../lib/http';
 import type { RouteContext } from './types';
+import { applySseCorsHeaders } from './types';
 
 const DashboardOverviewQuerySchema = z.object({
   task_limit: z.coerce.number().int().min(20).max(200).default(120),
@@ -10,7 +11,7 @@ const DashboardOverviewQuerySchema = z.object({
 });
 
 const DashboardEventsQuerySchema = DashboardOverviewQuerySchema.extend({
-  poll_ms: z.coerce.number().int().min(150).max(2000).default(700),
+  poll_ms: z.coerce.number().int().min(150).max(10000).default(700),
   timeout_ms: z.coerce.number().int().min(1000).max(120000).default(45000)
 });
 
@@ -31,16 +32,7 @@ export async function dashboardRoutes(app: FastifyInstance, ctx: RouteContext) {
       return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid query', parsed.error.flatten());
     }
 
-    const originHeader = request.headers.origin;
-    if (typeof originHeader === 'string' && ctx.env.allowedOrigins.includes(originHeader)) {
-      reply.raw.setHeader('Access-Control-Allow-Origin', originHeader);
-      reply.raw.setHeader('Access-Control-Allow-Credentials', 'true');
-      reply.raw.setHeader('Vary', 'Origin');
-    }
-
-    reply.raw.setHeader('Content-Type', 'text/event-stream');
-    reply.raw.setHeader('Cache-Control', 'no-cache');
-    reply.raw.setHeader('Connection', 'keep-alive');
+    applySseCorsHeaders(request, reply, ctx.env);
 
     reply.raw.write('event: stream.open\n');
     reply.raw.write(`data: ${JSON.stringify({ request_id: request.id })}\n\n`);
@@ -48,22 +40,29 @@ export async function dashboardRoutes(app: FastifyInstance, ctx: RouteContext) {
     let closed = false;
     let lastSignature: string | null = null;
 
-    const emitSnapshot = async () => {
-      if (closed) return;
-      const snapshot = await ctx.buildDashboardOverviewData(request, parsed.data);
-      const signature = ctx.buildDashboardOverviewSignature(snapshot);
-      if (signature === lastSignature) return;
-      lastSignature = signature;
-      reply.raw.write('event: dashboard.updated\n');
-      reply.raw.write(`data: ${JSON.stringify({ timestamp: new Date().toISOString(), data: snapshot })}\n\n`);
-    };
-
-    const closeStream = () => {
+    const closeStream = (reason = 'closed') => {
       if (closed) return;
       closed = true;
       reply.raw.write('event: stream.close\n');
-      reply.raw.write(`data: ${JSON.stringify({ request_id: request.id })}\n\n`);
+      reply.raw.write(`data: ${JSON.stringify({ request_id: request.id, reason })}\n\n`);
       reply.raw.end();
+    };
+
+    const emitSnapshot = async () => {
+      if (closed) return;
+      try {
+        const snapshot = await ctx.buildDashboardOverviewData(request, parsed.data);
+        const signature = ctx.buildDashboardOverviewSignature(snapshot);
+        if (signature === lastSignature) return;
+        lastSignature = signature;
+        reply.raw.write('event: dashboard.updated\n');
+        reply.raw.write(`data: ${JSON.stringify({ timestamp: new Date().toISOString(), data: snapshot })}\n\n`);
+      } catch (error) {
+        request.log.error({ err: error }, 'dashboard events stream snapshot failed');
+        reply.raw.write('event: stream.error\n');
+        reply.raw.write(`data: ${JSON.stringify({ request_id: request.id, reason: 'snapshot_failed' })}\n\n`);
+        closeStream('snapshot_failed');
+      }
     };
 
     reply.raw.on('close', () => { closed = true; });
@@ -72,7 +71,7 @@ export async function dashboardRoutes(app: FastifyInstance, ctx: RouteContext) {
     if (closed) return;
 
     const interval = setInterval(() => { void emitSnapshot(); }, parsed.data.poll_ms);
-    const timeout = setTimeout(() => { closeStream(); }, parsed.data.timeout_ms);
+    const timeout = setTimeout(() => { closeStream('timeout'); }, parsed.data.timeout_ms);
 
     reply.raw.on('close', () => {
       clearInterval(interval);

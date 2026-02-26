@@ -282,6 +282,61 @@ export function createPostgresStore(options: PostgresStoreOptions): JarvisStore 
         )
       `);
       await pool.query(`
+        CREATE TABLE IF NOT EXISTS provider_stats (
+          provider TEXT NOT NULL,
+          task_type TEXT NOT NULL,
+          success_count INTEGER NOT NULL DEFAULT 0,
+          failure_count INTEGER NOT NULL DEFAULT 0,
+          avg_latency_ms NUMERIC NOT NULL DEFAULT 0,
+          success_ema NUMERIC NOT NULL DEFAULT 0.5,
+          latency_ema NUMERIC NOT NULL DEFAULT 0,
+          last_updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY (provider, task_type)
+        )
+      `);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS model_registry (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          provider TEXT NOT NULL,
+          model_id TEXT NOT NULL,
+          display_name TEXT,
+          is_available BOOLEAN NOT NULL DEFAULT true,
+          context_window INTEGER,
+          max_output_tokens INTEGER,
+          supports_vision BOOLEAN NOT NULL DEFAULT false,
+          supports_streaming BOOLEAN NOT NULL DEFAULT true,
+          cost_tier TEXT NOT NULL DEFAULT 'standard',
+          last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          CHECK (provider IN ('openai', 'gemini', 'anthropic', 'local')),
+          CHECK (cost_tier IN ('free', 'low', 'standard', 'premium')),
+          UNIQUE (provider, model_id)
+        )
+      `);
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_model_registry_provider_available
+        ON model_registry(provider, is_available)
+      `);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS task_model_policy (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          task_type TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          model_id TEXT NOT NULL,
+          tier INTEGER NOT NULL DEFAULT 1,
+          priority INTEGER NOT NULL DEFAULT 0,
+          is_active BOOLEAN NOT NULL DEFAULT true,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          CHECK (tier >= 1 AND tier <= 3),
+          UNIQUE (task_type, provider, model_id)
+        )
+      `);
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_task_model_policy_task_type_active
+        ON task_model_policy(task_type, is_active, tier ASC, priority DESC)
+      `);
+      await pool.query(`
         CREATE TABLE IF NOT EXISTS missions (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,

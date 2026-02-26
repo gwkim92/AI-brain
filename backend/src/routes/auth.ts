@@ -16,7 +16,8 @@ const AuthLoginSchema = z.object({
 });
 
 export async function authRoutes(app: FastifyInstance, ctx: RouteContext) {
-  const { store, env, resolveRequestUserId } = ctx;
+  const { store, env } = ctx;
+  const sessionTtlMs = env.AUTH_SESSION_TTL_HOURS * 60 * 60 * 1000;
 
   app.post('/api/v1/auth/signup', async (request, reply) => {
     if (!env.AUTH_ALLOW_SIGNUP) {
@@ -41,12 +42,13 @@ export async function authRoutes(app: FastifyInstance, ctx: RouteContext) {
 
     const rawToken = createSessionToken();
     const tokenHash = hashSessionToken(rawToken);
-    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + sessionTtlMs).toISOString();
     await store.createAuthSession({ userId: created.id, tokenHash, expiresAt });
 
     return sendSuccess(reply, request, 201, {
       user: { id: created.id, email: created.email, role: created.role, display_name: created.displayName },
-      token: rawToken
+      token: rawToken,
+      expires_at: expiresAt
     });
   });
 
@@ -63,12 +65,13 @@ export async function authRoutes(app: FastifyInstance, ctx: RouteContext) {
 
     const rawToken = createSessionToken();
     const tokenHash = hashSessionToken(rawToken);
-    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + sessionTtlMs).toISOString();
     await store.createAuthSession({ userId: user.id, tokenHash, expiresAt });
 
     return sendSuccess(reply, request, 200, {
       user: { id: user.id, email: user.email, role: user.role, display_name: user.displayName },
-      token: rawToken
+      token: rawToken,
+      expires_at: expiresAt
     });
   });
 
@@ -84,16 +87,18 @@ export async function authRoutes(app: FastifyInstance, ctx: RouteContext) {
     }
 
     return sendSuccess(reply, request, 200, {
-      user: { id: user.id, email: user.email, role: user.role, display_name: user.displayName }
+      user: { id: user.id, email: user.email, role: user.role, display_name: user.displayName },
+      auth_type: auth.authType
     });
   });
 
   app.post('/api/v1/auth/logout', async (request, reply) => {
     const auth = ctx.getRequestAuthContext(request);
+    let revoked = false;
     if (auth?.authType === 'session' && auth.tokenHash) {
-      await store.revokeAuthSession(auth.tokenHash);
+      revoked = await store.revokeAuthSession(auth.tokenHash);
     }
 
-    return sendSuccess(reply, request, 200, { logged_out: true });
+    return sendSuccess(reply, request, 200, { revoked });
   });
 }

@@ -7,7 +7,7 @@ import { sendError, sendSuccess } from '../lib/http';
 import { embedAndStore } from '../memory/embed';
 import { extractProviderAttempts, maskErrorForApi } from '../providers/router';
 import type { RouteContext } from './types';
-import { createSpanId, resolveAssistantContextTaskType } from './types';
+import { applySseCorsHeaders, createSpanId, resolveAssistantContextTaskType } from './types';
 
 // --- Schemas ---
 
@@ -538,9 +538,7 @@ export async function assistantRoutes(app: FastifyInstance, ctx: RouteContext): 
       return sendError(reply, request, 404, 'NOT_FOUND', 'assistant context not found');
     }
 
-    reply.raw.setHeader('Content-Type', 'text/event-stream');
-    reply.raw.setHeader('Cache-Control', 'no-cache');
-    reply.raw.setHeader('Connection', 'keep-alive');
+    applySseCorsHeaders(request, reply, ctx.env);
 
     let closed = false;
     let sinceSequence = parsed.data.since_sequence;

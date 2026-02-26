@@ -187,10 +187,15 @@ describe('missions api', () => {
 
     const stream = await app.inject({
       method: 'GET',
-      url: `/api/v1/missions/${created.data.id}/events?poll_ms=300&timeout_ms=1200`
+      url: `/api/v1/missions/${created.data.id}/events?poll_ms=300&timeout_ms=1200`,
+      headers: {
+        origin: 'http://localhost:3000'
+      }
     });
 
     expect(stream.statusCode).toBe(200);
+    expect(stream.headers['access-control-allow-origin']).toBe('http://localhost:3000');
+    expect(stream.headers['access-control-allow-credentials']).toBe('true');
     expect(stream.headers['content-type']).toContain('text/event-stream');
     expect(stream.body).toContain('event: stream.open');
     expect(stream.body).toContain('event: mission.updated');

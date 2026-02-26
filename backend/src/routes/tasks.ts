@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { sendError, sendSuccess } from '../lib/http';
 import type { TaskMode } from '../store/types';
-import type { RouteContext } from './types';
+import { applySseCorsHeaders, type RouteContext } from './types';
 
 const TaskCreateSchema = z.object({
   mode: z
@@ -62,9 +62,7 @@ export async function taskRoutes(app: FastifyInstance, ctx: RouteContext) {
     const taskId = (request.params as { taskId: string }).taskId;
     const events = await store.listTaskEvents(taskId, 200);
 
-    reply.raw.setHeader('Content-Type', 'text/event-stream');
-    reply.raw.setHeader('Cache-Control', 'no-cache');
-    reply.raw.setHeader('Connection', 'keep-alive');
+    applySseCorsHeaders(request, reply, ctx.env);
 
     reply.raw.write(`event: stream.open\n`);
     reply.raw.write(`data: ${JSON.stringify({ request_id: request.id, task_id: taskId })}\n\n`);

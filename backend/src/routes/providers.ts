@@ -7,6 +7,13 @@ import { listAllPolicies, upsertPolicy } from '../providers/task-model-policy';
 import type { ProviderName } from '../providers/types';
 import type { RouteContext } from './types';
 
+function isMissingTableError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && error.code === '42P01';
+}
+
 export async function providerRoutes(app: FastifyInstance, ctx: RouteContext) {
   const { store, env, providerRouter, loadRuntimeProviderApiKeys } = ctx;
 
@@ -31,8 +38,17 @@ export async function providerRoutes(app: FastifyInstance, ctx: RouteContext) {
     if (!pool) {
       return sendSuccess(reply, request, 200, { models: [], source: 'memory_store' });
     }
-    const models = await getAllModels(pool);
-    return sendSuccess(reply, request, 200, { models });
+
+    try {
+      const models = await getAllModels(pool);
+      return sendSuccess(reply, request, 200, { models });
+    } catch (error) {
+      if (isMissingTableError(error)) {
+        request.log.warn({ err: error }, 'provider registry table missing, returning empty registry');
+        return sendSuccess(reply, request, 200, { models: [], source: 'postgres_missing_schema' });
+      }
+      throw error;
+    }
   });
 
   app.get('/api/v1/providers/policies', async (request, reply) => {
@@ -40,8 +56,17 @@ export async function providerRoutes(app: FastifyInstance, ctx: RouteContext) {
     if (!pool) {
       return sendSuccess(reply, request, 200, { policies: [], source: 'memory_store' });
     }
-    const policies = await listAllPolicies(pool);
-    return sendSuccess(reply, request, 200, { policies });
+
+    try {
+      const policies = await listAllPolicies(pool);
+      return sendSuccess(reply, request, 200, { policies });
+    } catch (error) {
+      if (isMissingTableError(error)) {
+        request.log.warn({ err: error }, 'task model policy table missing, returning empty policies');
+        return sendSuccess(reply, request, 200, { policies: [], source: 'postgres_missing_schema' });
+      }
+      throw error;
+    }
   });
 
   app.put('/api/v1/providers/policies', async (request, reply) => {
@@ -63,15 +88,22 @@ export async function providerRoutes(app: FastifyInstance, ctx: RouteContext) {
       return sendError(reply, request, 422, 'VALIDATION_ERROR', 'policies require postgres store');
     }
 
-    const policy = await upsertPolicy(pool, {
-      taskType: parsed.data.task_type,
-      provider: parsed.data.provider as ProviderName,
-      modelId: parsed.data.model_id,
-      tier: parsed.data.tier,
-      priority: parsed.data.priority,
-      isActive: parsed.data.is_active
-    });
+    try {
+      const policy = await upsertPolicy(pool, {
+        taskType: parsed.data.task_type,
+        provider: parsed.data.provider as ProviderName,
+        modelId: parsed.data.model_id,
+        tier: parsed.data.tier,
+        priority: parsed.data.priority,
+        isActive: parsed.data.is_active
+      });
 
-    return sendSuccess(reply, request, 200, policy);
+      return sendSuccess(reply, request, 200, policy);
+    } catch (error) {
+      if (isMissingTableError(error)) {
+        return sendError(reply, request, 503, 'INTERNAL_ERROR', 'provider policy schema is not initialized');
+      }
+      throw error;
+    }
   });
 }

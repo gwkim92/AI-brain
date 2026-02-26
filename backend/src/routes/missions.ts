@@ -7,7 +7,7 @@ import { executeMission } from '../orchestrator/mission-executor';
 import { generatePlan, planToMissionInput } from '../orchestrator/planner';
 import type { MissionRecord, MissionStepRecord } from '../store/types';
 import type { RouteContext } from './types';
-import { truncateText, buildMissionSignature, type MissionDomain, type MissionStepType } from './types';
+import { applySseCorsHeaders, truncateText, buildMissionSignature, type MissionDomain, type MissionStepType } from './types';
 
 const MissionDomainSchema = z.enum(['code', 'research', 'finance', 'news', 'mixed']);
 const MissionStatusSchema = z.enum(['draft', 'planned', 'running', 'blocked', 'completed', 'failed']);
@@ -240,9 +240,7 @@ export async function missionRoutes(app: FastifyInstance, ctx: RouteContext) {
     const initialMission = await store.getMissionById({ missionId, userId });
     if (!initialMission) return sendError(reply, request, 404, 'NOT_FOUND', 'mission not found');
 
-    reply.raw.setHeader('Content-Type', 'text/event-stream');
-    reply.raw.setHeader('Cache-Control', 'no-cache');
-    reply.raw.setHeader('Connection', 'keep-alive');
+    applySseCorsHeaders(request, reply, ctx.env);
 
     const emitEvent = (name: string, payload: unknown) => {
       reply.raw.write(`event: ${name}\n`);

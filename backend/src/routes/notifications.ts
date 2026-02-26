@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { sendError } from '../lib/http';
-import type { RouteContext } from './types';
+import { applySseCorsHeaders, type RouteContext } from './types';
 
 export async function notificationRoutes(app: FastifyInstance, ctx: RouteContext) {
   app.get('/api/v1/notifications/stream', async (request, reply) => {
@@ -8,12 +8,9 @@ export async function notificationRoutes(app: FastifyInstance, ctx: RouteContext
       return sendError(reply, request, 503, 'INTERNAL_ERROR', 'notification service unavailable');
     }
 
-    reply.raw.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no'
-    });
+    reply.raw.statusCode = 200;
+    applySseCorsHeaders(request, reply, ctx.env);
+    reply.raw.setHeader('X-Accel-Buffering', 'no');
     reply.raw.write(':\n\n');
     reply.hijack();
 

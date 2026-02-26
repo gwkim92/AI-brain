@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { extractProviderAttempts, maskErrorForApi } from '../providers/router';
 import { sendError, sendSuccess } from '../lib/http';
 import type { RouteContext } from './types';
-import { createSpanId, truncateText } from './types';
+import { applySseCorsHeaders, createSpanId, truncateText } from './types';
 
 const ExecutionRunCreateSchema = z.object({
   mode: z.enum(['code', 'compute']),
@@ -215,9 +215,7 @@ export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): 
       return sendError(reply, request, 404, 'NOT_FOUND', 'execution run not found');
     }
 
-    reply.raw.setHeader('Content-Type', 'text/event-stream');
-    reply.raw.setHeader('Cache-Control', 'no-cache');
-    reply.raw.setHeader('Connection', 'keep-alive');
+    applySseCorsHeaders(request, reply, ctx.env);
 
     reply.raw.write('event: stream.open\n');
     reply.raw.write(`data: ${JSON.stringify({ request_id: request.id, run_id: runId })}\n\n`);

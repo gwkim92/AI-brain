@@ -7,10 +7,10 @@ import { appendOpsPolicyItems, normalizeRadarItems } from '../radar/ingest';
 import { buildOpsUpgradeProposals } from '../radar/ops-policy';
 import type { RouteContext } from './types';
 import {
+  applySseCorsHeaders,
   buildTelegramReportSignature,
   buildTelegramReportsSignature,
-  summarizeTelegramReports,
-  truncateText
+  summarizeTelegramReports
 } from './types';
 
 const RadarIngestSchema = z.object({
@@ -341,9 +341,7 @@ export async function radarRoutes(app: FastifyInstance, ctx: RouteContext): Prom
       return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid query', parsed.error.flatten());
     }
 
-    reply.raw.setHeader('Content-Type', 'text/event-stream');
-    reply.raw.setHeader('Cache-Control', 'no-cache');
-    reply.raw.setHeader('Connection', 'keep-alive');
+    applySseCorsHeaders(request, reply, env);
 
     reply.raw.write('event: stream.open\n');
     reply.raw.write(`data: ${JSON.stringify({ request_id: request.id })}\n\n`);
@@ -430,9 +428,7 @@ export async function radarRoutes(app: FastifyInstance, ctx: RouteContext): Prom
       return sendError(reply, request, 404, 'NOT_FOUND', 'telegram report not found');
     }
 
-    reply.raw.setHeader('Content-Type', 'text/event-stream');
-    reply.raw.setHeader('Cache-Control', 'no-cache');
-    reply.raw.setHeader('Connection', 'keep-alive');
+    applySseCorsHeaders(request, reply, env);
 
     reply.raw.write('event: stream.open\n');
     reply.raw.write(`data: ${JSON.stringify({ request_id: request.id, report_id: reportId })}\n\n`);

@@ -7,6 +7,7 @@ import type { CouncilRunRecord } from '../store/types';
 import { sendError, sendSuccess } from '../lib/http';
 import type { RouteContext } from './types';
 import {
+  applySseCorsHeaders,
   COUNCIL_ROLES,
   createSpanId,
   parseRoundLogCount,
@@ -344,9 +345,7 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
       return sendError(reply, request, 404, 'NOT_FOUND', 'council run not found');
     }
 
-    reply.raw.setHeader('Content-Type', 'text/event-stream');
-    reply.raw.setHeader('Cache-Control', 'no-cache');
-    reply.raw.setHeader('Connection', 'keep-alive');
+    applySseCorsHeaders(request, reply, ctx.env);
 
     reply.raw.write('event: stream.open\n');
     reply.raw.write(`data: ${JSON.stringify({ request_id: request.id, run_id: runId })}\n\n`);
