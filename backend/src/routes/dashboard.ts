@@ -31,6 +31,13 @@ export async function dashboardRoutes(app: FastifyInstance, ctx: RouteContext) {
       return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid query', parsed.error.flatten());
     }
 
+    const originHeader = request.headers.origin;
+    if (typeof originHeader === 'string' && ctx.env.allowedOrigins.includes(originHeader)) {
+      reply.raw.setHeader('Access-Control-Allow-Origin', originHeader);
+      reply.raw.setHeader('Access-Control-Allow-Credentials', 'true');
+      reply.raw.setHeader('Vary', 'Origin');
+    }
+
     reply.raw.setHeader('Content-Type', 'text/event-stream');
     reply.raw.setHeader('Cache-Control', 'no-cache');
     reply.raw.setHeader('Connection', 'keep-alive');
