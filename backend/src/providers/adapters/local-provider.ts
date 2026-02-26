@@ -18,6 +18,10 @@ export class LocalProvider implements LlmProvider {
 
   constructor(private readonly options: LocalProviderOptions) {}
 
+  setApiKey(apiKey?: string): void {
+    this.options.apiKey = apiKey;
+  }
+
   availability(): ProviderAvailability {
     if (!this.options.enabled) {
       return {

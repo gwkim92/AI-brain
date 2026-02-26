@@ -1,0 +1,202 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { buildServer } from '../../server';
+
+const ENV_SNAPSHOT = { ...process.env };
+
+describe('missions api', () => {
+  beforeEach(() => {
+    process.env.STORE_BACKEND = 'memory';
+    process.env.ALLOWED_ORIGINS = 'http://localhost:3000';
+    process.env.PORT = '4011';
+    process.env.AUTH_REQUIRED = 'false';
+    process.env.AUTH_TOKEN = 'test_auth_token';
+    process.env.LOCAL_LLM_ENABLED = 'false';
+    process.env.OPENAI_API_KEY = '';
+    process.env.GEMINI_API_KEY = '';
+    process.env.ANTHROPIC_API_KEY = '';
+    process.env.TELEGRAM_WEBHOOK_SECRET = 'telegram_secret';
+    process.env.OPENAI_WEBHOOK_SECRET = 'openai_secret';
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    process.env = { ...ENV_SNAPSHOT };
+  });
+
+  it('creates mission and supports list/detail read', async () => {
+    const { app } = await buildServer();
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/missions',
+      payload: {
+        title: 'Codebase refactor plan',
+        objective: 'Split studio views and keep runtime unified',
+        domain: 'code'
+      }
+    });
+
+    expect(create.statusCode).toBe(201);
+    const created = create.json() as {
+      data: {
+        id: string;
+        title: string;
+        domain: string;
+        status: string;
+        steps: Array<{ id: string; route: string; type: string }>;
+      };
+    };
+
+    expect(created.data.id).toBeTruthy();
+    expect(created.data.title).toBe('Codebase refactor plan');
+    expect(created.data.domain).toBe('code');
+    expect(created.data.status).toBe('draft');
+    expect(created.data.steps.length).toBeGreaterThan(0);
+    expect(created.data.steps[0]?.type).toBe('code');
+    expect(created.data.steps[0]?.route).toBe('/studio/code');
+
+    const list = await app.inject({
+      method: 'GET',
+      url: '/api/v1/missions?limit=10'
+    });
+
+    expect(list.statusCode).toBe(200);
+    const listed = list.json() as {
+      data: {
+        missions: Array<{ id: string; title: string }>;
+      };
+    };
+
+    expect(listed.data.missions.length).toBe(1);
+    expect(listed.data.missions[0]?.id).toBe(created.data.id);
+
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/v1/missions/${created.data.id}`
+    });
+
+    expect(detail.statusCode).toBe(200);
+    const detailBody = detail.json() as { data: { id: string; title: string } };
+    expect(detailBody.data.id).toBe(created.data.id);
+    expect(detailBody.data.title).toBe('Codebase refactor plan');
+
+    await app.close();
+  });
+
+  it('rejects mission create without auth when auth is required', async () => {
+    process.env.AUTH_REQUIRED = 'true';
+    process.env.AUTH_TOKEN = 'hard_token';
+
+    const { app } = await buildServer();
+
+    const denied = await app.inject({
+      method: 'POST',
+      url: '/api/v1/missions',
+      payload: {
+        title: 'Unauthorized mission',
+        objective: 'Should fail',
+        domain: 'mixed'
+      }
+    });
+
+    expect(denied.statusCode).toBe(401);
+
+    const allowed = await app.inject({
+      method: 'POST',
+      url: '/api/v1/missions',
+      headers: {
+        authorization: 'Bearer hard_token'
+      },
+      payload: {
+        title: 'Authorized mission',
+        objective: 'Should pass',
+        domain: 'mixed'
+      }
+    });
+
+    expect(allowed.statusCode).toBe(201);
+
+    await app.close();
+  });
+
+  it('updates mission status and step statuses', async () => {
+    const { app } = await buildServer();
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/missions',
+      payload: {
+        title: 'Mission update target',
+        objective: 'Verify mission patch endpoint',
+        domain: 'mixed'
+      }
+    });
+    expect(create.statusCode).toBe(201);
+    const created = create.json() as {
+      data: {
+        id: string;
+        steps: Array<{ id: string }>;
+      };
+    };
+
+    const patch = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/missions/${created.data.id}`,
+      payload: {
+        status: 'running',
+        step_statuses: [
+          {
+            step_id: created.data.steps[0]!.id,
+            status: 'running'
+          }
+        ]
+      }
+    });
+    expect(patch.statusCode).toBe(200);
+    const patched = patch.json() as {
+      data: {
+        id: string;
+        status: string;
+        steps: Array<{ status: string }>;
+      };
+    };
+    expect(patched.data.id).toBe(created.data.id);
+    expect(patched.data.status).toBe('running');
+    expect(patched.data.steps[0]?.status).toBe('running');
+
+    await app.close();
+  });
+
+  it('streams mission snapshots over SSE', async () => {
+    const { app } = await buildServer();
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/missions',
+      payload: {
+        title: 'Mission stream test',
+        objective: 'Verify mission SSE stream emits updates',
+        domain: 'research'
+      }
+    });
+
+    expect(create.statusCode).toBe(201);
+    const created = create.json() as { data: { id: string } };
+
+    const stream = await app.inject({
+      method: 'GET',
+      url: `/api/v1/missions/${created.data.id}/events?poll_ms=300&timeout_ms=1200`
+    });
+
+    expect(stream.statusCode).toBe(200);
+    expect(stream.headers['content-type']).toContain('text/event-stream');
+    expect(stream.body).toContain('event: stream.open');
+    expect(stream.body).toContain('event: mission.updated');
+    expect(stream.body).toContain('"mission_id"');
+    expect(stream.body).toContain('event: stream.close');
+
+    await app.close();
+  });
+});

@@ -17,6 +17,10 @@ export class GeminiProvider implements LlmProvider {
 
   constructor(private readonly options: GeminiProviderOptions) {}
 
+  setApiKey(apiKey?: string): void {
+    this.options.apiKey = apiKey;
+  }
+
   availability(): ProviderAvailability {
     if (!this.options.apiKey) {
       return {

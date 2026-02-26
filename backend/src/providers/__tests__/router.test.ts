@@ -51,10 +51,16 @@ function createStubProvider(name: ProviderName, config: StubProviderConfig = {})
   };
 }
 
+function createDeterministicRouter(providers: Record<ProviderName, LlmProvider>): ProviderRouter {
+  const router = new ProviderRouter(providers);
+  router.setExplorationRate(0);
+  return router;
+}
+
 describe('ProviderRouter', () => {
   it('falls back to the next provider in task order when the first fails', async () => {
     const calls: ProviderName[] = [];
-    const router = new ProviderRouter({
+    const router = createDeterministicRouter({
       openai: createStubProvider('openai', {
         onGenerate: () => calls.push('openai'),
         throwMessage: 'openai unavailable'
@@ -85,7 +91,7 @@ describe('ProviderRouter', () => {
 
   it('does not fall back when strict provider mode is enabled', async () => {
     const calls: ProviderName[] = [];
-    const router = new ProviderRouter({
+    const router = createDeterministicRouter({
       openai: createStubProvider('openai', {
         onGenerate: () => calls.push('openai')
       }),
@@ -115,7 +121,7 @@ describe('ProviderRouter', () => {
 
   it('uses requested provider first and then fallback order when strict mode is disabled', async () => {
     const calls: ProviderName[] = [];
-    const router = new ProviderRouter({
+    const router = createDeterministicRouter({
       openai: createStubProvider('openai', {
         onGenerate: () => calls.push('openai'),
         outputText: 'openai fallback success'
@@ -147,7 +153,7 @@ describe('ProviderRouter', () => {
   });
 
   it('returns provider availability in fixed API order', () => {
-    const router = new ProviderRouter({
+    const router = createDeterministicRouter({
       openai: createStubProvider('openai'),
       gemini: createStubProvider('gemini', {
         enabled: false,
@@ -165,5 +171,163 @@ describe('ProviderRouter', () => {
       enabled: false,
       reason: 'missing_api_key'
     });
+  });
+
+  it('skips excluded providers and routes to next available candidate', async () => {
+    const calls: ProviderName[] = [];
+    const router = createDeterministicRouter({
+      openai: createStubProvider('openai', {
+        onGenerate: () => calls.push('openai')
+      }),
+      gemini: createStubProvider('gemini', {
+        onGenerate: () => calls.push('gemini'),
+        outputText: 'gemini success'
+      }),
+      anthropic: createStubProvider('anthropic', {
+        onGenerate: () => calls.push('anthropic')
+      }),
+      local: createStubProvider('local', {
+        onGenerate: () => calls.push('local')
+      })
+    });
+
+    const result = await router.generate({
+      prompt: 'exclude openai and anthropic',
+      taskType: 'chat',
+      excludeProviders: ['openai', 'anthropic']
+    });
+
+    expect(result.result.provider).toBe('gemini');
+    expect(result.attempts.map((item) => `${item.provider}:${item.status}`)).toEqual([
+      'openai:skipped',
+      'anthropic:skipped',
+      'gemini:success'
+    ]);
+    expect(result.attempts[0]?.error).toBe('excluded_by_request');
+    expect(result.attempts[1]?.error).toBe('excluded_by_request');
+    expect(calls).toEqual(['gemini']);
+  });
+
+  it('fails immediately when strict provider is excluded by request', async () => {
+    const calls: ProviderName[] = [];
+    const router = createDeterministicRouter({
+      openai: createStubProvider('openai', {
+        onGenerate: () => calls.push('openai')
+      }),
+      gemini: createStubProvider('gemini', {
+        onGenerate: () => calls.push('gemini')
+      }),
+      anthropic: createStubProvider('anthropic', {
+        onGenerate: () => calls.push('anthropic')
+      }),
+      local: createStubProvider('local', {
+        onGenerate: () => calls.push('local')
+      })
+    });
+
+    await expect(
+      router.generate({
+        prompt: 'strict excluded',
+        taskType: 'chat',
+        provider: 'openai',
+        strictProvider: true,
+        excludeProviders: ['openai']
+      })
+    ).rejects.toThrow('all providers failed: openai:skipped(excluded_by_request)');
+
+    expect(calls).toEqual([]);
+  });
+
+  it('adapts auto order based on runtime EMA outcomes', async () => {
+    const calls: ProviderName[] = [];
+    const router = createDeterministicRouter({
+      openai: createStubProvider('openai', {
+        onGenerate: () => calls.push('openai'),
+        throwMessage: 'openai outage'
+      }),
+      gemini: createStubProvider('gemini', {
+        onGenerate: () => calls.push('gemini'),
+        outputText: 'gemini success'
+      }),
+      anthropic: createStubProvider('anthropic', {
+        enabled: false,
+        reason: 'missing_api_key',
+        onGenerate: () => calls.push('anthropic')
+      }),
+      local: createStubProvider('local', {
+        enabled: false,
+        reason: 'disabled',
+        onGenerate: () => calls.push('local')
+      })
+    });
+
+    const first = await router.generate({
+      prompt: 'first request',
+      taskType: 'chat'
+    });
+
+    expect(first.attempts.map((item) => `${item.provider}:${item.status}`)).toEqual(['openai:failed', 'gemini:success']);
+    expect(first.selection?.strategy).toBe('auto_orchestrator');
+    expect(first.selection?.scores?.[0]?.breakdown).toMatchObject({
+      domain_fit: expect.any(Number),
+      recent_success: expect.any(Number),
+      latency: expect.any(Number),
+      cost: expect.any(Number),
+      context_fit: expect.any(Number),
+      prompt_fit: expect.any(Number),
+      availability_penalty: expect.any(Number)
+    });
+
+    const second = await router.generate({
+      prompt: 'second request',
+      taskType: 'chat'
+    });
+
+    expect(second.attempts[0]?.provider).toBe('gemini');
+    expect(second.result.provider).toBe('gemini');
+  });
+
+  it('loads runtime stats with EMA fields', () => {
+    const router = createDeterministicRouter({
+      openai: createStubProvider('openai'),
+      gemini: createStubProvider('gemini'),
+      anthropic: createStubProvider('anthropic'),
+      local: createStubProvider('local')
+    });
+
+    router.loadRuntimeStats([
+      { provider: 'openai', taskType: 'chat', successCount: 90, failureCount: 10, avgLatencyMs: 250, successEma: 0.9, latencyEma: 200 },
+      { provider: 'gemini', taskType: 'chat', successCount: 80, failureCount: 20, avgLatencyMs: 180, successEma: 0.7, latencyEma: 180 }
+    ]);
+
+    const stats = router.getRuntimeStats();
+    expect(stats.openai.successEma).toBe(0.9);
+    expect(stats.openai.latencyEma).toBe(200);
+    expect(stats.gemini.successEma).toBe(0.7);
+  });
+
+  it('enables policy routing when enablePolicyRouting is called', async () => {
+    const router = createDeterministicRouter({
+      openai: createStubProvider('openai', { outputText: 'ok' }),
+      gemini: createStubProvider('gemini'),
+      anthropic: createStubProvider('anthropic'),
+      local: createStubProvider('local')
+    });
+
+    router.enablePolicyRouting();
+    const result = await router.generate({ prompt: 'test', taskType: 'chat' });
+    expect(result.selection?.reason).toContain('source=policy');
+  });
+
+  it('uses fallback scores when policy routing is not enabled', async () => {
+    const router = createDeterministicRouter({
+      openai: createStubProvider('openai', { outputText: 'ok' }),
+      gemini: createStubProvider('gemini'),
+      anthropic: createStubProvider('anthropic'),
+      local: createStubProvider('local')
+    });
+
+    const result = await router.generate({ prompt: 'test', taskType: 'chat' });
+    expect(result.selection?.reason).toContain('source=fallback');
   });
 });

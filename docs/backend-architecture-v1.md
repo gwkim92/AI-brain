@@ -249,11 +249,26 @@ AI:
 1. `GET /api/v1/providers`
 2. `POST /api/v1/ai/respond`
 
+Councils:
+1. `POST /api/v1/councils/runs` (`idempotency-key` 필수, `x-trace-id` 선택, `exclude_providers[]` 선택)
+2. `GET /api/v1/councils/runs`
+3. `GET /api/v1/councils/runs/{runId}`
+4. `GET /api/v1/councils/runs/{runId}/events` (SSE: `council.run.updated|completed|failed`)
+
+Executions:
+1. `POST /api/v1/executions/runs` (`idempotency-key` 필수, `x-trace-id` 선택, `exclude_providers[]` 선택)
+2. `GET /api/v1/executions/runs`
+3. `GET /api/v1/executions/runs/{runId}`
+4. `GET /api/v1/executions/runs/{runId}/events` (SSE: `execution.run.updated|completed|failed`)
+
 Tasks:
 1. `POST /api/v1/tasks`
 2. `GET /api/v1/tasks`
 3. `GET /api/v1/tasks/{taskId}`
 4. `GET /api/v1/tasks/{taskId}/events` (SSE)
+
+Memory:
+1. `GET /api/v1/memory/snapshot`
 
 Tech Radar:
 1. `POST /api/v1/radar/ingest`
@@ -277,9 +292,9 @@ Integrations:
 2. `POST /api/v1/tasks/{taskId}/retry`
 3. `GET /api/v1/tasks/{taskId}/artifacts`
 4. `POST /api/v1/upgrades/runs/{runId}/rollback`
-5. Council/Reports API (`/api/v1/councils`, `/api/v1/reports`)
-6. Code/Compute 실행 API (`/api/v1/executions/*`)
-7. Memory/Connectors API (`/api/v1/memory/*`, `/api/v1/connectors/*`)
+5. Reports 전용 API (`/api/v1/reports/*`)
+6. Connectors API (`/api/v1/connectors/*`)
+7. Memory CRUD/API 확장 (`/api/v1/memory/facts`, `/api/v1/memory/preferences`, `/api/v1/memory/segments`)
 
 ## 8) API 응답 표준
 
@@ -318,19 +333,19 @@ Integrations:
 11. `500` 내부 오류
 
 ## 9) 이벤트 계약 (SSE)
-`event:` 타입:
-1. `task.created`
-2. `task.step.started`
-3. `task.step.completed`
-4. `task.blocked.approval`
-5. `task.retry.scheduled`
-6. `task.completed`
-7. `task.failed`
-8. `report.ready`
-9. `radar.digest.ready`
-10. `upgrade.run.started`
-11. `upgrade.run.completed`
-12. `upgrade.run.failed`
+`event:` 타입(현재 구현):
+1. `stream.open`
+2. `stream.close`
+3. `task.created`
+4. `task.updated`
+5. `task.done`
+6. `task.failed`
+7. `execution.run.updated`
+8. `execution.run.completed`
+9. `execution.run.failed`
+10. `council.run.updated`
+11. `council.run.completed`
+12. `council.run.failed`
 
 payload 예시:
 ```json
@@ -339,10 +354,11 @@ payload 예시:
   "task_id": "task_...",
   "type": "task.step.completed",
   "timestamp": "2026-02-22T10:00:00Z",
+  "trace_id": "trace_...",
+  "span_id": "span_...",
   "data": {
-    "step": "tool_call",
-    "status": "done",
-    "latency_ms": 842
+    "source": "execution_run",
+    "status": "done"
   }
 }
 ```

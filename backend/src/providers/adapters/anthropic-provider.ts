@@ -17,6 +17,10 @@ export class AnthropicProvider implements LlmProvider {
 
   constructor(private readonly options: AnthropicProviderOptions) {}
 
+  setApiKey(apiKey?: string): void {
+    this.options.apiKey = apiKey;
+  }
+
   availability(): ProviderAvailability {
     if (!this.options.apiKey) {
       return {

@@ -6,7 +6,8 @@ export type ApiErrorCode =
   | 'CONFLICT'
   | 'UNAUTHORIZED'
   | 'FORBIDDEN'
-  | 'INTERNAL_ERROR';
+  | 'INTERNAL_ERROR'
+  | 'PLAN_GENERATION_FAILED';
 
 export type ApiErrorBody = {
   request_id: string;

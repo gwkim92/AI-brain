@@ -11,7 +11,11 @@ servers:
 tags:
   - name: Core
   - name: AI
+  - name: Missions
+  - name: Councils
+  - name: Executions
   - name: Tasks
+  - name: Memory
   - name: Radar
   - name: Upgrades
   - name: Integrations
@@ -69,6 +73,412 @@ paths:
         '422':
           $ref: '#/components/responses/ApiError'
         '503':
+          $ref: '#/components/responses/ApiError'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /api/v1/missions:
+    post:
+      tags: [Missions]
+      summary: Create mission for multi-step orchestration
+      operationId: createMission
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MissionCreateRequest'
+      responses:
+        '201':
+          description: Mission created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessMission'
+        default:
+          $ref: '#/components/responses/ApiError'
+    get:
+      tags: [Missions]
+      summary: List missions
+      operationId: listMissions
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [draft, planned, running, blocked, completed, failed]
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: Mission list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessMissions'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /api/v1/missions/{missionId}:
+    get:
+      tags: [Missions]
+      summary: Get mission detail
+      operationId: getMission
+      parameters:
+        - in: path
+          name: missionId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Mission detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessMission'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        default:
+          $ref: '#/components/responses/ApiError'
+    patch:
+      tags: [Missions]
+      summary: Update mission status and step statuses
+      operationId: updateMission
+      parameters:
+        - in: path
+          name: missionId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MissionUpdateRequest'
+      responses:
+        '200':
+          description: Mission updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessMission'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /api/v1/missions/{missionId}/events:
+    get:
+      tags: [Events, Missions]
+      summary: Stream mission updates over Server-Sent Events
+      operationId: streamMissionEvents
+      parameters:
+        - in: path
+          name: missionId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: poll_ms
+          schema:
+            type: integer
+            minimum: 300
+            maximum: 10000
+            default: 1200
+        - in: query
+          name: timeout_ms
+          schema:
+            type: integer
+            minimum: 1000
+            maximum: 120000
+            default: 45000
+      responses:
+        '200':
+          description: Mission event stream
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/MissionSseDataEnvelope'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /api/v1/councils/runs:
+    post:
+      tags: [Councils]
+      summary: Start asynchronous council run for deep multi-agent deliberation
+      operationId: startCouncilRun
+      parameters:
+        - in: header
+          name: idempotency-key
+          required: true
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 200
+        - in: header
+          name: x-trace-id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CouncilRunCreateRequest'
+      responses:
+        '202':
+          description: Council run accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessCouncilRun'
+        '200':
+          description: Existing council run returned for idempotency replay
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessCouncilRun'
+        default:
+          $ref: '#/components/responses/ApiError'
+    get:
+      tags: [Councils]
+      summary: List recent council runs
+      operationId: listCouncilRuns
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Council run list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessCouncilRuns'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /api/v1/councils/runs/{runId}:
+    get:
+      tags: [Councils]
+      summary: Get single council run
+      operationId: getCouncilRun
+      parameters:
+        - in: path
+          name: runId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Council run detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessCouncilRun'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /api/v1/councils/runs/{runId}/events:
+    get:
+      tags: [Events]
+      summary: Stream council run lifecycle events over SSE
+      operationId: streamCouncilRunEvents
+      parameters:
+        - in: path
+          name: runId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 'text/event-stream payload (event: stream.open|council.run.updated|council.run.completed|council.run.failed|stream.close)'
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/CouncilRunSseDataEnvelope'
+              examples:
+                streamOpen:
+                  summary: event stream.open
+                  value:
+                    request_id: req_123
+                    run_id: run_123
+                runUpdated:
+                  summary: event council.run.updated
+                  value:
+                    run_id: run_123
+                    timestamp: '2026-02-23T08:31:05.100Z'
+                    data:
+                      id: run_123
+                      question: Should we migrate service A to Rust?
+                      status: running
+                      consensus_status: null
+                      summary: Council run started.
+                      participants: []
+                      attempts: []
+                      provider: null
+                      model: pending
+                      used_fallback: false
+                      task_id: null
+                      created_at: '2026-02-23T08:31:04.000Z'
+                      updated_at: '2026-02-23T08:31:05.000Z'
+                streamClose:
+                  summary: event stream.close
+                  value:
+                    run_id: run_123
+        '404':
+          $ref: '#/components/responses/ApiError'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /api/v1/executions/runs:
+    post:
+      tags: [Executions]
+      summary: Start asynchronous execution run for code/compute workloads
+      operationId: startExecutionRun
+      parameters:
+        - in: header
+          name: idempotency-key
+          required: true
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 200
+        - in: header
+          name: x-trace-id
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutionRunCreateRequest'
+      responses:
+        '202':
+          description: Execution run accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessExecutionRun'
+        '200':
+          description: Existing execution run returned for idempotency replay
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessExecutionRun'
+        default:
+          $ref: '#/components/responses/ApiError'
+    get:
+      tags: [Executions]
+      summary: List recent execution runs
+      operationId: listExecutionRuns
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Execution run list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessExecutionRuns'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /api/v1/executions/runs/{runId}:
+    get:
+      tags: [Executions]
+      summary: Get single execution run
+      operationId: getExecutionRun
+      parameters:
+        - in: path
+          name: runId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Execution run detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessExecutionRun'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /api/v1/executions/runs/{runId}/events:
+    get:
+      tags: [Events]
+      summary: Stream execution run lifecycle events over SSE
+      operationId: streamExecutionRunEvents
+      parameters:
+        - in: path
+          name: runId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 'text/event-stream payload (event: stream.open|execution.run.updated|execution.run.completed|execution.run.failed|stream.close)'
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/ExecutionRunSseDataEnvelope'
+              examples:
+                streamOpen:
+                  summary: event stream.open
+                  value:
+                    request_id: req_123
+                    run_id: run_123
+                runUpdated:
+                  summary: event execution.run.updated
+                  value:
+                    run_id: run_123
+                    timestamp: '2026-02-23T08:31:05.100Z'
+                    data:
+                      id: run_123
+                      mode: code
+                      prompt: Write test cases for user auth flow.
+                      status: running
+                      output: Execution run started.
+                      attempts: []
+                      provider: null
+                      model: pending
+                      used_fallback: false
+                      task_id: null
+                      duration_ms: 0
+                      created_at: '2026-02-23T08:31:04.000Z'
+                      updated_at: '2026-02-23T08:31:05.000Z'
+                streamClose:
+                  summary: event stream.close
+                  value:
+                    run_id: run_123
+        '404':
           $ref: '#/components/responses/ApiError'
         default:
           $ref: '#/components/responses/ApiError'
@@ -157,11 +567,55 @@ paths:
             type: string
       responses:
         '200':
-          description: text/event-stream payload
+          description: 'text/event-stream payload (event: stream.open|task.*|stream.close)'
           content:
             text/event-stream:
               schema:
-                type: string
+                $ref: '#/components/schemas/TaskSseDataEnvelope'
+              examples:
+                streamOpen:
+                  summary: event stream.open
+                  value:
+                    request_id: req_123
+                    task_id: task_123
+                taskEvent:
+                  summary: event task.updated
+                  value:
+                    event_id: evt_123
+                    task_id: task_123
+                    timestamp: '2026-02-23T08:31:05.100Z'
+                    data:
+                      stage: running
+                      source: council_run
+                    trace_id: trace_123
+                    span_id: span_123
+                streamClose:
+                  summary: event stream.close
+                  value:
+                    task_id: task_123
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /api/v1/memory/snapshot:
+    get:
+      tags: [Memory]
+      summary: Build an operational memory snapshot from task/radar/provider telemetry
+      operationId: getMemorySnapshot
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: Memory snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessMemorySnapshot'
         default:
           $ref: '#/components/responses/ApiError'
 
@@ -264,6 +718,32 @@ paths:
           $ref: '#/components/responses/ApiError'
 
   /api/v1/radar/reports/telegram:
+    get:
+      tags: [Radar]
+      summary: List telegram report queue/history
+      operationId: listRadarTelegramReports
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [queued, sent, failed]
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 30
+      responses:
+        '200':
+          description: Telegram report list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessTelegramReports'
+        default:
+          $ref: '#/components/responses/ApiError'
     post:
       tags: [Radar]
       summary: Send radar digest to Telegram
@@ -280,11 +760,121 @@ paths:
                   type: string
       responses:
         '202':
-          description: Report enqueue accepted
+          description: Report enqueue accepted (meta may include signed approval_action_payloads)
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiSuccessTelegramReport'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /api/v1/radar/reports/telegram/{reportId}:
+    get:
+      tags: [Radar]
+      summary: Get single telegram report status
+      operationId: getRadarTelegramReport
+      parameters:
+        - in: path
+          name: reportId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Telegram report detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessTelegramReport'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /api/v1/radar/reports/telegram/{reportId}/retry:
+    post:
+      tags: [Radar]
+      summary: Retry failed telegram report delivery
+      operationId: retryRadarTelegramReport
+      parameters:
+        - in: path
+          name: reportId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                max_attempts:
+                  type: integer
+                  minimum: 1
+                  maximum: 20
+      responses:
+        '202':
+          description: Retry queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccessTelegramReport'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /api/v1/radar/reports/telegram/events:
+    get:
+      tags: [Radar]
+      summary: Stream telegram report list updates
+      operationId: streamRadarTelegramReports
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [queued, sent, failed]
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 30
+      responses:
+        '200':
+          description: 'text/event-stream payload (event: stream.open|telegram.reports.updated|stream.close)'
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        default:
+          $ref: '#/components/responses/ApiError'
+
+  /api/v1/radar/reports/telegram/{reportId}/events:
+    get:
+      tags: [Radar]
+      summary: Stream single telegram report updates
+      operationId: streamRadarTelegramReport
+      parameters:
+        - in: path
+          name: reportId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 'text/event-stream payload (event: stream.open|telegram.report.updated|stream.close)'
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '404':
+          $ref: '#/components/responses/ApiError'
         default:
           $ref: '#/components/responses/ApiError'
 
@@ -405,8 +995,20 @@ paths:
   /api/v1/integrations/telegram/webhook:
     post:
       tags: [Integrations]
-      summary: Telegram webhook callback endpoint
+      summary: Telegram webhook callback endpoint (commands + signed approval callbacks)
       operationId: telegramWebhook
+      description: |
+        Validates `x-telegram-bot-api-secret-token` and accepts either text commands
+        or signed approval callbacks in `callback_query.data`.
+        Signed callback format:
+        `tcb1|<action_code>|<proposal_id>|<expires_at_sec>|<nonce_hex>|<sig>`.
+        Action codes: `a` (approve), `as` (approve_and_start).
+      parameters:
+        - in: header
+          name: x-telegram-bot-api-secret-token
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -416,11 +1018,15 @@ paths:
               additionalProperties: true
       responses:
         '200':
-          description: Telegram command handled
+          description: Telegram webhook handled (command or callback verdict)
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiSuccessTelegramCommand'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
         default:
           $ref: '#/components/responses/ApiError'
 
@@ -565,6 +1171,345 @@ components:
         used_fallback:
           type: boolean
 
+    MissionStep:
+      type: object
+      required: [id, type, title, description, route, status, order]
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [code, research, finance, news, approval, execute]
+        title:
+          type: string
+        description:
+          type: string
+        route:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, done, blocked, failed]
+        order:
+          type: integer
+          minimum: 1
+
+    Mission:
+      type: object
+      required: [id, userId, workspaceId, title, objective, domain, status, steps, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        workspaceId:
+          type: string
+          format: uuid
+          nullable: true
+        title:
+          type: string
+        objective:
+          type: string
+        domain:
+          type: string
+          enum: [code, research, finance, news, mixed]
+        status:
+          type: string
+          enum: [draft, planned, running, blocked, completed, failed]
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/MissionStep'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    MissionCreateRequest:
+      type: object
+      required: [title, objective]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 180
+        objective:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        domain:
+          type: string
+          enum: [code, research, finance, news, mixed]
+          default: mixed
+        workspace_id:
+          type: string
+          format: uuid
+        steps:
+          type: array
+          maxItems: 40
+          items:
+            type: object
+            required: [type, title]
+            properties:
+              type:
+                type: string
+                enum: [code, research, finance, news, approval, execute]
+              title:
+                type: string
+                minLength: 1
+                maxLength: 180
+              description:
+                type: string
+                maxLength: 2000
+              route:
+                type: string
+                minLength: 1
+                maxLength: 200
+
+    MissionUpdateStepStatus:
+      type: object
+      required: [step_id, status]
+      properties:
+        step_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, running, done, blocked, failed]
+
+    MissionUpdateRequest:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [draft, planned, running, blocked, completed, failed]
+        title:
+          type: string
+          minLength: 1
+          maxLength: 180
+        objective:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        step_statuses:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/MissionUpdateStepStatus'
+      anyOf:
+        - required: [status]
+        - required: [title]
+        - required: [objective]
+        - required: [step_statuses]
+
+    CouncilRunCreateRequest:
+      type: object
+      required: [question]
+      properties:
+        question:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        system_prompt:
+          type: string
+        provider:
+          type: string
+          enum: [auto, openai, gemini, anthropic, local]
+          default: auto
+        exclude_providers:
+          type: array
+          maxItems: 4
+          items:
+            type: string
+            enum: [openai, gemini, anthropic, local]
+        strict_provider:
+          type: boolean
+          default: false
+        model:
+          type: string
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+        max_output_tokens:
+          type: integer
+          minimum: 1
+          maximum: 32000
+        create_task:
+          type: boolean
+          default: false
+        task_title:
+          type: string
+          minLength: 1
+          maxLength: 200
+
+    CouncilParticipant:
+      type: object
+      required: [role, provider, status, summary]
+      properties:
+        role:
+          type: string
+          enum: [planner, researcher, critic, risk, synthesizer]
+        provider:
+          type: string
+          enum: [openai, gemini, anthropic, local]
+          nullable: true
+        status:
+          type: string
+          enum: [success, failed, skipped]
+        latency_ms:
+          type: integer
+        summary:
+          type: string
+        error:
+          type: string
+
+    CouncilRun:
+      type: object
+      required:
+        [
+          id,
+          question,
+          status,
+          consensus_status,
+          summary,
+          participants,
+          attempts,
+          provider,
+          model,
+          used_fallback,
+          task_id,
+          created_at,
+          updated_at
+        ]
+      properties:
+        id:
+          type: string
+        question:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed]
+        consensus_status:
+          type: string
+          enum: [consensus_reached, contradiction_detected, escalated_to_human]
+          nullable: true
+        summary:
+          type: string
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/CouncilParticipant'
+        attempts:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProviderAttempt'
+        provider:
+          type: string
+          enum: [openai, gemini, anthropic, local]
+          nullable: true
+        model:
+          type: string
+        used_fallback:
+          type: boolean
+        task_id:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ExecutionRunCreateRequest:
+      type: object
+      required: [mode, prompt]
+      properties:
+        mode:
+          type: string
+          enum: [code, compute]
+        prompt:
+          type: string
+          minLength: 1
+          maxLength: 8000
+        system_prompt:
+          type: string
+        provider:
+          type: string
+          enum: [auto, openai, gemini, anthropic, local]
+          default: auto
+        exclude_providers:
+          type: array
+          maxItems: 4
+          items:
+            type: string
+            enum: [openai, gemini, anthropic, local]
+        strict_provider:
+          type: boolean
+          default: false
+        model:
+          type: string
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+        max_output_tokens:
+          type: integer
+          minimum: 1
+          maximum: 32000
+        create_task:
+          type: boolean
+          default: true
+        task_title:
+          type: string
+          minLength: 1
+          maxLength: 200
+
+    ExecutionRun:
+      type: object
+      required: [id, mode, prompt, status, output, attempts, provider, model, used_fallback, task_id, duration_ms, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        mode:
+          type: string
+          enum: [code, compute]
+        prompt:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed]
+        output:
+          type: string
+        attempts:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProviderAttempt'
+        provider:
+          type: string
+          enum: [openai, gemini, anthropic, local]
+          nullable: true
+        model:
+          type: string
+        used_fallback:
+          type: boolean
+        task_id:
+          type: string
+          nullable: true
+        duration_ms:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
     Task:
       type: object
       required: [id, userId, mode, status, title, input, idempotencyKey, createdAt, updatedAt]
@@ -610,6 +1555,182 @@ components:
         input:
           type: object
           additionalProperties: true
+
+    TaskEventRecord:
+      type: object
+      required: [event_id, task_id, timestamp, data]
+      properties:
+        event_id:
+          type: string
+        task_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          type: object
+          additionalProperties: true
+        trace_id:
+          type: string
+        span_id:
+          type: string
+
+    TaskStreamOpen:
+      type: object
+      required: [request_id, task_id]
+      properties:
+        request_id:
+          type: string
+        task_id:
+          type: string
+
+    TaskStreamClose:
+      type: object
+      required: [task_id]
+      properties:
+        task_id:
+          type: string
+
+    TaskSseDataEnvelope:
+      oneOf:
+        - $ref: '#/components/schemas/TaskStreamOpen'
+        - $ref: '#/components/schemas/TaskStreamClose'
+        - $ref: '#/components/schemas/TaskEventRecord'
+
+    MissionStreamOpen:
+      type: object
+      required: [request_id, mission_id]
+      properties:
+        request_id:
+          type: string
+        mission_id:
+          type: string
+
+    MissionStreamClose:
+      type: object
+      required: [request_id, mission_id]
+      properties:
+        request_id:
+          type: string
+        mission_id:
+          type: string
+        reason:
+          type: string
+
+    MissionStreamUpdate:
+      type: object
+      required: [mission_id, timestamp, data]
+      properties:
+        mission_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          $ref: '#/components/schemas/Mission'
+
+    MissionSseDataEnvelope:
+      oneOf:
+        - $ref: '#/components/schemas/MissionStreamOpen'
+        - $ref: '#/components/schemas/MissionStreamClose'
+        - $ref: '#/components/schemas/MissionStreamUpdate'
+
+    CouncilRunStreamOpen:
+      type: object
+      required: [request_id, run_id]
+      properties:
+        request_id:
+          type: string
+        run_id:
+          type: string
+
+    CouncilRunStreamClose:
+      type: object
+      required: [run_id]
+      properties:
+        run_id:
+          type: string
+
+    CouncilRunStreamUpdate:
+      type: object
+      required: [run_id, timestamp, data]
+      properties:
+        run_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          $ref: '#/components/schemas/CouncilRun'
+
+    CouncilRunSseDataEnvelope:
+      oneOf:
+        - $ref: '#/components/schemas/CouncilRunStreamOpen'
+        - $ref: '#/components/schemas/CouncilRunStreamClose'
+        - $ref: '#/components/schemas/CouncilRunStreamUpdate'
+
+    ExecutionRunStreamOpen:
+      type: object
+      required: [request_id, run_id]
+      properties:
+        request_id:
+          type: string
+        run_id:
+          type: string
+
+    ExecutionRunStreamClose:
+      type: object
+      required: [run_id]
+      properties:
+        run_id:
+          type: string
+
+    ExecutionRunStreamUpdate:
+      type: object
+      required: [run_id, timestamp, data]
+      properties:
+        run_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          $ref: '#/components/schemas/ExecutionRun'
+
+    ExecutionRunSseDataEnvelope:
+      oneOf:
+        - $ref: '#/components/schemas/ExecutionRunStreamOpen'
+        - $ref: '#/components/schemas/ExecutionRunStreamClose'
+        - $ref: '#/components/schemas/ExecutionRunStreamUpdate'
+
+    MemorySnapshotEntry:
+      type: object
+      required: [id, category, content, source, timestamp]
+      properties:
+        id:
+          type: string
+        category:
+          type: string
+          enum: [fact, rule, preference]
+        content:
+          type: string
+        source:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    MemorySnapshot:
+      type: object
+      required: [rows, generated_at]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/MemorySnapshotEntry'
+        generated_at:
+          type: string
+          format: date-time
 
     RadarIngestItem:
       type: object
@@ -775,12 +1896,88 @@ components:
           type: string
         chatId:
           type: string
+        topic:
+          type: string
+        bodyMarkdown:
+          type: string
         status:
           type: string
           enum: [queued, sent, failed]
+        attemptCount:
+          type: integer
+        maxAttempts:
+          type: integer
+        nextAttemptAt:
+          type: string
+          format: date-time
+          nullable: true
+        lastError:
+          type: string
+          nullable: true
+        telegramMessageId:
+          type: string
+          nullable: true
         createdAt:
           type: string
           format: date-time
+        sentAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    TelegramInlineKeyboardButton:
+      type: object
+      required: [text, callback_data]
+      properties:
+        text:
+          type: string
+        callback_data:
+          type: string
+          description: Signed approval callback token (`tcb1|<action_code>|<proposal_id>|<expires_at_sec>|<nonce_hex>|<sig>`).
+
+    TelegramReplyMarkup:
+      type: object
+      required: [inline_keyboard]
+      properties:
+        inline_keyboard:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: '#/components/schemas/TelegramInlineKeyboardButton'
+
+    TelegramApprovalActionPayload:
+      type: object
+      required: [proposal_id, reply_markup]
+      properties:
+        proposal_id:
+          type: string
+          format: uuid
+        reply_markup:
+          $ref: '#/components/schemas/TelegramReplyMarkup'
+
+    TelegramReportMeta:
+      type: object
+      properties:
+        approval_action_payloads:
+          type: array
+          maxItems: 3
+          items:
+            $ref: '#/components/schemas/TelegramApprovalActionPayload'
+        telegram_delivery:
+          type: object
+          required: [attempted, delivered]
+          properties:
+            attempted:
+              type: boolean
+            delivered:
+              type: boolean
+            message_id:
+              type: string
+              nullable: true
+            reason:
+              type: string
+      additionalProperties: true
 
     ApiSuccessHealth:
       type: object
@@ -821,6 +2018,90 @@ components:
         meta:
           $ref: '#/components/schemas/ApiMeta'
 
+    ApiSuccessMission:
+      type: object
+      required: [request_id, data, meta]
+      properties:
+        request_id:
+          type: string
+        data:
+          $ref: '#/components/schemas/Mission'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+
+    ApiSuccessMissions:
+      type: object
+      required: [request_id, data, meta]
+      properties:
+        request_id:
+          type: string
+        data:
+          type: object
+          required: [missions]
+          properties:
+            missions:
+              type: array
+              items:
+                $ref: '#/components/schemas/Mission'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+
+    ApiSuccessCouncilRun:
+      type: object
+      required: [request_id, data, meta]
+      properties:
+        request_id:
+          type: string
+        data:
+          $ref: '#/components/schemas/CouncilRun'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+
+    ApiSuccessCouncilRuns:
+      type: object
+      required: [request_id, data, meta]
+      properties:
+        request_id:
+          type: string
+        data:
+          type: object
+          required: [runs]
+          properties:
+            runs:
+              type: array
+              items:
+                $ref: '#/components/schemas/CouncilRun'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+
+    ApiSuccessExecutionRun:
+      type: object
+      required: [request_id, data, meta]
+      properties:
+        request_id:
+          type: string
+        data:
+          $ref: '#/components/schemas/ExecutionRun'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+
+    ApiSuccessExecutionRuns:
+      type: object
+      required: [request_id, data, meta]
+      properties:
+        request_id:
+          type: string
+        data:
+          type: object
+          required: [runs]
+          properties:
+            runs:
+              type: array
+              items:
+                $ref: '#/components/schemas/ExecutionRun'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+
     ApiSuccessTask:
       type: object
       required: [request_id, data, meta]
@@ -842,6 +2123,17 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Task'
+        meta:
+          $ref: '#/components/schemas/ApiMeta'
+
+    ApiSuccessMemorySnapshot:
+      type: object
+      required: [request_id, data, meta]
+      properties:
+        request_id:
+          type: string
+        data:
+          $ref: '#/components/schemas/MemorySnapshot'
         meta:
           $ref: '#/components/schemas/ApiMeta'
 
@@ -927,6 +2219,23 @@ components:
           type: string
         data:
           $ref: '#/components/schemas/TelegramReport'
+        meta:
+          $ref: '#/components/schemas/TelegramReportMeta'
+
+    ApiSuccessTelegramReports:
+      type: object
+      required: [request_id, data, meta]
+      properties:
+        request_id:
+          type: string
+        data:
+          type: object
+          required: [reports]
+          properties:
+            reports:
+              type: array
+              items:
+                $ref: '#/components/schemas/TelegramReport'
         meta:
           $ref: '#/components/schemas/ApiMeta'
 
@@ -1024,6 +2333,68 @@ components:
               type: string
               enum: [proposal_not_found, proposal_not_approved, invalid_command]
 
+    TelegramWebhookCallbackResult:
+      oneOf:
+        - type: object
+          required: [accepted, type, proposal_id]
+          properties:
+            accepted:
+              type: boolean
+              enum: [true]
+            type:
+              type: string
+              enum: [approve]
+            proposal_id:
+              type: string
+              format: uuid
+        - type: object
+          required: [accepted, type, proposal_id, run_id]
+          properties:
+            accepted:
+              type: boolean
+              enum: [true]
+            type:
+              type: string
+              enum: [approve_and_start]
+            proposal_id:
+              type: string
+              format: uuid
+            run_id:
+              type: string
+        - type: object
+          required: [accepted, ignored, reason]
+          properties:
+            accepted:
+              type: boolean
+              enum: [false]
+            ignored:
+              type: boolean
+              enum: [true]
+            reason:
+              type: string
+              enum: [invalid_payload, missing_signature, invalid_signature, expired, replayed]
+        - type: object
+          required: [accepted, reason, proposal_id]
+          properties:
+            accepted:
+              type: boolean
+              enum: [false]
+            reason:
+              type: string
+              enum: [proposal_not_found]
+            proposal_id:
+              type: string
+              format: uuid
+        - type: object
+          required: [accepted, ignored]
+          properties:
+            accepted:
+              type: boolean
+              enum: [true]
+            ignored:
+              type: boolean
+              enum: [true]
+
     ApiSuccessTelegramCommand:
       type: object
       required: [request_id, data, meta]
@@ -1033,12 +2404,6 @@ components:
         data:
           oneOf:
             - $ref: '#/components/schemas/TelegramCommandResult'
-            - type: object
-              required: [accepted, ignored]
-              properties:
-                accepted:
-                  type: boolean
-                ignored:
-                  type: boolean
+            - $ref: '#/components/schemas/TelegramWebhookCallbackResult'
         meta:
           $ref: '#/components/schemas/ApiMeta'

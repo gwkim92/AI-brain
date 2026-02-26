@@ -122,7 +122,7 @@ describe('extended integration scenarios', () => {
     const denied = await handleMcpStreamRequest(
       {
         origin: 'https://unknown.host',
-        payload: { method: 'tools/list' }
+        payload: { jsonrpc: '2.0', id: 1, method: 'tools/list' }
       },
       {
         allowedOrigins: ['https://jarvis.local']
@@ -133,7 +133,7 @@ describe('extended integration scenarios', () => {
     const allowed = await handleMcpStreamRequest(
       {
         origin: 'https://jarvis.local',
-        payload: { method: 'tools/list' }
+        payload: { jsonrpc: '2.0', id: 1, method: 'tools/list' }
       },
       {
         allowedOrigins: ['https://jarvis.local']

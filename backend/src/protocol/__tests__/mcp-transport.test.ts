@@ -7,7 +7,7 @@ describe('handleMcpStreamRequest', () => {
     const result = await handleMcpStreamRequest(
       {
         origin: 'https://evil.example.com',
-        payload: { method: 'tools/list' }
+        payload: { jsonrpc: '2.0', id: 1, method: 'tools/list' }
       },
       {
         allowedOrigins: ['https://jarvis.local']
@@ -24,7 +24,7 @@ describe('handleMcpStreamRequest', () => {
     const result = await handleMcpStreamRequest(
       {
         origin: 'https://jarvis.local',
-        payload: { method: 'tools/list' }
+        payload: { jsonrpc: '2.0', id: 1, method: 'tools/list' }
       },
       {
         allowedOrigins: ['https://jarvis.local']

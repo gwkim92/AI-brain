@@ -38,7 +38,7 @@ services:
     environment:
       STORE_BACKEND: postgres
       DATABASE_URL: postgres://jarvis:jarvis@postgres:5432/jarvis
-      ALLOWED_ORIGINS: http://localhost:3000,http://web:3000
+      ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://web:3000
     ports:
       - '4000:4000'
     depends_on:
@@ -47,6 +47,18 @@ services:
       valkey:
         condition: service_healthy
     command: ['sh', '-c', 'pnpm db:init && pnpm start']
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: jarvis-web
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://backend:4000
+    ports:
+      - '3000:3000'
+    depends_on:
+      - backend
 
 volumes:
   jarvis-postgres18-data:

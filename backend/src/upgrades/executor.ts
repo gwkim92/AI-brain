@@ -1,6 +1,7 @@
 export type UpgradeProposal = {
   id: string;
   status: string;
+  approvedAt?: string | null;
 };
 
 export type UpgradeRunRecord = {
@@ -34,11 +35,12 @@ export type UpgradeGateResult = {
 
 export type UpgradeExecutionOptions = {
   evaluateGate?: (proposalId: string) => Promise<UpgradeGateResult>;
+  isProposalExpired?: (proposal: UpgradeProposal) => boolean;
 };
 
 export type UpgradeExecutionResult =
   | { status: 'accepted'; run: UpgradeRunRecord }
-  | { status: 'rejected'; reason: 'proposal_not_found' | 'approval_required' | 'eval_gate_failed' };
+  | { status: 'rejected'; reason: 'proposal_not_found' | 'approval_required' | 'approval_expired' | 'eval_gate_failed' };
 
 export async function executeUpgradeRun(
   request: UpgradeRunRequest,
@@ -70,6 +72,19 @@ export async function executeUpgradeRun(
     return {
       status: 'rejected',
       reason: 'approval_required'
+    };
+  }
+
+  if (options.isProposalExpired?.(proposal)) {
+    await gateway.appendAuditLog({
+      action: 'upgrade_run.rejected',
+      proposalId: request.proposalId,
+      reason: 'approval_expired'
+    });
+
+    return {
+      status: 'rejected',
+      reason: 'approval_expired'
     };
   }
 

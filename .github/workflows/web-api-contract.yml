@@ -1,0 +1,45 @@
+name: web-api-contract
+
+on:
+  pull_request:
+    paths:
+      - "docs/openapi-v1.yaml"
+      - "web/**"
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "docs/openapi-v1.yaml"
+      - "web/**"
+
+jobs:
+  web-contract-check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+      - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+        cache: npm
+        cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+      run: npm ci
+
+      - name: Verify OpenAPI generated types
+      run: npm run api:types:check
+
+      - name: Lint
+      run: npm run lint
+
+      - name: Build
+      run: npm run build

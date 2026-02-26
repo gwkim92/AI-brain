@@ -17,7 +17,7 @@ export async function createStore(env: AppEnv): Promise<JarvisStore> {
         defaultUserId: env.DEFAULT_USER_ID,
         defaultUserEmail: env.DEFAULT_USER_EMAIL
       })
-    : createMemoryStore(env.DEFAULT_USER_ID);
+    : createMemoryStore(env.DEFAULT_USER_ID, env.DEFAULT_USER_EMAIL);
 
   await store.initialize();
   return store;

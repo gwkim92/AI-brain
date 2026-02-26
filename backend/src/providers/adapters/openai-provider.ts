@@ -17,6 +17,10 @@ export class OpenAIProvider implements LlmProvider {
 
   constructor(private readonly options: OpenAIProviderOptions) {}
 
+  setApiKey(apiKey?: string): void {
+    this.options.apiKey = apiKey;
+  }
+
   availability(): ProviderAvailability {
     if (!this.options.apiKey) {
       return {

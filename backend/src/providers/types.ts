@@ -18,6 +18,7 @@ export type ProviderGenerateRequest = {
   temperature?: number;
   maxOutputTokens?: number;
   taskType?: RoutingTaskType;
+  excludeProviders?: ProviderName[];
 };
 
 export type ProviderGenerateResult = {
@@ -49,6 +50,25 @@ export type ProviderRouteResult = {
   result: ProviderGenerateResult;
   attempts: ProviderAttempt[];
   usedFallback: boolean;
+  selection?: {
+    strategy: 'auto_orchestrator' | 'requested_provider';
+    taskType: RoutingTaskType;
+    orderedProviders: ProviderName[];
+    scores?: Array<{
+      provider: ProviderName;
+      score: number;
+      breakdown?: {
+        domain_fit: number;
+        recent_success: number;
+        latency: number;
+        cost: number;
+        context_fit: number;
+        prompt_fit: number;
+        availability_penalty: number;
+      };
+    }>;
+    reason?: string;
+  };
 };
 
 export interface LlmProvider {
@@ -57,4 +77,6 @@ export interface LlmProvider {
   availability(): ProviderAvailability;
 
   generate(request: ProviderGenerateRequest): Promise<ProviderGenerateResult>;
+
+  setApiKey?: (apiKey?: string) => void;
 }
