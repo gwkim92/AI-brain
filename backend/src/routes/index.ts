@@ -85,13 +85,38 @@ export async function registerRoutes(
     return authContexts.get(request.id) ?? null;
   };
 
+  const parseCookieToken = (request: FastifyRequest): string | null => {
+    const cookieHeader = request.headers.cookie;
+    if (typeof cookieHeader !== 'string' || cookieHeader.trim().length === 0) return null;
+
+    const tokenPair = cookieHeader
+      .split(';')
+      .map((part) => part.trim())
+      .find((part) => part.startsWith('jarvis_auth_token='));
+    if (!tokenPair) return null;
+
+    const encodedToken = tokenPair.slice('jarvis_auth_token='.length).trim();
+    if (encodedToken.length === 0) return null;
+
+    try {
+      const decoded = decodeURIComponent(encodedToken).trim();
+      return decoded.length > 0 ? decoded : null;
+    } catch {
+      return encodedToken;
+    }
+  };
+
   const parseBearerToken = (request: FastifyRequest): string | null => {
     const header = request.headers.authorization;
-    if (typeof header !== 'string') return null;
-    const match = header.match(/^Bearer\s+(.+)$/i);
-    if (!match) return null;
-    const token = match[1]?.trim();
-    return token && token.length > 0 ? token : null;
+    if (typeof header === 'string') {
+      const match = header.match(/^Bearer\s+(.+)$/i);
+      if (match) {
+        const token = match[1]?.trim();
+        if (token && token.length > 0) return token;
+      }
+    }
+
+    return parseCookieToken(request);
   };
 
   const resolveRequestRole = (request: FastifyRequest): UserRole => {
