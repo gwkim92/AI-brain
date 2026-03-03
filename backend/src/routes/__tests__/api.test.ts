@@ -87,6 +87,188 @@ describe('API routes', () => {
     await app.close();
   });
 
+  it('replays task create when idempotency-key is reused by same user', async () => {
+    const { app } = await buildServer();
+    const userId = '11111111-1111-4111-8111-111111111111';
+    const idempotencyKey = 'idem-task-replay-0001';
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/v1/tasks',
+      headers: {
+        'x-user-id': userId,
+        'idempotency-key': idempotencyKey,
+      },
+      payload: {
+        mode: 'execute',
+        title: 'Idempotent task',
+        input: { source: 'test' }
+      }
+    });
+    expect(first.statusCode).toBe(201);
+    const firstBody = first.json() as { data: { id: string } };
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/v1/tasks',
+      headers: {
+        'x-user-id': userId,
+        'idempotency-key': idempotencyKey,
+      },
+      payload: {
+        mode: 'execute',
+        title: 'Idempotent task',
+        input: { source: 'test' }
+      }
+    });
+    expect(second.statusCode).toBe(200);
+    const secondBody = second.json() as { data: { id: string }; meta?: { idempotent_replay?: boolean } };
+    expect(secondBody.data.id).toBe(firstBody.data.id);
+    expect(secondBody.meta?.idempotent_replay).toBe(true);
+
+    await app.close();
+  });
+
+  it('scopes task list and task detail to requester by default', async () => {
+    const { app } = await buildServer();
+    const userA = '22222222-2222-4222-8222-222222222222';
+    const userB = '33333333-3333-4333-8333-333333333333';
+
+    const createA = await app.inject({
+      method: 'POST',
+      url: '/api/v1/tasks',
+      headers: { 'x-user-id': userA, 'x-user-role': 'member' },
+      payload: {
+        mode: 'execute',
+        title: 'Task A',
+        input: { source: 'test' }
+      }
+    });
+    expect(createA.statusCode).toBe(201);
+    const createABody = createA.json() as { data: { id: string } };
+
+    const createB = await app.inject({
+      method: 'POST',
+      url: '/api/v1/tasks',
+      headers: { 'x-user-id': userB, 'x-user-role': 'member' },
+      payload: {
+        mode: 'execute',
+        title: 'Task B',
+        input: { source: 'test' }
+      }
+    });
+    expect(createB.statusCode).toBe(201);
+    const createBBody = createB.json() as { data: { id: string } };
+
+    const listMine = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tasks?limit=20',
+      headers: { 'x-user-id': userA, 'x-user-role': 'member' }
+    });
+    expect(listMine.statusCode).toBe(200);
+    const listMineBody = listMine.json() as { data: Array<{ id: string; userId: string }> };
+    expect(listMineBody.data.length).toBe(1);
+    expect(listMineBody.data[0]?.id).toBe(createABody.data.id);
+    expect(listMineBody.data[0]?.userId).toBe(userA);
+
+    const listAllDenied = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tasks?limit=20&scope=all',
+      headers: { 'x-user-id': userA, 'x-user-role': 'member' }
+    });
+    expect(listAllDenied.statusCode).toBe(403);
+
+    const listAllAdmin = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tasks?limit=20&scope=all',
+      headers: { 'x-user-id': userA, 'x-user-role': 'admin' }
+    });
+    expect(listAllAdmin.statusCode).toBe(200);
+    const listAllAdminBody = listAllAdmin.json() as { data: Array<{ id: string }> };
+    const listedIds = new Set(listAllAdminBody.data.map((row) => row.id));
+    expect(listedIds.has(createABody.data.id)).toBe(true);
+    expect(listedIds.has(createBBody.data.id)).toBe(true);
+
+    const detailDenied = await app.inject({
+      method: 'GET',
+      url: `/api/v1/tasks/${createBBody.data.id}`,
+      headers: { 'x-user-id': userA, 'x-user-role': 'member' }
+    });
+    expect(detailDenied.statusCode).toBe(404);
+
+    const eventsDenied = await app.inject({
+      method: 'GET',
+      url: `/api/v1/tasks/${createBBody.data.id}/events`,
+      headers: { 'x-user-id': userA, 'x-user-role': 'member' }
+    });
+    expect(eventsDenied.statusCode).toBe(404);
+
+    const detailAdmin = await app.inject({
+      method: 'GET',
+      url: `/api/v1/tasks/${createBBody.data.id}`,
+      headers: { 'x-user-id': userA, 'x-user-role': 'admin' }
+    });
+    expect(detailAdmin.statusCode).toBe(200);
+
+    await app.close();
+  });
+
+  it('scopes dashboard overview task signals to requester unless admin scope=all', async () => {
+    const { app } = await buildServer();
+    const userA = '44444444-4444-4444-8444-444444444444';
+    const userB = '55555555-5555-4555-8555-555555555555';
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/tasks',
+      headers: { 'x-user-id': userA, 'x-user-role': 'member' },
+      payload: {
+        mode: 'execute',
+        title: 'Dashboard Task A',
+        input: { source: 'test' }
+      }
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/tasks',
+      headers: { 'x-user-id': userB, 'x-user-role': 'member' },
+      payload: {
+        mode: 'execute',
+        title: 'Dashboard Task B',
+        input: { source: 'test' }
+      }
+    });
+
+    const mine = await app.inject({
+      method: 'GET',
+      url: '/api/v1/dashboard/overview?task_limit=120&pending_approval_limit=30&running_task_limit=40',
+      headers: { 'x-user-id': userA, 'x-user-role': 'member' }
+    });
+    expect(mine.statusCode).toBe(200);
+    const mineBody = mine.json() as { data: { signals: { task_count: number }; tasks: Array<{ userId: string }> } };
+    expect(mineBody.data.signals.task_count).toBe(1);
+    expect(new Set(mineBody.data.tasks.map((task) => task.userId))).toEqual(new Set([userA]));
+
+    const allDenied = await app.inject({
+      method: 'GET',
+      url: '/api/v1/dashboard/overview?task_limit=120&pending_approval_limit=30&running_task_limit=40&task_scope=all',
+      headers: { 'x-user-id': userA, 'x-user-role': 'member' }
+    });
+    expect(allDenied.statusCode).toBe(403);
+
+    const allAdmin = await app.inject({
+      method: 'GET',
+      url: '/api/v1/dashboard/overview?task_limit=120&pending_approval_limit=30&running_task_limit=40&task_scope=all',
+      headers: { 'x-user-id': userA, 'x-user-role': 'admin' }
+    });
+    expect(allAdmin.statusCode).toBe(200);
+    const allAdminBody = allAdmin.json() as { data: { signals: { task_count: number }; tasks: Array<{ userId: string }> } };
+    expect(allAdminBody.data.signals.task_count).toBe(2);
+    expect(new Set(allAdminBody.data.tasks.map((task) => task.userId))).toEqual(new Set([userA, userB]));
+
+    await app.close();
+  });
+
   it('returns memory snapshot rows', async () => {
     const { app } = await buildServer();
 
@@ -233,7 +415,8 @@ describe('API routes', () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
-          output_text: 'Assistant context background run completed.',
+          output_text:
+            'Assistant context background run completed. [Reuters](https://www.reuters.com/world)\n\nSources:\n- [Reuters](https://www.reuters.com/world)',
           usage: {
             input_tokens: 14,
             output_tokens: 21
@@ -319,6 +502,34 @@ describe('API routes', () => {
     expect(settledBody.data.servedProvider).toBe('openai');
     expect(settledBody.data.output).toContain('background run');
 
+    const groundingEvidence = await app.inject({
+      method: 'GET',
+      url: `/api/v1/assistant/contexts/${contextId}/grounding-evidence?limit=10`
+    });
+    expect(groundingEvidence.statusCode).toBe(200);
+    const evidenceBody = groundingEvidence.json() as {
+      data: {
+        context_id: string;
+        sources: Array<{ domain: string; url: string }>;
+        claims: Array<{
+          claimText: string;
+          citations: Array<{ url: string }>;
+        }>;
+        summary: {
+          source_count: number;
+          claim_count: number;
+          unique_domains: string[];
+        };
+      };
+    };
+    expect(evidenceBody.data.context_id).toBe(contextId);
+    expect(evidenceBody.data.summary.source_count).toBeGreaterThanOrEqual(1);
+    expect(evidenceBody.data.summary.claim_count).toBeGreaterThanOrEqual(1);
+    expect(evidenceBody.data.summary.unique_domains).toContain('www.reuters.com');
+    expect(evidenceBody.data.sources[0]?.url).toContain('reuters.com');
+    expect(evidenceBody.data.claims[0]?.claimText).toContain('background run');
+    expect(evidenceBody.data.claims[0]?.citations[0]?.url).toContain('reuters.com');
+
     const settledTask = await waitFor(
       async () =>
         app.inject({
@@ -367,6 +578,481 @@ describe('API routes', () => {
     expect(stream.body).toContain('event: stream.close');
 
     expect(fetchMock).toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('rejects news briefing run when external providers are unavailable', async () => {
+    process.env.OPENAI_API_KEY = '';
+    process.env.GEMINI_API_KEY = '';
+    process.env.ANTHROPIC_API_KEY = '';
+
+    const { app } = await buildServer();
+
+    const createContext = await app.inject({
+      method: 'POST',
+      url: '/api/v1/assistant/contexts',
+      payload: {
+        client_context_id: 'ctx-news-preflight-001',
+        source: 'inbox_quick_command',
+        intent: 'news',
+        prompt: '최신 뉴스 중에 주요 뉴스 브리핑 해봐',
+        widget_plan: ['assistant', 'reports', 'tasks']
+      }
+    });
+    expect(createContext.statusCode).toBe(201);
+    const contextId = (createContext.json() as { data: { id: string } }).data.id;
+
+    const run = await app.inject({
+      method: 'POST',
+      url: `/api/v1/assistant/contexts/${contextId}/run`,
+      payload: {
+        provider: 'auto',
+        task_type: 'radar_review'
+      }
+    });
+    expect(run.statusCode).toBe(503);
+    const runBody = run.json() as {
+      error: {
+        code: string;
+        message: string;
+        details?: {
+          reason?: string;
+          required_external_providers?: string[];
+        };
+      };
+    };
+    expect(runBody.error.code).toBe('INTERNAL_ERROR');
+    expect(runBody.error.message).toContain('뉴스 브리핑');
+    expect(runBody.error.details?.reason).toBe('NEWS_BRIEFING_UNAVAILABLE');
+    expect(runBody.error.details?.required_external_providers).toEqual(['openai', 'gemini', 'anthropic']);
+
+    const context = await app.inject({
+      method: 'GET',
+      url: `/api/v1/assistant/contexts/${contextId}`
+    });
+    expect(context.statusCode).toBe(200);
+    const contextBody = context.json() as {
+      data: {
+        status: string;
+        error: string | null;
+        output: string;
+      };
+    };
+    expect(contextBody.data.status).toBe('failed');
+    expect(contextBody.data.error).toBe('NEWS_BRIEFING_UNAVAILABLE');
+    expect(contextBody.data.output).toContain('설정 > Providers');
+
+    const events = await app.inject({
+      method: 'GET',
+      url: `/api/v1/assistant/contexts/${contextId}/events?limit=20`
+    });
+    expect(events.statusCode).toBe(200);
+    const eventBody = events.json() as {
+      data: {
+        events: Array<{ eventType: string }>;
+      };
+    };
+    expect(eventBody.data.events.map((item) => item.eventType)).toContain('assistant.context.run.rejected');
+
+    await app.close();
+  });
+
+  it('rejects dynamic factual ai respond when grounding providers are unavailable', async () => {
+    process.env.OPENAI_API_KEY = '';
+    process.env.GEMINI_API_KEY = '';
+    process.env.ANTHROPIC_API_KEY = '';
+    process.env.LOCAL_LLM_ENABLED = 'true';
+
+    const { app } = await buildServer();
+
+    const respond = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ai/respond',
+      payload: {
+        prompt: '오늘 환율과 주요 금융 지표 요약해줘',
+        provider: 'auto',
+        task_type: 'chat'
+      }
+    });
+
+    expect(respond.statusCode).toBe(503);
+    const body = respond.json() as {
+      error: {
+        code: string;
+        details?: {
+          reason?: string;
+          grounding_policy?: string;
+          required_external_providers?: string[];
+        };
+      };
+    };
+    expect(body.error.code).toBe('INTERNAL_ERROR');
+    expect(body.error.details?.reason).toBe('GROUNDED_RETRIEVAL_UNAVAILABLE');
+    expect(body.error.details?.grounding_policy).toBe('dynamic_factual');
+    expect(body.error.details?.required_external_providers).toEqual(['openai', 'gemini', 'anthropic']);
+
+    await app.close();
+  });
+
+  it('uses local grounded retrieval fallback for news prompts when external providers are unavailable', async () => {
+    process.env.OPENAI_API_KEY = '';
+    process.env.GEMINI_API_KEY = '';
+    process.env.ANTHROPIC_API_KEY = '';
+    process.env.LOCAL_LLM_ENABLED = 'true';
+    const recentA = new Date(Date.now() - 60 * 60 * 1000).toUTCString();
+    const recentB = new Date(Date.now() - 2 * 60 * 60 * 1000).toUTCString();
+
+    const rssXml = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<rss><channel>',
+      '<item>',
+      '<title>Global markets rebound as inflation slows</title>',
+      '<link>https://www.reuters.com/world/markets-rebound</link>',
+      '<description>Investors reacted to softer inflation data.</description>',
+      `<pubDate>${recentA}</pubDate>`,
+      '</item>',
+      '<item>',
+      '<title>Oil eases while equities rise in late trading</title>',
+      '<link>https://www.bloomberg.com/markets/oil-equities-rise</link>',
+      '<description>Late-session moves reflected easing commodity pressure.</description>',
+      `<pubDate>${recentB}</pubDate>`,
+      '</item>',
+      '</channel></rss>'
+    ].join('');
+
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('news.google.com/rss/search')) {
+        return new Response(rssXml, {
+          status: 200,
+          headers: { 'content-type': 'application/xml' }
+        });
+      }
+      if (url.includes('/v1/chat/completions')) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    facts: [
+                      {
+                        headline: '글로벌 시장 반등',
+                        summary: '인플레이션 완화 신호 이후 글로벌 시장이 반등했습니다.',
+                        why_it_matters: '위험자산 선호가 단기적으로 회복될 가능성이 커졌습니다.',
+                        event_date: new Date().toISOString().slice(0, 10),
+                        source_urls: ['https://www.reuters.com/world/markets-rebound']
+                      },
+                      {
+                        headline: '유가 완화와 주식 상승',
+                        summary: '장 후반 유가 압력이 완화되며 주식이 상승했습니다.',
+                        source_urls: ['https://www.bloomberg.com/markets/oil-equities-rise']
+                      }
+                    ]
+                  })
+                }
+              }
+            ],
+            usage: {
+              prompt_tokens: 11,
+              completion_tokens: 18
+            }
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+          }
+        );
+      }
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app } = await buildServer();
+
+    const respond = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ai/respond',
+      payload: {
+        prompt: '최신 뉴스 중에 주요 뉴스 브리핑 해봐',
+        provider: 'auto',
+        task_type: 'chat'
+      }
+    });
+
+    expect(respond.statusCode).toBe(200);
+    const body = respond.json() as {
+      data: {
+        provider: string;
+        output: string;
+        grounding?: {
+          render_mode?: string;
+          status?: string;
+          sources?: Array<{ url: string }>;
+          source_count?: number;
+          domain_count?: number;
+          freshness_ratio?: number | null;
+          quality_gate_code?: string[];
+          retrieval_quality_gate_code?: string[];
+          quality_gate?: { passed?: boolean };
+        };
+      };
+    };
+    expect(body.data.provider).toBe('local');
+    expect(body.data.output).toContain('주요 뉴스 브리핑');
+    expect(body.data.output).toContain('reuters.com/world/markets-rebound');
+    expect(body.data.grounding?.status).toBe('provider_only');
+    expect(body.data.grounding?.render_mode).toBe('user_mode');
+    expect(body.data.grounding?.quality_gate?.passed).toBe(true);
+    expect(body.data.grounding?.quality_gate_code).toEqual([]);
+    expect((body.data.grounding?.source_count ?? 0)).toBeGreaterThanOrEqual(2);
+    expect((body.data.grounding?.domain_count ?? 0)).toBeGreaterThanOrEqual(2);
+    expect(
+      body.data.grounding?.freshness_ratio === null || typeof body.data.grounding?.freshness_ratio === 'number'
+    ).toBe(true);
+    expect(body.data.grounding?.sources?.some((item) => item.url.includes('reuters.com/world/markets-rebound'))).toBe(true);
+    expect(body.data.grounding?.sources?.some((item) => item.url.includes('bloomberg.com/markets/oil-equities-rise'))).toBe(true);
+
+    await app.close();
+  });
+
+  it('blocks local news fallback when retrieval quality gate fails', async () => {
+    process.env.OPENAI_API_KEY = '';
+    process.env.GEMINI_API_KEY = '';
+    process.env.ANTHROPIC_API_KEY = '';
+    process.env.LOCAL_LLM_ENABLED = 'true';
+    const staleDate = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toUTCString();
+
+    const rssXml = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<rss><channel>',
+      '<item>',
+      '<title>Stale article</title>',
+      '<link>https://www.reuters.com/world/stale-article</link>',
+      '<description>Outdated briefing source.</description>',
+      `<pubDate>${staleDate}</pubDate>`,
+      '</item>',
+      '</channel></rss>'
+    ].join('');
+
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('news.google.com/rss/search')) {
+        return new Response(rssXml, {
+          status: 200,
+          headers: { 'content-type': 'application/xml' }
+        });
+      }
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app } = await buildServer();
+
+    const respond = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ai/respond',
+      payload: {
+        prompt: '최신 뉴스 중에 주요 뉴스 브리핑 해봐',
+        provider: 'auto',
+        task_type: 'chat'
+      }
+    });
+
+    expect(respond.statusCode).toBe(503);
+    const body = respond.json() as {
+      error: {
+        code: string;
+        message: string;
+        details?: {
+          reason?: string;
+          retrieval_quality_gate?: {
+            passed: boolean;
+            reasons: string[];
+          };
+        };
+      };
+    };
+    expect(body.error.code).toBe('INTERNAL_ERROR');
+    expect(body.error.message).toContain('검색 근거 품질 검증에 실패했습니다');
+    expect(body.error.details?.reason).toBe('INSUFFICIENT_EVIDENCE');
+    expect(body.error.details?.retrieval_quality_gate?.passed).toBe(false);
+    expect(body.error.details?.retrieval_quality_gate?.reasons).toContain('insufficient_retrieval_sources');
+
+    await app.close();
+  });
+
+  it('returns quality-gate blocked output when dynamic factual response has no sources', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    process.env.LOCAL_LLM_ENABLED = 'false';
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          output_text: '환율은 상승세입니다. 시장은 변동성이 큽니다.',
+          usage: { input_tokens: 12, output_tokens: 20 }
+        }),
+        {
+          status: 200,
+          headers: {
+            'content-type': 'application/json'
+          }
+        }
+      )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app } = await buildServer();
+
+    const respond = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ai/respond',
+      payload: {
+        prompt: '오늘 환율 요약해줘',
+        provider: 'openai',
+        strict_provider: true,
+        task_type: 'chat'
+      }
+    });
+
+    expect(respond.statusCode).toBe(200);
+    const body = respond.json() as {
+      data: {
+        output: string;
+        grounding?: {
+          status?: string;
+          quality_gate_code?: string[];
+          quality_gate?: {
+            passed?: boolean;
+            reasons?: string[];
+          };
+        };
+      };
+    };
+    expect(body.data.output).toContain('근거 기반 응답 품질 검증에 실패했습니다.');
+    expect(body.data.grounding?.status).toBe('blocked_due_to_quality_gate');
+    expect(body.data.grounding?.quality_gate?.passed).toBe(false);
+    expect(body.data.grounding?.quality_gate_code).toContain('insufficient_sources');
+    expect(body.data.grounding?.quality_gate?.reasons).toContain('insufficient_sources');
+
+    await app.close();
+  });
+
+  it('blocks grounded output when response language mismatches prompt language', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    process.env.LOCAL_LLM_ENABLED = 'false';
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          output_text: [
+            'Top world news briefing: markets rallied and governments announced new sanctions.',
+            '',
+            'Sources:',
+            '- [BBC](https://www.bbc.com/news/world-00000001)'
+          ].join('\n'),
+          usage: { input_tokens: 12, output_tokens: 24 }
+        }),
+        {
+          status: 200,
+          headers: {
+            'content-type': 'application/json'
+          }
+        }
+      )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app } = await buildServer();
+
+    const respond = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ai/respond',
+      payload: {
+        prompt: '오늘 주요 뉴스 브리핑 해줘',
+        provider: 'openai',
+        strict_provider: true,
+        task_type: 'chat'
+      }
+    });
+
+    expect(respond.statusCode).toBe(200);
+    const body = respond.json() as {
+      data: {
+        output: string;
+        grounding?: {
+          status?: string;
+          quality_gate_code?: string[];
+          quality_gate?: {
+            passed?: boolean;
+            reasons?: string[];
+          };
+        };
+      };
+    };
+    expect(body.data.output).toContain('근거 기반 응답 품질 검증에 실패했습니다.');
+    expect(body.data.grounding?.status).toBe('blocked_due_to_quality_gate');
+    expect(body.data.grounding?.quality_gate?.passed).toBe(false);
+    expect(body.data.grounding?.quality_gate_code).toContain('language_mismatch');
+    expect(body.data.grounding?.quality_gate?.reasons).toContain('language_mismatch');
+
+    await app.close();
+  });
+
+  it('blocks grounded output when claim citation coverage is insufficient', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    process.env.LOCAL_LLM_ENABLED = 'false';
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          output_text: [
+            'Global oil prices collapsed after renewed supply concerns.',
+            'UK markets rallied after policy shift.',
+            '',
+            'Sources:',
+            '- [Markets rally after policy shift](https://www.bbc.com/news/world-00000001)'
+          ].join('\n'),
+          usage: { input_tokens: 18, output_tokens: 30 }
+        }),
+        {
+          status: 200,
+          headers: {
+            'content-type': 'application/json'
+          }
+        }
+      )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app } = await buildServer();
+
+    const respond = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ai/respond',
+      payload: {
+        prompt: 'latest market headlines briefing with sources',
+        provider: 'openai',
+        strict_provider: true,
+        task_type: 'chat'
+      }
+    });
+
+    expect(respond.statusCode).toBe(200);
+    const body = respond.json() as {
+      data: {
+        output: string;
+        grounding?: {
+          status?: string;
+          quality_gate_code?: string[];
+          quality_gate?: {
+            passed?: boolean;
+            reasons?: string[];
+          };
+        };
+      };
+    };
+    expect(body.data.output).toContain('근거 기반 응답 품질 검증에 실패했습니다.');
+    expect(body.data.grounding?.status).toBe('blocked_due_to_quality_gate');
+    expect(body.data.grounding?.quality_gate?.passed).toBe(false);
+    expect(body.data.grounding?.quality_gate_code).toContain('insufficient_claim_citation_coverage');
+    expect(body.data.grounding?.quality_gate?.reasons).toContain('insufficient_claim_citation_coverage');
 
     await app.close();
   });
@@ -452,6 +1138,8 @@ describe('API routes', () => {
           approval_max_age_hours: number;
           provider_failover_auto: boolean;
           high_risk_requires_approval: boolean;
+          auth_allow_signup: boolean;
+          auth_token_configured: boolean;
         };
       };
     };
@@ -462,6 +1150,8 @@ describe('API routes', () => {
     expect(body.data.policies.high_risk_requires_approval).toBe(true);
     expect(body.data.policies.provider_failover_auto).toBe(true);
     expect(typeof body.data.policies.approval_max_age_hours).toBe('number');
+    expect(typeof body.data.policies.auth_allow_signup).toBe('boolean');
+    expect(typeof body.data.policies.auth_token_configured).toBe('boolean');
 
     await app.close();
   });
@@ -527,6 +1217,21 @@ describe('API routes', () => {
     process.env.AUTH_REQUIRED = 'true';
     process.env.AUTH_TOKEN = 'auth_token_for_test';
     const { app } = await buildServer();
+
+    const authConfig = await app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/config'
+    });
+    expect(authConfig.statusCode).toBe(200);
+    const authConfigBody = authConfig.json() as {
+      data: {
+        auth_required: boolean;
+        auth_allow_signup: boolean;
+        auth_token_configured: boolean;
+      };
+    };
+    expect(authConfigBody.data.auth_required).toBe(true);
+    expect(authConfigBody.data.auth_token_configured).toBe(true);
 
     const denied = await app.inject({
       method: 'GET',

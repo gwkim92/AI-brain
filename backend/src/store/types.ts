@@ -22,9 +22,32 @@ export type MissionStepPattern = 'llm_generate' | 'council_debate' | 'human_gate
 export type LegacyMissionStepType = 'code' | 'research' | 'finance' | 'news' | 'approval' | 'execute';
 export type MissionStepType = MissionStepPattern | LegacyMissionStepType;
 export type MissionStepStatus = 'pending' | 'running' | 'done' | 'blocked' | 'failed';
+export type MissionApprovalPolicyMode = 'auto' | 'required_for_high_risk' | 'required_for_all';
 
 export type LlmProviderName = 'openai' | 'gemini' | 'anthropic' | 'local';
 export type AssistantContextStatus = 'running' | 'completed' | 'failed';
+
+export type MissionContractConstraints = {
+  maxCostUsd?: number;
+  deadlineAt?: string;
+  allowedTools?: string[];
+  maxRetriesPerStep?: number;
+};
+
+export type MissionContractApprovalPolicy = {
+  mode: MissionApprovalPolicyMode;
+  approverRoles?: Array<Exclude<UserRole, 'member'>>;
+};
+
+export type MissionContractRecord = {
+  constraints: MissionContractConstraints;
+  approvalPolicy: MissionContractApprovalPolicy;
+};
+
+export type MissionContractUpdateInput = {
+  constraints?: Partial<MissionContractConstraints>;
+  approvalPolicy?: Partial<MissionContractApprovalPolicy>;
+};
 
 export type MissionStepRecord = {
   id: string;
@@ -46,6 +69,7 @@ export type MissionRecord = {
   objective: string;
   domain: MissionDomain;
   status: MissionStatus;
+  missionContract: MissionContractRecord;
   steps: MissionStepRecord[];
   createdAt: string;
   updatedAt: string;
@@ -58,6 +82,7 @@ export type CreateMissionInput = {
   objective: string;
   domain: MissionDomain;
   status?: MissionStatus;
+  missionContract?: MissionContractRecord;
   steps: MissionStepRecord[];
 };
 
@@ -67,6 +92,7 @@ export type UpdateMissionInput = {
   status?: MissionStatus;
   title?: string;
   objective?: string;
+  missionContract?: MissionContractUpdateInput;
   stepStatuses?: Array<{
     stepId: string;
     status: MissionStepStatus;
@@ -136,6 +162,53 @@ export type AppendAssistantContextEventInput = {
   data: Record<string, unknown>;
   traceId?: string;
   spanId?: string;
+};
+
+export type AssistantContextGroundingSourceRecord = {
+  id: string;
+  contextId: string;
+  url: string;
+  title: string;
+  domain: string;
+  sourceOrder: number;
+  createdAt: string;
+};
+
+export type ReplaceAssistantContextGroundingSourcesInput = {
+  userId: string;
+  contextId: string;
+  sources: Array<{
+    url: string;
+    title: string;
+    domain: string;
+  }>;
+};
+
+export type AssistantContextGroundingClaimCitationRecord = {
+  sourceId: string;
+  url: string;
+  title: string;
+  domain: string;
+  citationOrder: number;
+  sourceOrder: number;
+};
+
+export type AssistantContextGroundingClaimRecord = {
+  id: string;
+  contextId: string;
+  claimText: string;
+  claimOrder: number;
+  citations: AssistantContextGroundingClaimCitationRecord[];
+  createdAt: string;
+};
+
+export type ReplaceAssistantContextGroundingClaimsInput = {
+  userId: string;
+  contextId: string;
+  claims: Array<{
+    claimText: string;
+    sourceUrls: string[];
+  }>;
 };
 
 export type ProviderCredentialRecord = {
@@ -477,6 +550,22 @@ export type JarvisStore = {
     sinceSequence?: number;
     limit: number;
   }) => Promise<AssistantContextEventRecord[]>;
+  replaceAssistantContextGroundingSources: (
+    input: ReplaceAssistantContextGroundingSourcesInput
+  ) => Promise<AssistantContextGroundingSourceRecord[]>;
+  listAssistantContextGroundingSources: (input: {
+    userId: string;
+    contextId: string;
+    limit: number;
+  }) => Promise<AssistantContextGroundingSourceRecord[]>;
+  replaceAssistantContextGroundingClaims: (
+    input: ReplaceAssistantContextGroundingClaimsInput
+  ) => Promise<AssistantContextGroundingClaimRecord[]>;
+  listAssistantContextGroundingClaims: (input: {
+    userId: string;
+    contextId: string;
+    limit: number;
+  }) => Promise<AssistantContextGroundingClaimRecord[]>;
 
   createTask: (input: CreateTaskInput) => Promise<TaskRecord>;
   setTaskStatus: (input: {
@@ -487,7 +576,7 @@ export type JarvisStore = {
     traceId?: string;
     spanId?: string;
   }) => Promise<TaskRecord | null>;
-  listTasks: (input: { status?: TaskStatus; limit: number }) => Promise<TaskRecord[]>;
+  listTasks: (input: { userId?: string; status?: TaskStatus; limit: number }) => Promise<TaskRecord[]>;
   getTaskById: (taskId: string) => Promise<TaskRecord | null>;
 
   appendTaskEvent: (event: AppendTaskEventInput) => Promise<TaskEventRecord>;

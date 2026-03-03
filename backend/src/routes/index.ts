@@ -233,11 +233,13 @@ export async function registerRoutes(
 
   const buildDashboardOverviewData = async (
     request: FastifyRequest,
-    input: { task_limit: number; pending_approval_limit: number; running_task_limit: number }
+    input: { task_limit: number; pending_approval_limit: number; running_task_limit: number; task_scope?: 'mine' | 'all' }
   ): Promise<DashboardOverview> => {
     const userRole = resolveRequestRole(request);
+    const allowAllTaskScope = input.task_scope === 'all' && userRole === 'admin';
+    const scopedUserId = allowAllTaskScope ? undefined : resolveRequestUserId(request);
     const [tasks, pendingApprovals] = await Promise.all([
-      store.listTasks({ limit: input.task_limit, status: undefined }),
+      store.listTasks({ userId: scopedUserId, limit: input.task_limit, status: undefined }),
       ROLE_RANK[userRole] >= ROLE_RANK.operator
         ? store.listUpgradeProposals('proposed')
         : Promise.resolve([])
@@ -313,7 +315,13 @@ export async function registerRoutes(
   app.addHook('onRequest', async (request, reply) => {
     const requestPath = request.url.split('?')[0] ?? request.url;
     if (!requestPath.startsWith('/api/v1/')) return;
-    if (requestPath === '/api/v1/auth/signup' || requestPath === '/api/v1/auth/login') return;
+    if (
+      requestPath === '/api/v1/auth/config' ||
+      requestPath === '/api/v1/auth/signup' ||
+      requestPath === '/api/v1/auth/login'
+    ) {
+      return;
+    }
     if (requestPath === '/api/v1/integrations/openai/webhook' || requestPath === '/api/v1/integrations/telegram/webhook') return;
     const authError = await ensureApiAuth(request, reply);
     if (authError) return authError;

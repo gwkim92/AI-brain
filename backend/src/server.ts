@@ -18,6 +18,14 @@ import { registerRoutes } from './routes';
 import { createStore } from './store';
 import type { JarvisStore } from './store/types';
 
+if (typeof process.loadEnvFile === 'function') {
+  try {
+    process.loadEnvFile();
+  } catch {
+    // Optional local .env file may be absent in some environments.
+  }
+}
+
 async function ensureBootstrapAdmin(store: JarvisStore, env: ReturnType<typeof loadEnv>): Promise<void> {
   const email = env.ADMIN_BOOTSTRAP_EMAIL.trim().toLowerCase();
   const password = env.ADMIN_BOOTSTRAP_PASSWORD;

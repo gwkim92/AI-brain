@@ -40,7 +40,10 @@ export type RouteContext = {
   getEnvProviderApiKey: (provider: ProviderCredentialProvider) => string | undefined;
   loadRuntimeProviderApiKeys: () => Promise<Partial<Record<ProviderCredentialProvider, string>>>;
   applyStoredProviderKeys: () => Promise<void>;
-  buildDashboardOverviewData: (request: FastifyRequest, input: { task_limit: number; pending_approval_limit: number; running_task_limit: number }) => Promise<DashboardOverview>;
+  buildDashboardOverviewData: (
+    request: FastifyRequest,
+    input: { task_limit: number; pending_approval_limit: number; running_task_limit: number; task_scope?: 'mine' | 'all' }
+  ) => Promise<DashboardOverview>;
   buildDashboardOverviewSignature: (snapshot: DashboardOverview) => string;
 };
 

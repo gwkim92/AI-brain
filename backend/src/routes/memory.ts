@@ -16,8 +16,9 @@ export async function memoryRoutes(app: FastifyInstance, ctx: RouteContext) {
       return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid query', parsed.error.flatten());
     }
 
+    const userId = resolveRequestUserId(request);
     const [tasks, recommendations] = await Promise.all([
-      store.listTasks({ limit: parsed.data.limit, status: undefined }),
+      store.listTasks({ userId, limit: parsed.data.limit, status: undefined }),
       store.listRadarRecommendations(undefined)
     ]);
     const providers = providerRouter.listAvailability();

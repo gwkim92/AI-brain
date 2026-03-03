@@ -44,8 +44,6 @@ export class LocalProvider implements LlmProvider {
       throw new Error('local provider is disabled');
     }
 
-    const model = request.model ?? this.options.model;
-
     const headers: Record<string, string> = {
       'content-type': 'application/json'
     };
@@ -54,6 +52,49 @@ export class LocalProvider implements LlmProvider {
       headers.authorization = `Bearer ${this.options.apiKey}`;
     }
 
+    const model = request.model ?? this.options.model;
+    try {
+      return await this.generateWithModel(model, request, headers);
+    } catch (error) {
+      if (request.model || !this.isRetryableFallbackError(error)) {
+        throw error;
+      }
+
+      const fallbackModels = await this.pickFallbackModels(model, headers);
+      if (fallbackModels.length === 0) {
+        throw error;
+      }
+
+      let lastError: unknown = error;
+      for (const fallbackModel of fallbackModels) {
+        try {
+          const retryResult = await this.generateWithModel(fallbackModel, request, headers);
+          return {
+            ...retryResult,
+            raw: {
+              ...(typeof retryResult.raw === 'object' && retryResult.raw !== null
+                ? (retryResult.raw as Record<string, unknown>)
+                : {}),
+              fallback_from_model: model
+            }
+          };
+        } catch (fallbackError) {
+          lastError = fallbackError;
+          if (!this.isRetryableFallbackError(fallbackError)) {
+            throw fallbackError;
+          }
+        }
+      }
+
+      throw lastError;
+    }
+  }
+
+  private async generateWithModel(
+    model: string,
+    request: ProviderGenerateRequest,
+    headers: Record<string, string>
+  ): Promise<ProviderGenerateResult> {
     const messages: Array<{ role: 'system' | 'user'; content: string }> = [];
     if (request.systemPrompt) {
       messages.push({ role: 'system', content: request.systemPrompt });
@@ -67,6 +108,8 @@ export class LocalProvider implements LlmProvider {
         model,
         messages,
         temperature: request.temperature,
+        top_p: request.topP,
+        stop: request.stop,
         max_tokens: request.maxOutputTokens,
         stream: false
       })
@@ -103,5 +146,54 @@ export class LocalProvider implements LlmProvider {
       },
       raw: payload
     };
+  }
+
+  private isRetryableFallbackError(error: unknown): boolean {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+    return /model[\s\S]*not found|not found[\s\S]*model|unknown model|model does not exist|does not support|unsupported|incompatible/iu.test(
+      error.message
+    );
+  }
+
+  private async pickFallbackModels(currentModel: string, headers: Record<string, string>): Promise<string[]> {
+    const response = await fetch(joinPath(this.options.baseUrl, '/api/tags'), {
+      method: 'GET',
+      headers: this.options.apiKey
+        ? { authorization: headers.authorization as string }
+        : undefined
+    });
+    const raw = await response.text();
+    ensureOk(response, raw);
+
+    const payload = JSON.parse(raw) as {
+      models?: Array<{ name?: string }>;
+    };
+    const availableModels = (payload.models ?? [])
+      .map((item) => (item.name ?? '').trim())
+      .filter(Boolean);
+
+    const deduped = Array.from(new Set(availableModels)).filter((name) => name !== currentModel);
+    if (deduped.length === 0) return [];
+
+    return deduped.sort((left, right) => {
+      const scoreDiff = this.localModelScore(right) - this.localModelScore(left);
+      if (scoreDiff !== 0) return scoreDiff;
+      return left.localeCompare(right);
+    });
+  }
+
+  private localModelScore(model: string): number {
+    const normalized = model.toLowerCase();
+    let score = 0;
+    if (/(embed|embedding|rerank|whisper|tts|transcribe|clip)/u.test(normalized)) {
+      score -= 20;
+    } else {
+      score += 10;
+    }
+    if (/(chat|instruct)/u.test(normalized)) score += 3;
+    if (/(qwen|llama|mistral|deepseek|gemma|mixtral|phi|yi|command-r)/u.test(normalized)) score += 2;
+    return score;
   }
 }

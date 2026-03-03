@@ -5,17 +5,37 @@ import { sendError, sendSuccess } from '../lib/http';
 import { classifyComplexity, buildSimplePlan } from '../orchestrator/complexity';
 import { executeMission } from '../orchestrator/mission-executor';
 import { generatePlan, planToMissionInput } from '../orchestrator/planner';
-import type { MissionRecord, MissionStepRecord } from '../store/types';
+import type { MissionContractRecord, MissionContractUpdateInput, MissionRecord, MissionStepRecord } from '../store/types';
 import type { RouteContext } from './types';
 import { applySseCorsHeaders, truncateText, buildMissionSignature, type MissionDomain, type MissionStepType } from './types';
 
 const MissionDomainSchema = z.enum(['code', 'research', 'finance', 'news', 'mixed']);
 const MissionStatusSchema = z.enum(['draft', 'planned', 'running', 'blocked', 'completed', 'failed']);
+const MissionApprovalPolicyModeSchema = z.enum(['auto', 'required_for_high_risk', 'required_for_all']);
+const MissionApproverRoleSchema = z.enum(['operator', 'admin']);
 const MissionStepTypeSchema = z.enum([
   'llm_generate', 'council_debate', 'human_gate', 'tool_call', 'sub_mission',
   'code', 'research', 'finance', 'news', 'approval', 'execute'
 ]);
 const MissionStepStatusSchema = z.enum(['pending', 'running', 'done', 'blocked', 'failed']);
+const MissionConstraintsSchema = z.object({
+  max_cost_usd: z.number().positive().max(1_000_000).optional(),
+  deadline_at: z.string().datetime().optional(),
+  allowed_tools: z.array(z.string().min(1).max(120)).max(100).optional(),
+  max_retries_per_step: z.coerce.number().int().min(0).max(10).optional()
+});
+const MissionApprovalPolicyCreateSchema = z.object({
+  mode: MissionApprovalPolicyModeSchema.default('required_for_high_risk'),
+  approver_roles: z.array(MissionApproverRoleSchema).max(2).optional()
+});
+const MissionApprovalPolicyUpdateSchema = z
+  .object({
+    mode: MissionApprovalPolicyModeSchema.optional(),
+    approver_roles: z.array(MissionApproverRoleSchema).max(2).optional()
+  })
+  .refine((value) => typeof value.mode !== 'undefined' || typeof value.approver_roles !== 'undefined', {
+    message: 'approval_policy requires at least one field'
+  });
 
 const MissionStepCreateSchema = z.object({
   type: MissionStepTypeSchema,
@@ -31,6 +51,8 @@ const MissionCreateSchema = z.object({
   objective: z.string().min(1).max(4000),
   domain: MissionDomainSchema.default('mixed'),
   workspace_id: z.string().uuid().optional(),
+  constraints: MissionConstraintsSchema.optional(),
+  approval_policy: MissionApprovalPolicyCreateSchema.optional(),
   steps: z.array(MissionStepCreateSchema).max(40).optional()
 });
 
@@ -49,6 +71,8 @@ const MissionUpdateSchema = z
     status: MissionStatusSchema.optional(),
     title: z.string().min(1).max(180).optional(),
     objective: z.string().min(1).max(4000).optional(),
+    constraints: MissionConstraintsSchema.optional(),
+    approval_policy: MissionApprovalPolicyUpdateSchema.optional(),
     step_statuses: z
       .array(z.object({ step_id: z.string().uuid(), status: MissionStepStatusSchema }))
       .max(100)
@@ -59,6 +83,8 @@ const MissionUpdateSchema = z
       typeof value.status !== 'undefined' ||
       typeof value.title !== 'undefined' ||
       typeof value.objective !== 'undefined' ||
+      typeof value.constraints !== 'undefined' ||
+      typeof value.approval_policy !== 'undefined' ||
       (Array.isArray(value.step_statuses) && value.step_statuses.length > 0)
     );
   }, 'at least one mission field must be provided');
@@ -73,6 +99,62 @@ const defaultRouteByStepType: Record<string, string> = {
 const defaultStepTypeByDomain: Record<MissionDomain, MissionStepType> = {
   code: 'code', research: 'research', finance: 'finance', news: 'news', mixed: 'execute'
 };
+
+function toMissionContract(
+  constraints?: z.infer<typeof MissionConstraintsSchema>,
+  approvalPolicy?: z.infer<typeof MissionApprovalPolicyCreateSchema>
+): MissionContractRecord | undefined {
+  if (!constraints && !approvalPolicy) {
+    return undefined;
+  }
+
+  return {
+    constraints: {
+      maxCostUsd: constraints?.max_cost_usd,
+      deadlineAt: constraints?.deadline_at,
+      allowedTools: constraints?.allowed_tools,
+      maxRetriesPerStep: constraints?.max_retries_per_step
+    },
+    approvalPolicy: {
+      mode: approvalPolicy?.mode ?? 'required_for_high_risk',
+      approverRoles: approvalPolicy?.approver_roles
+    }
+  };
+}
+
+function toMissionContractPatch(
+  constraints?: z.infer<typeof MissionConstraintsSchema>,
+  approvalPolicy?: z.infer<typeof MissionApprovalPolicyUpdateSchema>
+): MissionContractUpdateInput | undefined {
+  if (!constraints && !approvalPolicy) {
+    return undefined;
+  }
+
+  const constraintsPatch: MissionContractUpdateInput['constraints'] = {};
+  if (constraints) {
+    if (typeof constraints.max_cost_usd === 'number') constraintsPatch.maxCostUsd = constraints.max_cost_usd;
+    if (typeof constraints.deadline_at === 'string') constraintsPatch.deadlineAt = constraints.deadline_at;
+    if (Array.isArray(constraints.allowed_tools)) constraintsPatch.allowedTools = constraints.allowed_tools;
+    if (typeof constraints.max_retries_per_step === 'number') {
+      constraintsPatch.maxRetriesPerStep = constraints.max_retries_per_step;
+    }
+  }
+
+  const approvalPatch: MissionContractUpdateInput['approvalPolicy'] = {};
+  if (approvalPolicy) {
+    if (typeof approvalPolicy.mode !== 'undefined') approvalPatch.mode = approvalPolicy.mode;
+    if (Array.isArray(approvalPolicy.approver_roles)) approvalPatch.approverRoles = approvalPolicy.approver_roles;
+  }
+
+  const patch: MissionContractUpdateInput = {};
+  if (Object.keys(constraintsPatch).length > 0) patch.constraints = constraintsPatch;
+  if (Object.keys(approvalPatch).length > 0) patch.approvalPolicy = approvalPatch;
+  if (Object.keys(patch).length === 0) return undefined;
+
+  return {
+    ...patch
+  };
+}
 
 function buildDefaultMissionSteps(domain: MissionDomain, objective: string): MissionStepRecord[] {
   const stepType = defaultStepTypeByDomain[domain];
@@ -118,6 +200,7 @@ export async function missionRoutes(app: FastifyInstance, ctx: RouteContext) {
       objective: parsed.data.objective,
       domain: parsed.data.domain,
       status: 'draft',
+      missionContract: toMissionContract(parsed.data.constraints, parsed.data.approval_policy),
       steps
     });
     publishMissionUpdated(mission);
@@ -154,6 +237,7 @@ export async function missionRoutes(app: FastifyInstance, ctx: RouteContext) {
       status: parsed.data.status,
       title: parsed.data.title,
       objective: parsed.data.objective,
+      missionContract: toMissionContractPatch(parsed.data.constraints, parsed.data.approval_policy),
       stepStatuses: parsed.data.step_statuses?.map((step) => ({ stepId: step.step_id, status: step.status }))
     });
     if (!updated) return sendError(reply, request, 404, 'NOT_FOUND', 'mission not found');

@@ -16,6 +16,8 @@ export type ProviderGenerateRequest = {
   systemPrompt?: string;
   model?: string;
   temperature?: number;
+  topP?: number;
+  stop?: string[];
   maxOutputTokens?: number;
   taskType?: RoutingTaskType;
   excludeProviders?: ProviderName[];

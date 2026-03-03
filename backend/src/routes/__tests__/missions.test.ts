@@ -34,7 +34,15 @@ describe('missions api', () => {
       payload: {
         title: 'Codebase refactor plan',
         objective: 'Split studio views and keep runtime unified',
-        domain: 'code'
+        domain: 'code',
+        constraints: {
+          max_cost_usd: 250,
+          deadline_at: '2026-03-01T00:00:00.000Z',
+          allowed_tools: ['git', 'pnpm']
+        },
+        approval_policy: {
+          mode: 'required_for_high_risk'
+        }
       }
     });
 
@@ -45,6 +53,17 @@ describe('missions api', () => {
         title: string;
         domain: string;
         status: string;
+        missionContract: {
+          constraints: {
+            maxCostUsd?: number;
+            deadlineAt?: string;
+            allowedTools?: string[];
+          };
+          approvalPolicy: {
+            mode: string;
+            approverRoles?: string[];
+          };
+        };
         steps: Array<{ id: string; route: string; type: string }>;
       };
     };
@@ -53,6 +72,10 @@ describe('missions api', () => {
     expect(created.data.title).toBe('Codebase refactor plan');
     expect(created.data.domain).toBe('code');
     expect(created.data.status).toBe('draft');
+    expect(created.data.missionContract.constraints.maxCostUsd).toBe(250);
+    expect(created.data.missionContract.constraints.deadlineAt).toBe('2026-03-01T00:00:00.000Z');
+    expect(created.data.missionContract.constraints.allowedTools).toEqual(['git', 'pnpm']);
+    expect(created.data.missionContract.approvalPolicy.mode).toBe('required_for_high_risk');
     expect(created.data.steps.length).toBeGreaterThan(0);
     expect(created.data.steps[0]?.type).toBe('code');
     expect(created.data.steps[0]?.route).toBe('/studio/code');
@@ -78,9 +101,20 @@ describe('missions api', () => {
     });
 
     expect(detail.statusCode).toBe(200);
-    const detailBody = detail.json() as { data: { id: string; title: string } };
+    const detailBody = detail.json() as {
+      data: {
+        id: string;
+        title: string;
+        missionContract: {
+          constraints: {
+            maxCostUsd?: number;
+          };
+        };
+      };
+    };
     expect(detailBody.data.id).toBe(created.data.id);
     expect(detailBody.data.title).toBe('Codebase refactor plan');
+    expect(detailBody.data.missionContract.constraints.maxCostUsd).toBe(250);
 
     await app.close();
   });
@@ -146,6 +180,12 @@ describe('missions api', () => {
       url: `/api/v1/missions/${created.data.id}`,
       payload: {
         status: 'running',
+        constraints: {
+          max_retries_per_step: 2
+        },
+        approval_policy: {
+          mode: 'required_for_all'
+        },
         step_statuses: [
           {
             step_id: created.data.steps[0]!.id,
@@ -159,11 +199,21 @@ describe('missions api', () => {
       data: {
         id: string;
         status: string;
+        missionContract: {
+          constraints: {
+            maxRetriesPerStep?: number;
+          };
+          approvalPolicy: {
+            mode: string;
+          };
+        };
         steps: Array<{ status: string }>;
       };
     };
     expect(patched.data.id).toBe(created.data.id);
     expect(patched.data.status).toBe('running');
+    expect(patched.data.missionContract.constraints.maxRetriesPerStep).toBe(2);
+    expect(patched.data.missionContract.approvalPolicy.mode).toBe('required_for_all');
     expect(patched.data.steps[0]?.status).toBe('running');
 
     await app.close();

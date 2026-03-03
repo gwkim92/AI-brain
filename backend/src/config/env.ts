@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+const DEFAULT_ADMIN_BOOTSTRAP_PASSWORD = 'Admin!234567';
+const DEFAULT_SECRETS_ENCRYPTION_KEY = 'jarvis-dev-secrets-key-change-me';
+
 const EnvBooleanSchema = z.preprocess((value) => {
   if (typeof value === 'boolean') {
     return value;
@@ -38,9 +41,9 @@ const EnvSchema = z.object({
   AUTH_ALLOW_SIGNUP: EnvBooleanSchema.default(true),
   AUTH_SESSION_TTL_HOURS: z.coerce.number().int().positive().default(168),
   ADMIN_BOOTSTRAP_EMAIL: z.string().email().default('admin@jarvis.local'),
-  ADMIN_BOOTSTRAP_PASSWORD: z.string().min(8).max(200).default('Admin!234567'),
+  ADMIN_BOOTSTRAP_PASSWORD: z.string().min(8).max(200).default(DEFAULT_ADMIN_BOOTSTRAP_PASSWORD),
   ADMIN_BOOTSTRAP_DISPLAY_NAME: z.string().min(1).max(120).default('Jarvis Admin'),
-  SECRETS_ENCRYPTION_KEY: z.string().min(16).default('jarvis-dev-secrets-key-change-me'),
+  SECRETS_ENCRYPTION_KEY: z.string().min(16).default(DEFAULT_SECRETS_ENCRYPTION_KEY),
   HIGH_RISK_ALLOWED_ROLES: z.string().default('operator,admin'),
 
   OPENAI_API_KEY: z.string().optional(),
@@ -58,7 +61,7 @@ const EnvSchema = z.object({
 
   LOCAL_LLM_ENABLED: EnvBooleanSchema.default(true),
   LOCAL_LLM_BASE_URL: z.string().url().default('http://127.0.0.1:11434'),
-  LOCAL_LLM_MODEL: z.string().default('llama3.1:8b'),
+  LOCAL_LLM_MODEL: z.string().default('qwen2.5:7b'),
   LOCAL_LLM_API_KEY: z.string().optional(),
 
   TELEGRAM_BOT_TOKEN: z.string().optional(),
@@ -81,6 +84,14 @@ export type AppEnv = z.infer<typeof EnvSchema> & {
 
 export function loadEnv(): AppEnv {
   const parsed = EnvSchema.parse(process.env);
+  if (parsed.NODE_ENV === 'production') {
+    if (parsed.ADMIN_BOOTSTRAP_PASSWORD === DEFAULT_ADMIN_BOOTSTRAP_PASSWORD) {
+      throw new Error('Invalid production configuration: ADMIN_BOOTSTRAP_PASSWORD must be changed from default value.');
+    }
+    if (parsed.SECRETS_ENCRYPTION_KEY === DEFAULT_SECRETS_ENCRYPTION_KEY) {
+      throw new Error('Invalid production configuration: SECRETS_ENCRYPTION_KEY must be changed from default value.');
+    }
+  }
 
   const allowedOrigins = parsed.ALLOWED_ORIGINS.split(',')
     .map((item) => item.trim())

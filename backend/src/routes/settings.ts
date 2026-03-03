@@ -34,7 +34,9 @@ export async function settingsRoutes(app: FastifyInstance, ctx: RouteContext) {
         approval_max_age_hours: env.APPROVAL_MAX_AGE_HOURS,
         high_risk_allowed_roles: env.highRiskAllowedRoles,
         provider_failover_auto: true,
-        auth_required: env.AUTH_REQUIRED
+        auth_required: env.AUTH_REQUIRED,
+        auth_allow_signup: env.AUTH_ALLOW_SIGNUP,
+        auth_token_configured: Boolean(env.AUTH_TOKEN?.trim())
       }
     });
   });

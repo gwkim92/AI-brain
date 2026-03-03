@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS missions (
   objective TEXT NOT NULL,
   domain TEXT NOT NULL DEFAULT 'mixed',
   status TEXT NOT NULL DEFAULT 'draft',
+  mission_contract JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK (domain IN ('code', 'research', 'finance', 'news', 'mixed')),
@@ -168,6 +169,33 @@ CREATE TABLE IF NOT EXISTS assistant_context_events (
   trace_id TEXT,
   span_id TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS assistant_context_grounding_sources (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  context_id UUID NOT NULL REFERENCES assistant_contexts(id) ON DELETE CASCADE,
+  url TEXT NOT NULL,
+  title TEXT NOT NULL,
+  domain TEXT NOT NULL,
+  source_order INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (context_id, url)
+);
+
+CREATE TABLE IF NOT EXISTS assistant_context_grounding_claims (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  context_id UUID NOT NULL REFERENCES assistant_contexts(id) ON DELETE CASCADE,
+  claim_text TEXT NOT NULL,
+  claim_order INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS assistant_context_grounding_claim_citations (
+  claim_id UUID NOT NULL REFERENCES assistant_context_grounding_claims(id) ON DELETE CASCADE,
+  source_id UUID NOT NULL REFERENCES assistant_context_grounding_sources(id) ON DELETE CASCADE,
+  citation_order INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (claim_id, source_id)
 );
 
 CREATE TABLE IF NOT EXISTS memory_segments (
@@ -471,6 +499,11 @@ CREATE INDEX IF NOT EXISTS idx_tasks_trace_id ON tasks(trace_id);
 CREATE INDEX IF NOT EXISTS idx_missions_user_status_updated_at ON missions(user_id, status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mission_steps_mission_order ON mission_steps(mission_id, step_order ASC);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id_expires_at ON user_sessions(user_id, expires_at DESC);
+CREATE INDEX IF NOT EXISTS idx_assistant_contexts_user_status_updated_at ON assistant_contexts(user_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_assistant_context_events_context_sequence ON assistant_context_events(context_id, sequence ASC);
+CREATE INDEX IF NOT EXISTS idx_assistant_context_grounding_sources_context_order ON assistant_context_grounding_sources(context_id, source_order ASC);
+CREATE INDEX IF NOT EXISTS idx_assistant_context_grounding_claims_context_order ON assistant_context_grounding_claims(context_id, claim_order ASC);
+CREATE INDEX IF NOT EXISTS idx_assistant_context_grounding_claim_citations_claim_order ON assistant_context_grounding_claim_citations(claim_id, citation_order ASC);
 CREATE INDEX IF NOT EXISTS idx_task_events_task_id_created_at ON task_events(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_task_events_trace_id_created_at ON task_events(trace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memory_segments_user_id_created_at ON memory_segments(user_id, created_at DESC);
@@ -501,6 +534,8 @@ CREATE INDEX IF NOT EXISTS idx_task_model_policy_task_type_active ON task_model_
 -- compatibility: add new columns to mission_steps for existing installations
 ALTER TABLE IF EXISTS mission_steps ADD COLUMN IF NOT EXISTS task_type TEXT;
 ALTER TABLE IF EXISTS mission_steps ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE IF EXISTS mission_steps ADD COLUMN IF NOT EXISTS dependencies UUID[] NOT NULL DEFAULT '{}';
+ALTER TABLE IF EXISTS mission_steps ADD COLUMN IF NOT EXISTS execution_result JSONB;
 ALTER TABLE IF EXISTS mission_steps DROP CONSTRAINT IF EXISTS mission_steps_step_type_check;
 ALTER TABLE IF EXISTS mission_steps
   ADD CONSTRAINT mission_steps_step_type_check CHECK (

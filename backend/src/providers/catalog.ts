@@ -3,6 +3,7 @@ import type { AppEnv } from '../config/env';
 type ProviderModelCatalogEntry = {
   provider: 'openai' | 'gemini' | 'anthropic' | 'local';
   configured_model: string;
+  recommended_model?: string;
   source: 'remote' | 'configured';
   models: string[];
   error?: string;
@@ -14,6 +15,34 @@ function stripTrailingSlash(value: string): string {
 
 function normalizeModelIds(values: string[]): string[] {
   return Array.from(new Set(values.map((item) => item.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+}
+
+function localModelScore(model: string): number {
+  const normalized = model.toLowerCase();
+  let score = 0;
+  if (/(embed|embedding|rerank|whisper|tts|transcribe|clip)/u.test(normalized)) {
+    score -= 20;
+  } else {
+    score += 10;
+  }
+  if (/(chat|instruct)/u.test(normalized)) score += 3;
+  if (/(qwen|llama|mistral|deepseek|gemma|mixtral|phi|yi|command-r)/u.test(normalized)) score += 2;
+  return score;
+}
+
+function pickRecommendedLocalModel(configured: string, discoveredModels: string[]): string {
+  if (discoveredModels.includes(configured)) {
+    return configured;
+  }
+  if (discoveredModels.length === 0) {
+    return configured;
+  }
+  const ranked = discoveredModels.slice().sort((left, right) => {
+    const scoreDiff = localModelScore(right) - localModelScore(left);
+    if (scoreDiff !== 0) return scoreDiff;
+    return left.localeCompare(right);
+  });
+  return ranked[0] ?? configured;
 }
 
 async function fetchOpenAiModels(env: AppEnv): Promise<ProviderModelCatalogEntry> {
@@ -164,6 +193,7 @@ async function fetchLocalModels(env: AppEnv): Promise<ProviderModelCatalogEntry>
     return {
       provider: 'local',
       configured_model: configured,
+      recommended_model: configured,
       source: 'configured',
       models: [configured]
     };
@@ -186,10 +216,16 @@ async function fetchLocalModels(env: AppEnv): Promise<ProviderModelCatalogEntry>
     const payload = JSON.parse(raw) as {
       models?: Array<{ name?: string }>;
     };
-    const models = normalizeModelIds([configured, ...(payload.models ?? []).map((item) => item.name ?? '')]);
+    const discoveredModels = Array.from(
+      new Set((payload.models ?? []).map((item) => (item.name ?? '').trim()).filter(Boolean))
+    );
+    const recommendedModel = pickRecommendedLocalModel(configured, discoveredModels);
+    const models = normalizeModelIds([configured, ...discoveredModels]);
+
     return {
       provider: 'local',
       configured_model: configured,
+      recommended_model: recommendedModel,
       source: 'remote',
       models
     };
@@ -198,6 +234,7 @@ async function fetchLocalModels(env: AppEnv): Promise<ProviderModelCatalogEntry>
     return {
       provider: 'local',
       configured_model: configured,
+      recommended_model: configured,
       source: 'configured',
       models: [configured],
       error: message

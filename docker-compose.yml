@@ -54,7 +54,7 @@ services:
       dockerfile: Dockerfile
     container_name: jarvis-web
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://backend:4000
+      NEXT_PUBLIC_BACKEND_BASE_URL: http://backend:4000
     ports:
       - '3000:3000'
     depends_on:

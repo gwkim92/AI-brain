@@ -1194,9 +1194,82 @@ components:
           type: integer
           minimum: 1
 
+    MissionContractConstraintsInput:
+      type: object
+      properties:
+        max_cost_usd:
+          type: number
+          minimum: 0
+          maximum: 1000000
+        deadline_at:
+          type: string
+          format: date-time
+        allowed_tools:
+          type: array
+          maxItems: 100
+          items:
+            type: string
+            minLength: 1
+            maxLength: 120
+        max_retries_per_step:
+          type: integer
+          minimum: 0
+          maximum: 10
+
+    MissionApprovalPolicyInput:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [auto, required_for_high_risk, required_for_all]
+          default: required_for_high_risk
+        approver_roles:
+          type: array
+          maxItems: 2
+          items:
+            type: string
+            enum: [operator, admin]
+
+    MissionContractConstraints:
+      type: object
+      properties:
+        maxCostUsd:
+          type: number
+        deadlineAt:
+          type: string
+          format: date-time
+        allowedTools:
+          type: array
+          items:
+            type: string
+        maxRetriesPerStep:
+          type: integer
+
+    MissionApprovalPolicy:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [auto, required_for_high_risk, required_for_all]
+        approverRoles:
+          type: array
+          items:
+            type: string
+            enum: [operator, admin]
+
+    MissionContract:
+      type: object
+      required: [constraints, approvalPolicy]
+      properties:
+        constraints:
+          $ref: '#/components/schemas/MissionContractConstraints'
+        approvalPolicy:
+          $ref: '#/components/schemas/MissionApprovalPolicy'
+
     Mission:
       type: object
-      required: [id, userId, workspaceId, title, objective, domain, status, steps, createdAt, updatedAt]
+      required: [id, userId, workspaceId, title, objective, domain, status, missionContract, steps, createdAt, updatedAt]
       properties:
         id:
           type: string
@@ -1218,6 +1291,8 @@ components:
         status:
           type: string
           enum: [draft, planned, running, blocked, completed, failed]
+        missionContract:
+          $ref: '#/components/schemas/MissionContract'
         steps:
           type: array
           items:
@@ -1248,6 +1323,10 @@ components:
         workspace_id:
           type: string
           format: uuid
+        constraints:
+          $ref: '#/components/schemas/MissionContractConstraintsInput'
+        approval_policy:
+          $ref: '#/components/schemas/MissionApprovalPolicyInput'
         steps:
           type: array
           maxItems: 40
@@ -1295,6 +1374,10 @@ components:
           type: string
           minLength: 1
           maxLength: 4000
+        constraints:
+          $ref: '#/components/schemas/MissionContractConstraintsInput'
+        approval_policy:
+          $ref: '#/components/schemas/MissionApprovalPolicyInput'
         step_statuses:
           type: array
           maxItems: 100
@@ -1304,6 +1387,8 @@ components:
         - required: [status]
         - required: [title]
         - required: [objective]
+        - required: [constraints]
+        - required: [approval_policy]
         - required: [step_statuses]
 
     CouncilRunCreateRequest:

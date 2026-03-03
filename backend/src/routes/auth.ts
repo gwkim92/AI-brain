@@ -18,6 +18,15 @@ const AuthLoginSchema = z.object({
 export async function authRoutes(app: FastifyInstance, ctx: RouteContext) {
   const { store, env } = ctx;
   const sessionTtlMs = env.AUTH_SESSION_TTL_HOURS * 60 * 60 * 1000;
+  const authTokenConfigured = Boolean(env.AUTH_TOKEN?.trim());
+
+  app.get('/api/v1/auth/config', async (request, reply) => {
+    return sendSuccess(reply, request, 200, {
+      auth_required: env.AUTH_REQUIRED,
+      auth_allow_signup: env.AUTH_ALLOW_SIGNUP,
+      auth_token_configured: authTokenConfigured
+    });
+  });
 
   app.post('/api/v1/auth/signup', async (request, reply) => {
     if (!env.AUTH_ALLOW_SIGNUP) {

@@ -7,7 +7,8 @@ import { applySseCorsHeaders } from './types';
 const DashboardOverviewQuerySchema = z.object({
   task_limit: z.coerce.number().int().min(20).max(200).default(120),
   pending_approval_limit: z.coerce.number().int().min(1).max(100).default(30),
-  running_task_limit: z.coerce.number().int().min(1).max(100).default(40)
+  running_task_limit: z.coerce.number().int().min(1).max(100).default(40),
+  task_scope: z.enum(['mine', 'all']).default('mine')
 });
 
 const DashboardEventsQuerySchema = DashboardOverviewQuerySchema.extend({
@@ -21,6 +22,9 @@ export async function dashboardRoutes(app: FastifyInstance, ctx: RouteContext) {
     if (!parsed.success) {
       return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid query', parsed.error.flatten());
     }
+    if (parsed.data.task_scope === 'all' && ctx.resolveRequestRole(request) !== 'admin') {
+      return sendError(reply, request, 403, 'FORBIDDEN', 'scope=all requires admin role');
+    }
 
     const snapshot = await ctx.buildDashboardOverviewData(request, parsed.data);
     return sendSuccess(reply, request, 200, snapshot);
@@ -30,6 +34,9 @@ export async function dashboardRoutes(app: FastifyInstance, ctx: RouteContext) {
     const parsed = DashboardEventsQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid query', parsed.error.flatten());
+    }
+    if (parsed.data.task_scope === 'all' && ctx.resolveRequestRole(request) !== 'admin') {
+      return sendError(reply, request, 403, 'FORBIDDEN', 'scope=all requires admin role');
     }
 
     applySseCorsHeaders(request, reply, ctx.env);
