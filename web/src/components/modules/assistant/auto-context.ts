@@ -145,8 +145,10 @@ export function toAutoMissionEventSummary(record: AssistantContextEventRecord): 
         const provider = typeof data.provider === "string" ? data.provider : "unknown";
         const model = typeof data.model === "string" ? data.model : "default";
         const usedFallback = data.used_fallback === true;
-        const degraded = data.quality_guard_triggered === true;
-        const prefix = degraded ? "completed(degraded)" : "completed";
+        const gateResult = typeof data.quality_gate_result === "string" ? data.quality_gate_result : null;
+        const degraded = data.quality_guard_triggered === true || gateResult === "hard_fail";
+        const softWarn = gateResult === "soft_warn" || data.quality_gate_softened === true;
+        const prefix = degraded ? "completed(degraded)" : softWarn ? "completed(soft_warn)" : "completed";
         return `${prefix} · ${provider}/${model}${usedFallback ? " (fallback)" : ""}`;
     }
     if (record.eventType === "assistant.context.run.failed") {

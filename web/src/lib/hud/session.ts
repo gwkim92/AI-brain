@@ -1,5 +1,6 @@
 const STORAGE_KEY = "hud-sessions";
 const MAX_SESSIONS = 20;
+const SESSION_PROMPT_DEDUPE_WINDOW_MS = 3 * 60 * 1000;
 
 export type HudSessionStatus = "active" | "background";
 export type HudSessionRestoreMode = "full" | "focus_only";
@@ -17,6 +18,7 @@ export type HudSession = {
   intent?: string;
   restoreMode: HudSessionRestoreMode;
   lastWorkspacePreset: string | null;
+  lastDeliveredContextRevision?: Record<string, number>;
   status: HudSessionStatus;
 };
 
@@ -36,10 +38,11 @@ export function loadSessions(): HudSession[] {
       return [];
     }
 
-    return parsed
+    const normalized = parsed
       .map((item) => normalizeSession(item))
       .filter((item): item is HudSession => item !== null)
       .slice(0, MAX_SESSIONS);
+    return dedupeSessions(normalized);
   } catch {
     return [];
   }
@@ -47,7 +50,7 @@ export function loadSessions(): HudSession[] {
 
 export function saveSessions(sessions: HudSession[]): void {
   try {
-    const trimmed = sessions.slice(0, MAX_SESSIONS);
+    const trimmed = dedupeSessions(sessions).slice(0, MAX_SESSIONS);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
   } catch {
     // localStorage may be unavailable
@@ -89,6 +92,7 @@ export function createSession(
     intent: options?.intent?.trim() || undefined,
     restoreMode: options?.restoreMode ?? "full",
     lastWorkspacePreset: workspacePreset,
+    lastDeliveredContextRevision: {},
     status: "active",
   };
 }
@@ -109,6 +113,7 @@ export function updateSession(
       | "intent"
       | "restoreMode"
       | "lastWorkspacePreset"
+      | "lastDeliveredContextRevision"
     >
   >,
 ): HudSession[] {
@@ -131,6 +136,73 @@ function normalizeWidgetList(value: unknown): string[] {
         .filter((item) => item.length > 0)
     )
   );
+}
+
+function dedupeSessions(sessions: HudSession[]): HudSession[] {
+  const seenSessionIds = new Set<string>();
+  const seenTaskIds = new Set<string>();
+  const seenMissionIds = new Set<string>();
+  const seenPromptCreatedAt = new Map<string, number>();
+  let activeSessionConsumed = false;
+  const deduped: HudSession[] = [];
+
+  for (const session of sessions) {
+    const sessionId = session.id.trim();
+    if (!sessionId || seenSessionIds.has(sessionId)) {
+      continue;
+    }
+
+    const taskId = typeof session.taskId === "string" && session.taskId.trim().length > 0 ? session.taskId.trim() : null;
+    if (taskId && seenTaskIds.has(taskId)) {
+      continue;
+    }
+
+    const missionId =
+      typeof session.missionId === "string" && session.missionId.trim().length > 0 ? session.missionId.trim() : null;
+    if (missionId && seenMissionIds.has(missionId)) {
+      continue;
+    }
+
+    const promptKey = session.prompt.replace(/\s+/g, " ").trim().toLowerCase();
+    if (promptKey) {
+      const createdAtMs = Date.parse(session.createdAt);
+      const existingPromptTs = seenPromptCreatedAt.get(promptKey);
+      if (
+        typeof existingPromptTs === "number" &&
+        Number.isFinite(createdAtMs) &&
+        Math.abs(existingPromptTs - createdAtMs) <= SESSION_PROMPT_DEDUPE_WINDOW_MS
+      ) {
+        continue;
+      }
+      if (Number.isFinite(createdAtMs)) {
+        seenPromptCreatedAt.set(promptKey, createdAtMs);
+      }
+    }
+
+    seenSessionIds.add(sessionId);
+    if (taskId) {
+      seenTaskIds.add(taskId);
+    }
+    if (missionId) {
+      seenMissionIds.add(missionId);
+    }
+
+    if (session.status === "active") {
+      if (activeSessionConsumed) {
+        deduped.push({
+          ...session,
+          status: "background",
+        });
+      } else {
+        deduped.push(session);
+        activeSessionConsumed = true;
+      }
+    } else {
+      deduped.push(session);
+    }
+  }
+
+  return deduped.slice(0, MAX_SESSIONS);
 }
 
 function normalizeSession(value: unknown): HudSession | null {
@@ -159,6 +231,15 @@ function normalizeSession(value: unknown): HudSession | null {
     typeof row.lastWorkspacePreset === "string" && row.lastWorkspacePreset.trim().length > 0
       ? row.lastWorkspacePreset.trim()
       : workspacePreset;
+  const lastDeliveredContextRevision =
+    row.lastDeliveredContextRevision && typeof row.lastDeliveredContextRevision === "object"
+      ? Object.fromEntries(
+          Object.entries(row.lastDeliveredContextRevision as Record<string, unknown>).filter(
+            (entry): entry is [string, number] =>
+              typeof entry[0] === "string" && Number.isFinite(entry[1])
+          )
+        )
+      : {};
 
   const resolvedActive = activeWidgets.length > 0 ? activeWidgets : focusedWidget ? [focusedWidget] : ["inbox"];
   if (mountedWidgets.length === 0) {
@@ -187,6 +268,7 @@ function normalizeSession(value: unknown): HudSession | null {
     intent: typeof row.intent === "string" && row.intent.trim().length > 0 ? row.intent.trim() : undefined,
     restoreMode: normalizedRestoreMode,
     lastWorkspacePreset,
+    lastDeliveredContextRevision,
     status: normalizedStatus,
   };
 }

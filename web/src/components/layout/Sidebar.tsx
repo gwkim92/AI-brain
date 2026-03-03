@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
     ShieldCheck,
     Brain,
@@ -34,6 +34,7 @@ function SidebarContent() {
     const { activeWidgets, toggleWidget, openWidgets, activeWorkspacePreset } = useHUD();
     const role = useCurrentRole();
     const router = useRouter();
+    const pathname = usePathname();
     const [loggingOut, setLoggingOut] = useState(false);
     const [compact, setCompact] = useState(false);
 
@@ -177,7 +178,17 @@ function SidebarContent() {
                     title="Home"
                     description="Dashboard & quick command."
                     active={activeWidgets.includes("inbox")}
-                    onClick={() => toggleWidget("inbox")}
+                    onClick={() => {
+                        openWidgets(["inbox"], {
+                            focus: "inbox",
+                            replace: true,
+                            activate: "focus_only",
+                            workspacePreset: null,
+                        });
+                        if (pathname !== "/") {
+                            router.push("/");
+                        }
+                    }}
                 />
                 <NavItem
                     compact={compact}

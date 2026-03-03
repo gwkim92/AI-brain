@@ -23,12 +23,16 @@ import {
 import { ApiRequestError } from "@/lib/api/client";
 import {
     buildProviderUnavailableMessage,
+    hasOnlySoftWarnReasons,
     isBlockedQualityOutput,
     isQualityGuardFallbackOutput,
+    isSoftWarnQualityOutput,
     mapBlockedReasonLabel,
-    parseBlockedReasons,
+    parseQualityReasonCodes,
+    resolveQualityGateResult,
     resolveProviderUnavailableReason,
     type ProviderUnavailableReason,
+    type QualityGateResult,
 } from "@/components/modules/assistant/message-quality";
 import {
     mergeAutoContexts,
@@ -51,6 +55,8 @@ import type {
 } from "@/lib/api/types";
 import { subscribeMissionIntake, subscribeMissionIntakeTaskLink, type MissionIntakePayload } from "@/lib/hud/mission-intake";
 import { useHUD } from "@/components/providers/HUDProvider";
+import { emitRuntimeEvent } from "@/lib/runtime-events";
+import { isFeatureEnabled } from "@/lib/feature-flags";
 
 type MessageRoute = "system" | "manual" | "auto_context";
 
@@ -64,8 +70,21 @@ type ChatMessage = {
     grounding?: {
         policy: "static" | "dynamic_factual" | "high_risk_factual";
         required: boolean;
-        status: "not_required" | "provider_only" | "required_unavailable" | "blocked_due_to_quality_gate";
+        status:
+            | "not_required"
+            | "provider_only"
+            | "required_unavailable"
+            | "blocked_due_to_quality_gate"
+            | "soft_warn"
+            | "served_with_limits";
         reasons: string[];
+        quality?: {
+            gateResult: QualityGateResult;
+            reasons: string[];
+            softened: boolean;
+            languageAligned: boolean;
+            claimCitationCoverage: number;
+        };
         sources?: Array<{
             url: string;
             title: string;
@@ -82,6 +101,10 @@ type ChatMessage = {
         }>;
     };
 };
+
+const ASSISTANT_SESSION_MESSAGES_STORAGE_KEY = "assistant-session-messages-v1";
+const MAX_ASSISTANT_SESSION_MESSAGES = 120;
+const ASSISTANT_SYSTEM_GREETING = "Connected to backend. Ask anything and I will route this to available providers.";
 
 type ProviderSelection = "auto" | "openai" | "gemini" | "anthropic" | "local";
 
@@ -117,6 +140,13 @@ type AutoMissionFeedbackDraft = {
 type AutoMissionQualityState = {
     degraded: boolean;
     reason?: string;
+    gateResult: QualityGateResult;
+    reasons: string[];
+};
+
+type AutoContextSyncRetryOptions = {
+    attempts?: number;
+    baseDelayMs?: number;
 };
 
 function formatAssistantFailureMessage(
@@ -149,8 +179,12 @@ function buildGroundingSummary(grounding?: ChatMessage["grounding"]): string | n
         return "Grounding: optional";
     }
     const reasons = grounding.reasons.length > 0 ? grounding.reasons.join(", ") : "policy_required";
+    const qualityGateResult = grounding.quality?.gateResult;
     if (grounding.status === "blocked_due_to_quality_gate") {
         return `Grounding: blocked by quality gate · ${reasons}`;
+    }
+    if (qualityGateResult === "soft_warn" || grounding.status === "soft_warn" || grounding.status === "served_with_limits") {
+        return `Grounding: soft warning · ${reasons}`;
     }
     return `Grounding: ${grounding.policy} (${grounding.status}) · ${reasons}`;
 }
@@ -170,16 +204,141 @@ function hashText(value: string): string {
     return hash.toString(16);
 }
 
+function buildSystemMessage(): ChatMessage {
+    return {
+        role: "assistant",
+        content: ASSISTANT_SYSTEM_GREETING,
+        route: "system",
+    };
+}
+
+function defaultMessages(): ChatMessage[] {
+    return [buildSystemMessage()];
+}
+
+function normalizeStoredChatMessages(value: unknown): ChatMessage[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    const rows: ChatMessage[] = [];
+    for (const item of value) {
+        if (!item || typeof item !== "object") {
+            continue;
+        }
+        const row = item as Record<string, unknown>;
+        const role = row.role;
+        const content = row.content;
+        if ((role !== "user" && role !== "assistant") || typeof content !== "string") {
+            continue;
+        }
+        const route =
+            row.route === "system" || row.route === "manual" || row.route === "auto_context"
+                ? row.route
+                : undefined;
+        rows.push({
+            role,
+            content,
+            status: typeof row.status === "string" ? row.status : undefined,
+            contextId: typeof row.contextId === "string" ? row.contextId : undefined,
+            route,
+            promptRef: typeof row.promptRef === "string" ? row.promptRef : undefined,
+            grounding:
+                row.grounding && typeof row.grounding === "object"
+                    ? (row.grounding as ChatMessage["grounding"])
+                    : undefined,
+        });
+    }
+    return rows;
+}
+
+function pruneSessionMessages(rows: ChatMessage[]): ChatMessage[] {
+    if (rows.length <= MAX_ASSISTANT_SESSION_MESSAGES) {
+        return rows;
+    }
+    return rows.slice(-MAX_ASSISTANT_SESSION_MESSAGES);
+}
+
+function loadStoredSessionMessages(): Record<string, ChatMessage[]> {
+    if (typeof window === "undefined") {
+        return {};
+    }
+    try {
+        const raw = window.localStorage.getItem(ASSISTANT_SESSION_MESSAGES_STORAGE_KEY);
+        if (!raw) {
+            return {};
+        }
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object") {
+            return {};
+        }
+        const next: Record<string, ChatMessage[]> = {};
+        for (const [sessionId, value] of Object.entries(parsed as Record<string, unknown>)) {
+            if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
+                continue;
+            }
+            const normalized = normalizeStoredChatMessages(value);
+            if (normalized.length > 0) {
+                next[sessionId] = pruneSessionMessages(normalized);
+            }
+        }
+        return next;
+    } catch {
+        return {};
+    }
+}
+
+function persistStoredSessionMessages(store: Record<string, ChatMessage[]>): void {
+    if (typeof window === "undefined") {
+        return;
+    }
+    try {
+        window.localStorage.setItem(ASSISTANT_SESSION_MESSAGES_STORAGE_KEY, JSON.stringify(store));
+    } catch {
+        // localStorage may be unavailable.
+    }
+}
+
+function resolveDeliveryRevision(context: Pick<AutoMissionContext, "revision" | "status" | "output">): number {
+    if (typeof context.revision === "number" && Number.isFinite(context.revision)) {
+        return context.revision;
+    }
+    const fallback = Number.parseInt(hashText(`${context.status}:${context.output}`), 16);
+    if (Number.isFinite(fallback)) {
+        return fallback;
+    }
+    return 0;
+}
+
+function toGroundingStatus(
+    value: unknown,
+    fallback: NonNullable<ChatMessage["grounding"]>["status"] = "provider_only"
+): NonNullable<ChatMessage["grounding"]>["status"] {
+    if (
+        value === "not_required" ||
+        value === "provider_only" ||
+        value === "required_unavailable" ||
+        value === "blocked_due_to_quality_gate" ||
+        value === "soft_warn" ||
+        value === "served_with_limits"
+    ) {
+        return value;
+    }
+    return fallback;
+}
+
+function toStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return value
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
+        .filter((item) => item.length > 0);
+}
+
 export function AssistantModule() {
-    const { sessions, activeSessionId } = useHUD();
+    const { sessions, activeSessionId, markSessionContextDelivered } = useHUD();
     const [inputVal, setInputVal] = useState("");
-    const [messages, setMessages] = useState<ChatMessage[]>([
-        {
-            role: "assistant",
-            content: "Connected to backend. Ask anything and I will route this to available providers.",
-            route: "system",
-        },
-    ]);
+    const [messages, setMessages] = useState<ChatMessage[]>(() => defaultMessages());
     const [runRecords, setRunRecords] = useState<RunRecord[]>([]);
     const [activeRunIndex, setActiveRunIndex] = useState(0);
     const [providers, setProviders] = useState<ProviderAvailability[]>([]);
@@ -203,17 +362,52 @@ export function AssistantModule() {
     const [autoContextFeedback, setAutoContextFeedback] = useState<Record<string, AutoMissionFeedbackDraft>>({});
     const autoContextsRef = useRef<AutoMissionContext[]>([]);
     const autoContextStartedThisSessionRef = useRef<Set<string>>(new Set());
-    const autoContextChatDeliveryRef = useRef<Set<string>>(new Set());
+    const autoContextDeliveredRevisionRef = useRef<Map<string, number>>(new Map());
+    const sessionMessageStoreRef = useRef<Record<string, ChatMessage[]>>({});
+    const activeMessageSessionRef = useRef<string | null>(null);
+    const pendingSessionPersistSkipRef = useRef<string | null>(null);
     const contextStreamRef = useRef<Map<string, AssistantContextEventsStream>>(new Map());
     const loadedContextEventsRef = useRef<Set<string>>(new Set());
     const loadedGroundingEvidenceRef = useRef<Set<string>>(new Set());
     const pendingTaskLinksRef = useRef<Map<string, string>>(new Map());
     const queuedRecoveryStartedRef = useRef(false);
     const queuedRecoveryInFlightRef = useRef(false);
+    const exactlyOnceDeliveryEnabled = useMemo(
+        () => isFeatureEnabled("assistant.exactly_once_delivery", true),
+        []
+    );
+    const qualitySoftGateEnabled = useMemo(
+        () => isFeatureEnabled("assistant.quality_soft_gate_v2", true),
+        []
+    );
+    const uiSoftWarnEnabled = useMemo(
+        () => isFeatureEnabled("assistant.ui_soft_warn_render", true),
+        []
+    );
 
     useEffect(() => {
         autoContextsRef.current = autoContexts;
     }, [autoContexts]);
+
+    useEffect(() => {
+        sessionMessageStoreRef.current = loadStoredSessionMessages();
+    }, []);
+
+    useEffect(() => {
+        if (!exactlyOnceDeliveryEnabled) {
+            return;
+        }
+        for (const session of sessions) {
+            const delivered = session.lastDeliveredContextRevision ?? {};
+            for (const [contextId, revision] of Object.entries(delivered)) {
+                const existing = autoContextDeliveredRevisionRef.current.get(contextId);
+                if (typeof existing === "number" && existing >= revision) {
+                    continue;
+                }
+                autoContextDeliveredRevisionRef.current.set(contextId, revision);
+            }
+        }
+    }, [exactlyOnceDeliveryEnabled, sessions]);
 
     useEffect(() => {
         const loadProviders = async () => {
@@ -240,10 +434,30 @@ export function AssistantModule() {
             if (restored.length > 0) {
                 setAutoContexts((prev) => mergeAutoContexts(prev, restored));
             }
+            return true;
         } catch {
-            return;
+            return false;
         }
     }, []);
+
+    const syncAutoContextsWithRetry = useCallback(async (options?: AutoContextSyncRetryOptions) => {
+        const attempts = Math.max(1, options?.attempts ?? 4);
+        const baseDelayMs = Math.max(80, options?.baseDelayMs ?? 220);
+        for (let attempt = 0; attempt < attempts; attempt += 1) {
+            const ok = await syncAutoContexts();
+            if (ok) {
+                return true;
+            }
+            if (attempt + 1 >= attempts) {
+                break;
+            }
+            const delayMs = baseDelayMs * Math.pow(2, attempt);
+            await new Promise((resolve) => {
+                window.setTimeout(resolve, delayMs);
+            });
+        }
+        return false;
+    }, [syncAutoContexts]);
 
     const recoverQueuedQuickCommandTasks = useCallback(async () => {
         if (queuedRecoveryInFlightRef.current) {
@@ -317,11 +531,7 @@ export function AssistantModule() {
                 }
                 knownContextIds.add(missionIntakeId);
                 autoContextStartedThisSessionRef.current.add(missionIntakeId);
-                for (const key of Array.from(autoContextChatDeliveryRef.current.values())) {
-                    if (key.startsWith(`${missionIntakeId}:`)) {
-                        autoContextChatDeliveryRef.current.delete(key);
-                    }
-                }
+                autoContextDeliveredRevisionRef.current.delete(missionIntakeId);
 
                 const prompt =
                     typeof task.input?.prompt === "string" && task.input.prompt.trim().length > 0
@@ -370,16 +580,17 @@ export function AssistantModule() {
                 setAutoContexts((prev) => mergeAutoContexts(prev, [toAutoContextFromServer(context)]));
                 await runAssistantContext(context.id, {
                     task_type: task.mode,
+                    client_run_nonce: `${missionIntakeId}:recover`,
                 });
             }
 
-            void syncAutoContexts();
+            void syncAutoContextsWithRetry();
         } catch {
             return;
         } finally {
             queuedRecoveryInFlightRef.current = false;
         }
-    }, [syncAutoContexts]);
+    }, [syncAutoContextsWithRetry]);
 
     const appendAutoContextEvents = useCallback((clientContextId: string, incoming: AutoMissionEvent[]) => {
         if (incoming.length === 0) {
@@ -752,11 +963,7 @@ export function AssistantModule() {
             return;
         }
         autoContextStartedThisSessionRef.current.add(payload.id);
-        for (const key of Array.from(autoContextChatDeliveryRef.current.values())) {
-            if (key.startsWith(`${payload.id}:`)) {
-                autoContextChatDeliveryRef.current.delete(key);
-            }
-        }
+        autoContextDeliveredRevisionRef.current.delete(payload.id);
 
         let createdContext: AssistantContextRecord | null = null;
         let serverContextId: string | undefined;
@@ -814,11 +1021,16 @@ export function AssistantModule() {
 
         try {
             const requestPayload = buildRequestPayload(payload.prompt);
+            const runNonce =
+                typeof payload.requestNonce === "string" && payload.requestNonce.trim().length > 0
+                    ? payload.requestNonce.trim()
+                    : `${payload.id}:run`;
             const accepted = await runAssistantContext(serverContextId, {
                 provider: requestPayload.provider,
                 strict_provider: requestPayload.strict_provider,
                 model: requestPayload.model,
                 task_type: payload.taskMode,
+                client_run_nonce: runNonce,
             });
             setAutoContexts((prev) => mergeAutoContexts(prev, [toAutoContextFromServer(accepted)]));
         } catch (err) {
@@ -837,9 +1049,9 @@ export function AssistantModule() {
                         : item
                 )
             );
-            void syncAutoContexts();
+            void syncAutoContextsWithRetry();
         }
-    }, [buildRequestPayload, syncAutoContexts]);
+    }, [buildRequestPayload, syncAutoContextsWithRetry]);
 
     const executePrompt = useCallback(async (prompt: string, options?: { auto?: boolean; autoStatus?: string }) => {
         const normalizedPrompt = prompt.trim();
@@ -867,6 +1079,41 @@ export function AssistantModule() {
         try {
             if (runCount <= 1) {
                 const result = await aiRespond(requestPayload);
+                const resolvedGateResult = resolveQualityGateResult({
+                    content: result.output,
+                    groundingStatus: result.grounding?.status,
+                    qualityGateResult: result.grounding?.quality?.gateResult ?? result.grounding?.quality_gate_result,
+                });
+                const qualityReasonCodes = parseQualityReasonCodes(
+                    result.output,
+                    result.grounding?.quality?.reasons ?? result.grounding?.quality_gate_code
+                );
+                const softenedByQualityPolicy =
+                    qualitySoftGateEnabled &&
+                    (result.grounding?.quality?.softened ?? resolvedGateResult === "soft_warn");
+                const normalizedGrounding = result.grounding
+                    ? {
+                        policy: result.grounding.policy,
+                        required: result.grounding.required,
+                        status: result.grounding.status,
+                        reasons: result.grounding.reasons ?? [],
+                        quality: {
+                            gateResult: resolvedGateResult,
+                            reasons: qualityReasonCodes,
+                            softened: softenedByQualityPolicy,
+                            languageAligned:
+                                result.grounding.quality?.languageAligned ??
+                                !qualityReasonCodes.includes("language_mismatch"),
+                            claimCitationCoverage:
+                                result.grounding.quality?.claimCitationCoverage ?? 0,
+                        },
+                        sources: result.grounding.sources,
+                        claims: result.grounding.claims?.map((claim) => ({
+                            claimText: claim.claimText,
+                            sourceUrls: claim.sourceUrls,
+                        })),
+                      }
+                    : undefined;
                 const completedRun: RunRecord = {
                     ...pendingRuns[0],
                     status: "success",
@@ -889,21 +1136,28 @@ export function AssistantModule() {
                         status: `${result.provider}/${result.model}${result.used_fallback ? " (fallback)" : ""}`,
                         route: "manual",
                         promptRef: normalizedPrompt,
-                        grounding: result.grounding
-                            ? {
-                                policy: result.grounding.policy,
-                                required: result.grounding.required,
-                                status: result.grounding.status,
-                                reasons: result.grounding.reasons ?? [],
-                                sources: result.grounding.sources,
-                                claims: result.grounding.claims?.map((claim) => ({
-                                    claimText: claim.claimText,
-                                    sourceUrls: claim.sourceUrls,
-                                })),
-                              }
-                            : undefined,
+                        grounding: normalizedGrounding,
                     },
                 ]);
+                emitRuntimeEvent("assistant_quality_evaluated", {
+                    route: "manual",
+                    gateResult: resolvedGateResult,
+                    reasons: qualityReasonCodes,
+                    promptHash: hashText(normalizedPrompt),
+                });
+                if (resolvedGateResult === "soft_warn") {
+                    emitRuntimeEvent("assistant_quality_softened", {
+                        route: "manual",
+                        reasons: qualityReasonCodes,
+                        softened: softenedByQualityPolicy,
+                    });
+                }
+                emitRuntimeEvent("assistant_delivery_rendered", {
+                    route: "manual",
+                    gateResult: resolvedGateResult,
+                    softWarnRendered: uiSoftWarnEnabled && resolvedGateResult === "soft_warn",
+                    promptHash: hashText(normalizedPrompt),
+                });
                 return;
             }
 
@@ -966,6 +1220,12 @@ export function AssistantModule() {
                     promptRef: normalizedPrompt,
                 },
             ]);
+            emitRuntimeEvent("assistant_delivery_rendered", {
+                route: "manual",
+                gateResult: "pass",
+                parallelRuns: runCount,
+                promptHash: hashText(normalizedPrompt),
+            });
         } catch (err) {
             const failure = formatAssistantFailureMessage(err, "요청을 처리하지 못했습니다. 잠시 후 다시 시도하세요.");
             const message = failure.message;
@@ -998,7 +1258,17 @@ export function AssistantModule() {
         } finally {
             setIsRunning(false);
         }
-    }, [buildRequestPayload, buildSynthesisMessage, createPendingRuns, isRunning, modelOverride, parallelRuns, toRunTimeline]);
+    }, [
+        buildRequestPayload,
+        buildSynthesisMessage,
+        createPendingRuns,
+        isRunning,
+        modelOverride,
+        parallelRuns,
+        qualitySoftGateEnabled,
+        toRunTimeline,
+        uiSoftWarnEnabled,
+    ]);
 
     const sendMessage = async () => {
         const prompt = inputVal.trim();
@@ -1016,12 +1286,8 @@ export function AssistantModule() {
 
             if (payload.prestarted) {
                 autoContextStartedThisSessionRef.current.add(payload.id);
-                for (const key of Array.from(autoContextChatDeliveryRef.current.values())) {
-                    if (key.startsWith(`${payload.id}:`)) {
-                        autoContextChatDeliveryRef.current.delete(key);
-                    }
-                }
-                void syncAutoContexts();
+                autoContextDeliveredRevisionRef.current.delete(payload.id);
+                void syncAutoContextsWithRetry();
                 return;
             }
 
@@ -1043,7 +1309,7 @@ export function AssistantModule() {
             unsubscribeMissionIntake();
             unsubscribeMissionTaskLink();
         };
-    }, [startAutoMissionContext, syncAutoContexts]);
+    }, [startAutoMissionContext, syncAutoContextsWithRetry]);
 
     useEffect(() => {
         const runningServerContextIds = new Set<string>();
@@ -1208,7 +1474,7 @@ export function AssistantModule() {
     const resolveAutoContextQualityState = useCallback(
         (context: AutoMissionContext): AutoMissionQualityState => {
             if (context.status !== "success") {
-                return { degraded: false };
+                return { degraded: false, gateResult: "pass", reasons: [] };
             }
 
             const rows = autoContextEvents[context.id] ?? [];
@@ -1217,14 +1483,32 @@ export function AssistantModule() {
                 if (!event || event.kind !== "completed") {
                     continue;
                 }
-                const degraded = event.data?.quality_guard_triggered === true;
-                if (!degraded) {
-                    return { degraded: false };
-                }
-                const reason = typeof event.data?.quality_guard_reason === "string" ? event.data.quality_guard_reason : undefined;
+                const data = event.data ?? {};
+                const qualityReasons = parseQualityReasonCodes(
+                    context.output,
+                    toStringArray(data.quality_gate_code)
+                );
+                const gateResult = resolveQualityGateResult({
+                    content: context.output,
+                    groundingStatus: typeof data.grounding_status === "string" ? data.grounding_status : undefined,
+                    qualityGateResult:
+                        typeof data.quality_gate_result === "string"
+                            ? data.quality_gate_result
+                            : data.quality_guard_triggered === true
+                                ? "hard_fail"
+                                : data.quality_gate_softened === true
+                                    ? "soft_warn"
+                                    : undefined,
+                });
+                const reason =
+                    typeof data.quality_guard_reason === "string"
+                        ? data.quality_guard_reason
+                        : qualityReasons[0];
                 return {
-                    degraded: true,
+                    degraded: gateResult !== "pass",
                     reason,
+                    gateResult,
+                    reasons: qualityReasons,
                 };
             }
 
@@ -1232,131 +1516,352 @@ export function AssistantModule() {
                 return {
                     degraded: true,
                     reason: "quality_guard_output",
+                    gateResult: "hard_fail",
+                    reasons: parseQualityReasonCodes(context.output),
                 };
             }
 
-            return { degraded: false };
+            return {
+                degraded: false,
+                gateResult: "pass",
+                reasons: [],
+            };
         },
         [autoContextEvents]
     );
 
-    useEffect(() => {
-        if (!activeSessionId) {
-            return;
-        }
+    const resolveAutoContextGrounding = useCallback(
+        (context: AutoMissionContext): ChatMessage["grounding"] | undefined => {
+            const rows = autoContextEvents[context.id] ?? [];
+            const qualityState = resolveAutoContextQualityState(context);
+            for (let index = rows.length - 1; index >= 0; index -= 1) {
+                const event = rows[index];
+                if (!event || event.kind !== "completed") {
+                    continue;
+                }
+                const data = event.data ?? {};
+                const qualityReasons = parseQualityReasonCodes(
+                    context.output,
+                    toStringArray(data.quality_gate_code)
+                );
+                const gateResult = resolveQualityGateResult({
+                    content: context.output,
+                    groundingStatus: typeof data.grounding_status === "string" ? data.grounding_status : undefined,
+                    qualityGateResult:
+                        typeof data.quality_gate_result === "string"
+                            ? data.quality_gate_result
+                            : qualityState.gateResult,
+                });
+                const reasons = toStringArray(data.grounding_reasons);
+                const required = data.grounding_required === true;
+                const statusFallback =
+                    gateResult === "hard_fail"
+                        ? "blocked_due_to_quality_gate"
+                        : gateResult === "soft_warn"
+                            ? "soft_warn"
+                            : required
+                                ? "provider_only"
+                                : "not_required";
 
-        const activeSession = sessions.find((session) => session.id === activeSessionId);
-        if (!activeSession) {
-            return;
-        }
-
-        const candidateContexts = autoContexts.filter((context) => {
-            if (context.status === "running") {
-                return false;
-            }
-            if (context.id === activeSession.id) {
-                return true;
-            }
-            if (activeSession.taskId && context.taskId === activeSession.taskId) {
-                return true;
-            }
-            return false;
-        });
-
-        if (candidateContexts.length === 0) {
-            return;
-        }
-
-        const sortedCandidates = [...candidateContexts].sort((left, right) => {
-            const leftTime = Date.parse(left.completedAt ?? left.startedAt);
-            const rightTime = Date.parse(right.completedAt ?? right.startedAt);
-            const normalizedLeftTime = Number.isNaN(leftTime) ? 0 : leftTime;
-            const normalizedRightTime = Number.isNaN(rightTime) ? 0 : rightTime;
-            return normalizedRightTime - normalizedLeftTime;
-        });
-        const targetContext = sortedCandidates[0];
-        if (!targetContext) {
-            return;
-        }
-
-        autoContextStartedThisSessionRef.current.add(targetContext.id);
-
-        const deliveryKey = `${targetContext.id}:${targetContext.status}:${hashText(targetContext.output)}`;
-        if (autoContextChatDeliveryRef.current.has(deliveryKey)) {
-            return;
-        }
-        autoContextChatDeliveryRef.current.add(deliveryKey);
-
-        const qualityState = resolveAutoContextQualityState(targetContext);
-        const providerLabel =
-            targetContext.servedProvider && targetContext.servedModel
-                ? `${targetContext.servedProvider}/${targetContext.servedModel}${targetContext.usedFallback ? " (fallback)" : ""}`
-                : null;
-
-        const statusLabel =
-            targetContext.status === "error"
-                ? "FAILED"
-                : qualityState.degraded
-                    ? `DEGRADED${providerLabel ? ` · ${providerLabel}` : ""}`
-                    : providerLabel ?? "DONE";
-
-        setMessages((prev) => [
-            ...prev,
-            {
-                role: "assistant",
-                content: targetContext.output,
-                status: statusLabel,
-                contextId: targetContext.id,
-                route: "auto_context",
-                promptRef: targetContext.prompt,
-            },
-        ]);
-    }, [activeSessionId, autoContexts, resolveAutoContextQualityState, sessions]);
-
-    useEffect(() => {
-        const nextMessages: ChatMessage[] = [];
-
-        for (const context of autoContexts) {
-            if (!autoContextStartedThisSessionRef.current.has(context.id)) {
-                continue;
-            }
-            if (context.status === "running") {
-                continue;
+                return {
+                    policy:
+                        data.grounding_policy === "static" ||
+                        data.grounding_policy === "dynamic_factual" ||
+                        data.grounding_policy === "high_risk_factual"
+                            ? data.grounding_policy
+                            : "dynamic_factual",
+                    required,
+                    status: toGroundingStatus(data.grounding_status, statusFallback),
+                    reasons: reasons.length > 0 ? reasons : qualityReasons,
+                    quality: {
+                        gateResult,
+                        reasons: qualityReasons,
+                        softened: data.quality_gate_softened === true || gateResult === "soft_warn",
+                        languageAligned: !qualityReasons.includes("language_mismatch"),
+                        claimCitationCoverage:
+                            typeof data.claim_citation_coverage === "number"
+                                ? data.claim_citation_coverage
+                                : 0,
+                    },
+                };
             }
 
-            const deliveryKey = `${context.id}:${context.status}:${hashText(context.output)}`;
-            if (autoContextChatDeliveryRef.current.has(deliveryKey)) {
-                continue;
+            if (context.status === "success" && qualityState.gateResult !== "pass") {
+                return {
+                    policy: "dynamic_factual",
+                    required: true,
+                    status: qualityState.gateResult === "hard_fail" ? "blocked_due_to_quality_gate" : "soft_warn",
+                    reasons: qualityState.reasons,
+                    quality: {
+                        gateResult: qualityState.gateResult,
+                        reasons: qualityState.reasons,
+                        softened: qualityState.gateResult === "soft_warn",
+                        languageAligned: !qualityState.reasons.includes("language_mismatch"),
+                        claimCitationCoverage: 0,
+                    },
+                };
             }
-            autoContextChatDeliveryRef.current.add(deliveryKey);
 
+            return undefined;
+        },
+        [autoContextEvents, resolveAutoContextQualityState]
+    );
+
+    const buildAutoContextStatusLabel = useCallback(
+        (context: AutoMissionContext): string => {
             const qualityState = resolveAutoContextQualityState(context);
             const providerLabel =
                 context.servedProvider && context.servedModel
                     ? `${context.servedProvider}/${context.servedModel}${context.usedFallback ? " (fallback)" : ""}`
                     : null;
+            if (context.status === "error") {
+                return "FAILED";
+            }
+            if (qualityState.gateResult === "hard_fail") {
+                return `DEGRADED${providerLabel ? ` · ${providerLabel}` : ""}`;
+            }
+            if (qualityState.gateResult === "soft_warn") {
+                return `WARN${providerLabel ? ` · ${providerLabel}` : ""}`;
+            }
+            return providerLabel ?? "DONE";
+        },
+        [resolveAutoContextQualityState]
+    );
 
-            const statusLabel =
-                context.status === "error"
-                    ? "FAILED"
-                    : qualityState.degraded
-                        ? `DEGRADED${providerLabel ? ` · ${providerLabel}` : ""}`
-                        : providerLabel ?? "DONE";
+    useEffect(() => {
+        if (!activeSessionId) {
+            pendingSessionPersistSkipRef.current = null;
+            activeMessageSessionRef.current = null;
+            setMessages(defaultMessages());
+            return;
+        }
 
-            nextMessages.push({
+        const cached = sessionMessageStoreRef.current[activeSessionId];
+        const hasMeaningfulCachedMessage =
+            Array.isArray(cached) &&
+            cached.some(
+                (row) =>
+                    row.route !== "system" ||
+                    row.role === "user" ||
+                    row.content !== ASSISTANT_SYSTEM_GREETING
+            );
+        if (Array.isArray(cached) && cached.length > 0 && hasMeaningfulCachedMessage) {
+            pendingSessionPersistSkipRef.current = activeSessionId;
+            activeMessageSessionRef.current = activeSessionId;
+            setMessages(cached);
+            return;
+        }
+
+        const activeSession = sessions.find((session) => session.id === activeSessionId);
+        if (!activeSession) {
+            const fallbackMessages = defaultMessages();
+            pendingSessionPersistSkipRef.current = activeSessionId;
+            activeMessageSessionRef.current = activeSessionId;
+            setMessages(fallbackMessages);
+            sessionMessageStoreRef.current[activeSessionId] = fallbackMessages;
+            persistStoredSessionMessages(sessionMessageStoreRef.current);
+            return;
+        }
+
+        const candidateContexts = autoContexts
+            .filter((context) => context.status !== "running")
+            .filter((context) => context.id === activeSession.id || (activeSession.taskId && context.taskId === activeSession.taskId))
+            .sort((left, right) => {
+                const leftTime = Date.parse(left.completedAt ?? left.startedAt);
+                const rightTime = Date.parse(right.completedAt ?? right.startedAt);
+                const normalizedLeftTime = Number.isNaN(leftTime) ? 0 : leftTime;
+                const normalizedRightTime = Number.isNaN(rightTime) ? 0 : rightTime;
+                return normalizedRightTime - normalizedLeftTime;
+            });
+
+        const restoredContext = candidateContexts[0];
+        const restoredGrounding = restoredContext ? resolveAutoContextGrounding(restoredContext) : undefined;
+        const fallbackMessages = restoredContext
+            ? [
+                buildSystemMessage(),
+                {
+                    role: "assistant" as const,
+                    content: restoredContext.output,
+                    status: buildAutoContextStatusLabel(restoredContext),
+                    contextId: restoredContext.id,
+                    route: "auto_context" as const,
+                    promptRef: restoredContext.prompt,
+                    grounding: restoredGrounding,
+                },
+              ]
+            : defaultMessages();
+
+        const normalizedFallbackMessages = pruneSessionMessages(fallbackMessages);
+        pendingSessionPersistSkipRef.current = activeSessionId;
+        activeMessageSessionRef.current = activeSessionId;
+        setMessages(normalizedFallbackMessages);
+        sessionMessageStoreRef.current[activeSessionId] = normalizedFallbackMessages;
+        persistStoredSessionMessages(sessionMessageStoreRef.current);
+    }, [activeSessionId, autoContexts, buildAutoContextStatusLabel, resolveAutoContextGrounding, sessions]);
+
+    useEffect(() => {
+        if (!activeSessionId || activeMessageSessionRef.current !== activeSessionId) {
+            return;
+        }
+        if (pendingSessionPersistSkipRef.current === activeSessionId) {
+            pendingSessionPersistSkipRef.current = null;
+            return;
+        }
+        const normalizedMessages = pruneSessionMessages(messages);
+        sessionMessageStoreRef.current[activeSessionId] = normalizedMessages;
+        persistStoredSessionMessages(sessionMessageStoreRef.current);
+    }, [activeSessionId, messages]);
+
+    const appendMessageToSession = useCallback(
+        (sessionId: string | null | undefined, message: ChatMessage) => {
+            const targetSessionId = sessionId ?? activeSessionId;
+            if (!targetSessionId) {
+                setMessages((prev) => pruneSessionMessages([...prev, message]));
+                return;
+            }
+
+            const baseMessages = sessionMessageStoreRef.current[targetSessionId] ?? defaultMessages();
+            const dedupedBase =
+                message.contextId && message.contextId.trim().length > 0
+                    ? baseMessages.filter((row) => row.contextId !== message.contextId)
+                    : baseMessages;
+            const nextMessages = pruneSessionMessages([...dedupedBase, message]);
+            sessionMessageStoreRef.current[targetSessionId] = nextMessages;
+            persistStoredSessionMessages(sessionMessageStoreRef.current);
+
+            if (activeSessionId === targetSessionId) {
+                activeMessageSessionRef.current = targetSessionId;
+                setMessages(nextMessages);
+            }
+        },
+        [activeSessionId]
+    );
+
+    const deliverAutoContextMessage = useCallback(
+        (context: AutoMissionContext, sessionId?: string | null) => {
+            if (context.status === "running") {
+                return;
+            }
+            const grounding = resolveAutoContextGrounding(context);
+            const qualityGateResult = resolveQualityGateResult({
+                content: context.output,
+                groundingStatus: grounding?.status,
+                qualityGateResult: grounding?.quality?.gateResult,
+            });
+            const qualityReasonCodes = parseQualityReasonCodes(context.output, grounding?.quality?.reasons);
+            const revision = resolveDeliveryRevision(context);
+            if (exactlyOnceDeliveryEnabled) {
+                const deliveredRevision = autoContextDeliveredRevisionRef.current.get(context.id);
+                if (typeof deliveredRevision === "number" && revision <= deliveredRevision) {
+                    return;
+                }
+                autoContextDeliveredRevisionRef.current.set(context.id, revision);
+            }
+
+            appendMessageToSession(sessionId, {
                 role: "assistant",
                 content: context.output,
-                status: statusLabel,
+                status: buildAutoContextStatusLabel(context),
                 contextId: context.id,
                 route: "auto_context",
                 promptRef: context.prompt,
+                grounding,
             });
+
+            emitRuntimeEvent("auto_context_delivered", {
+                contextId: context.id,
+                revision,
+                status: context.status,
+                exactlyOnceDeliveryEnabled,
+                sessionId: sessionId ?? null,
+                taskId: context.taskId ?? null,
+                outputHash: hashText(context.output),
+            });
+            emitRuntimeEvent("assistant_quality_evaluated", {
+                route: "auto_context",
+                contextId: context.id,
+                gateResult: qualityGateResult,
+                reasons: qualityReasonCodes,
+            });
+            if (qualityGateResult === "soft_warn") {
+                emitRuntimeEvent("assistant_quality_softened", {
+                    route: "auto_context",
+                    contextId: context.id,
+                    reasons: qualityReasonCodes,
+                    softened: true,
+                });
+            }
+            emitRuntimeEvent("assistant_delivery_rendered", {
+                route: "auto_context",
+                contextId: context.id,
+                revision,
+                gateResult: qualityGateResult,
+                softWarnRendered: uiSoftWarnEnabled && qualityGateResult === "soft_warn",
+            });
+            if (exactlyOnceDeliveryEnabled && sessionId) {
+                markSessionContextDelivered(sessionId, context.id, revision);
+            }
+        },
+        [
+            appendMessageToSession,
+            buildAutoContextStatusLabel,
+            exactlyOnceDeliveryEnabled,
+            markSessionContextDelivered,
+            resolveAutoContextGrounding,
+            uiSoftWarnEnabled,
+        ]
+    );
+
+    useEffect(() => {
+        const completedContexts = autoContexts.filter((context) => context.status !== "running");
+        if (completedContexts.length === 0) {
+            return;
         }
 
-        if (nextMessages.length > 0) {
-            setMessages((prev) => [...prev, ...nextMessages]);
+        if (activeSessionId) {
+            const activeSession = sessions.find((session) => session.id === activeSessionId);
+            if (activeSession) {
+                const candidateContexts = completedContexts
+                    .filter((context) => context.id === activeSession.id || (activeSession.taskId && context.taskId === activeSession.taskId))
+                    .sort((left, right) => {
+                        const leftTime = Date.parse(left.completedAt ?? left.startedAt);
+                        const rightTime = Date.parse(right.completedAt ?? right.startedAt);
+                        const normalizedLeftTime = Number.isNaN(leftTime) ? 0 : leftTime;
+                        const normalizedRightTime = Number.isNaN(rightTime) ? 0 : rightTime;
+                        return normalizedRightTime - normalizedLeftTime;
+                    });
+                const preferred = candidateContexts[0];
+                if (preferred) {
+                    autoContextStartedThisSessionRef.current.add(preferred.id);
+                    deliverAutoContextMessage(preferred, activeSession.id);
+                }
+            }
         }
-    }, [autoContexts, resolveAutoContextQualityState]);
+
+        const resolveSessionIdForContext = (context: AutoMissionContext): string | null => {
+            const linked = sessions.find(
+                (session) => session.id === context.id || (session.taskId && context.taskId && session.taskId === context.taskId)
+            );
+            if (linked) {
+                return linked.id;
+            }
+            return activeSessionId ?? null;
+        };
+
+        const queued = completedContexts
+            .filter((context) => autoContextStartedThisSessionRef.current.has(context.id))
+            .sort((left, right) => {
+                const leftTime = Date.parse(left.completedAt ?? left.startedAt);
+                const rightTime = Date.parse(right.completedAt ?? right.startedAt);
+                const normalizedLeftTime = Number.isNaN(leftTime) ? 0 : leftTime;
+                const normalizedRightTime = Number.isNaN(rightTime) ? 0 : rightTime;
+                return normalizedLeftTime - normalizedRightTime;
+            });
+
+        for (const context of queued) {
+            deliverAutoContextMessage(context, resolveSessionIdForContext(context));
+        }
+    }, [activeSessionId, autoContexts, deliverAutoContextMessage, sessions]);
 
     return (
         <main className="w-full h-full relative overflow-hidden bg-transparent text-white flex">
@@ -1490,6 +1995,7 @@ export function AssistantModule() {
                                         required: message.grounding?.required ?? true,
                                         status: message.grounding?.status ?? "provider_only",
                                         reasons: message.grounding?.reasons ?? [],
+                                        quality: message.grounding?.quality,
                                         sources: message.grounding?.sources ?? contextGroundingSources,
                                         claims:
                                             message.grounding?.claims ??
@@ -1520,6 +2026,7 @@ export function AssistantModule() {
                                     route={message.route}
                                     grounding={resolvedGrounding}
                                     renderMode={renderMode}
+                                    softWarnUiEnabled={uiSoftWarnEnabled}
                                     onRetry={
                                         retryPrompt
                                             ? () => {
@@ -1550,6 +2057,7 @@ export function AssistantModule() {
                                 status="Thinking"
                                 route="manual"
                                 renderMode={renderMode}
+                                softWarnUiEnabled={uiSoftWarnEnabled}
                             />
                         )}
                     </div>
@@ -1918,6 +2426,7 @@ function SystemMessage({
     route,
     grounding,
     renderMode = "user_mode",
+    softWarnUiEnabled = true,
     onRetry,
     feedback,
 }: {
@@ -1926,15 +2435,33 @@ function SystemMessage({
     route?: MessageRoute;
     grounding?: ChatMessage["grounding"];
     renderMode?: AssistantRenderMode;
+    softWarnUiEnabled?: boolean;
     onRetry?: () => void;
     feedback?: SystemMessageFeedback;
 }) {
     const showDiagnostics = renderMode === "debug_mode";
-    const blockedQuality = isBlockedQualityOutput(content, grounding?.status);
-    const blockedReasonCodes = parseBlockedReasons(content);
+    const qualityGateResult = resolveQualityGateResult({
+        content,
+        groundingStatus: grounding?.status,
+        qualityGateResult: grounding?.quality?.gateResult,
+    });
+    const blockedQuality = isBlockedQualityOutput(content, grounding?.status, qualityGateResult);
+    const softWarnQuality =
+        softWarnUiEnabled &&
+        isSoftWarnQualityOutput(content, grounding?.status, qualityGateResult) &&
+        !blockedQuality;
+    const reasonCodes = parseQualityReasonCodes(content, grounding?.quality?.reasons);
+    const blockedReasonCodes = qualityGateResult === "hard_fail" ? reasonCodes : [];
+    const softWarnReasonCodes = qualityGateResult === "soft_warn" ? reasonCodes : [];
     const blockedReasonLabels = blockedReasonCodes.length > 0
         ? blockedReasonCodes.map((code) => mapBlockedReasonLabel(code))
         : ["응답 품질 기준을 충족하지 못했습니다."];
+    const softWarnReasonLabels = softWarnReasonCodes.length > 0
+        ? softWarnReasonCodes.map((code) => mapBlockedReasonLabel(code))
+        : ["근거 품질이 일부 기준에 미달해 보정된 응답으로 제공됩니다."];
+    const softWarnDisplayLabels = hasOnlySoftWarnReasons(softWarnReasonCodes)
+        ? softWarnReasonLabels
+        : [...softWarnReasonLabels, "일부 위험 신호로 인해 제한 모드로 응답했습니다."];
     const groundingSummary = buildGroundingSummary(grounding);
     const routeLabel =
         showDiagnostics && (route === "manual" ? "MANUAL" : route === "auto_context" ? "AUTO CONTEXT" : null);
@@ -2015,8 +2542,22 @@ function SystemMessage({
                         </div>
                     </div>
                 ) : (
-                    <div className="text-[15px] leading-relaxed text-white/80 pl-9 whitespace-pre-wrap break-words">
-                        {content}
+                    <div className="pl-9 max-w-[44rem]">
+                        {softWarnQuality && (
+                            <div className="mb-3 rounded border border-amber-500/35 bg-amber-500/10 px-3 py-2">
+                                <p className="text-[11px] font-mono uppercase tracking-widest text-amber-300">
+                                    품질 경고 (SOFT WARN)
+                                </p>
+                                <ul className="mt-1 space-y-0.5 text-[12px] text-white/75">
+                                    {softWarnDisplayLabels.map((label, index) => (
+                                        <li key={`soft_warn_reason_${index}`}>- {label}</li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
+                        <div className="text-[15px] leading-relaxed text-white/80 whitespace-pre-wrap break-words">
+                            {content}
+                        </div>
                     </div>
                 )}
                 {showDiagnostics && groundingSummary && (

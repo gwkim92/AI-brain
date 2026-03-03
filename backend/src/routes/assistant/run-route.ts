@@ -18,6 +18,7 @@ import { buildGroundingUnavailableMessage, resolveGroundingPolicy, toGroundingUn
 import { generateQueryRewriteCandidates } from '../../retrieval/query-rewrite';
 import {
   buildGroundingQualityBlockedMessage,
+  classifyGroundingGateResult,
   evaluateGroundingQualityGate,
   normalizeGroundingQualityReasons
 } from '../../retrieval/quality-gate';
@@ -41,6 +42,7 @@ import type { RouteContext } from '../types';
 import { createSpanId, resolveAssistantContextTaskType } from '../types';
 
 // --- Routes ---
+const QUALITY_SOFT_GATE_ENABLED = process.env.JARVIS_FF_ASSISTANT_QUALITY_SOFT_GATE_V2 !== '0';
 
 export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: RouteContext): void {
   const {
@@ -69,18 +71,47 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
     if (!context) {
       return sendError(reply, request, 404, 'NOT_FOUND', 'assistant context not found');
     }
+    const clientRunNonce =
+      typeof parsed.data.client_run_nonce === 'string' && parsed.data.client_run_nonce.trim().length > 0
+        ? parsed.data.client_run_nonce.trim()
+        : null;
+
+    if (clientRunNonce && !parsed.data.force_rerun) {
+      const recentEvents = await store.listAssistantContextEvents({
+        userId,
+        contextId: context.id,
+        limit: 200
+      });
+      const replayAccepted = recentEvents.find((event) => {
+        if (event.eventType !== 'assistant.context.run.accepted') {
+          return false;
+        }
+        const nonceFromEvent = typeof event.data?.client_run_nonce === 'string' ? event.data.client_run_nonce : null;
+        return nonceFromEvent === clientRunNonce;
+      });
+      if (replayAccepted) {
+        return sendSuccess(reply, request, context.status === 'running' ? 202 : 200, context, {
+          accepted: false,
+          reason: 'nonce_replay',
+          client_run_nonce: clientRunNonce,
+          replay_event_id: replayAccepted.id
+        });
+      }
+    }
 
     if (context.status === 'completed' && !parsed.data.force_rerun) {
       return sendSuccess(reply, request, 200, context, {
         accepted: false,
-        reason: 'already_completed'
+        reason: 'already_completed',
+        client_run_nonce: clientRunNonce
       });
     }
 
     if (assistantContextRunsInFlight.has(contextId)) {
       return sendSuccess(reply, request, 202, context, {
         accepted: false,
-        reason: 'already_running'
+        reason: 'already_running',
+        client_run_nonce: clientRunNonce
       });
     }
 
@@ -106,6 +137,23 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
       return sendError(reply, request, 404, 'NOT_FOUND', 'assistant context not found');
     }
 
+    if (context.status !== prepared.status) {
+      await store.appendAssistantContextEvent({
+        userId,
+        contextId: prepared.id,
+        eventType: 'assistant.context.transition.audit',
+        data: {
+          from_status: context.status,
+          to_status: prepared.status,
+          stage: 'run_prepare',
+          force_rerun: parsed.data.force_rerun,
+          client_run_nonce: clientRunNonce
+        },
+        traceId,
+        spanId: createSpanId()
+      });
+    }
+
     const groundingDecision = resolveGroundingPolicy({
       prompt: prepared.prompt,
       intent: prepared.intent,
@@ -116,13 +164,9 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
     const externalProviderEnabled = providerAvailability.some((item) => item.enabled && item.provider !== 'local');
     const localProviderEnabled = providerAvailability.some((item) => item.provider === 'local' && item.enabled);
     const strictLocalOnly = parsed.data.provider === 'local' && parsed.data.strict_provider;
-    const shouldTryNewsRetrievalFallback =
-      groundingDecision.requiresGrounding &&
-      groundingDecision.signals.news &&
-      localProviderEnabled &&
-      (!externalProviderEnabled || strictLocalOnly);
+    const shouldRunGroundedRetrieval = groundingDecision.requiresGrounding;
     let retrievalPack: Awaited<ReturnType<typeof retrieveWebEvidence>> | null = null;
-    if (shouldTryNewsRetrievalFallback) {
+    if (shouldRunGroundedRetrieval) {
       retrievalPack = await retrieveWebEvidence({
         prompt: prepared.prompt,
         rewrittenQueries: generateQueryRewriteCandidates({
@@ -142,8 +186,12 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
     const canUseLocalGroundedFallback = Boolean(
       retrievalPack && retrievalPack.sources.length > 0 && localProviderEnabled && !retrievalGateBlocked
     );
+    const canUseRetrievalOnlyFallback = Boolean(
+      retrievalPack && retrievalPack.sources.length > 0 && !retrievalGateBlocked
+    );
+    const canServeGroundedRequest = canUseLocalGroundedFallback || canUseRetrievalOnlyFallback;
 
-    if (groundingDecision.requiresGrounding && (!externalProviderEnabled || strictLocalOnly) && !canUseLocalGroundedFallback) {
+    if (groundingDecision.requiresGrounding && (!externalProviderEnabled || strictLocalOnly) && !canServeGroundedRequest) {
       const blockedMessage =
         retrievalGateBlocked && retrievalQualityGate
           ? buildRetrievalQualityBlockedMessage(retrievalQualityGate)
@@ -177,7 +225,7 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
           reason: errorCode,
           grounding_policy: groundingDecision.policy,
           grounding_reasons: groundingDecision.reasons,
-          retrieval_fallback_attempted: shouldTryNewsRetrievalFallback,
+          retrieval_fallback_attempted: shouldRunGroundedRetrieval,
           retrieval_sources_count: retrievalPack?.sources.length ?? 0,
           retrieval_quality_gate: retrievalQualityGate,
           required_external_providers: ['openai', 'gemini', 'anthropic'],
@@ -210,7 +258,7 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
         reason: errorCode,
         grounding_policy: groundingDecision.policy,
         grounding_reasons: groundingDecision.reasons,
-        retrieval_fallback_attempted: shouldTryNewsRetrievalFallback,
+        retrieval_fallback_attempted: shouldRunGroundedRetrieval,
         retrieval_sources_count: retrievalPack?.sources.length ?? 0,
         retrieval_quality_gate: retrievalQualityGate,
         required_external_providers: ['openai', 'gemini', 'anthropic'],
@@ -231,7 +279,8 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
         grounding_required: groundingDecision.requiresGrounding,
         grounding_reasons: groundingDecision.reasons,
         grounding_signals: groundingDecision.signals,
-        retrieval_fallback_enabled: canUseLocalGroundedFallback,
+        retrieval_fallback_enabled: canServeGroundedRequest,
+        retrieval_only_fallback_enabled: canUseRetrievalOnlyFallback && !canUseLocalGroundedFallback,
         retrieval_sources_count: retrievalPack?.sources.length ?? 0,
         retrieval_quality_gate: retrievalQualityGate
       },
@@ -249,10 +298,12 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
         strict_provider: parsed.data.strict_provider,
         model: parsed.data.model ?? null,
         force_rerun: parsed.data.force_rerun,
+        client_run_nonce: clientRunNonce,
         grounding_policy: groundingDecision.policy,
         grounding_required: groundingDecision.requiresGrounding,
         grounding_reasons: groundingDecision.reasons,
-        retrieval_fallback_enabled: canUseLocalGroundedFallback
+        retrieval_fallback_enabled: canServeGroundedRequest,
+        retrieval_only_fallback_enabled: canUseRetrievalOnlyFallback && !canUseLocalGroundedFallback
       },
       traceId,
       spanId: createSpanId()
@@ -306,7 +357,8 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
             context_tokens_used: contextResult.tokensUsed,
             context_mode: contextResult.contextMode,
             grounding_policy: groundingDecision.policy,
-            grounding_required: groundingDecision.requiresGrounding
+            grounding_required: groundingDecision.requiresGrounding,
+            client_run_nonce: clientRunNonce
           },
           traceId,
           spanId
@@ -327,6 +379,11 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
           });
         }
 
+        const useRetrievalOnlyFallback =
+          groundingDecision.requiresGrounding &&
+          canUseRetrievalOnlyFallback &&
+          (!externalProviderEnabled || strictLocalOnly) &&
+          !localProviderEnabled;
         const useStructuredLocalNewsFlow = Boolean(canUseLocalGroundedFallback && groundingDecision.signals.news);
         const groundingInstruction = useStructuredLocalNewsFlow ? '' : buildGroundingSystemInstruction(groundingDecision);
         const retrievalInstruction = useStructuredLocalNewsFlow ? '' : retrievalPack ? buildRetrievalSystemInstruction(retrievalPack) : '';
@@ -350,25 +407,28 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
               ),
               languagePolicy.instruction
             );
-        const routed = await providerRouter.generate({
-          prompt: generationPrompt,
-          systemPrompt: generationSystemPrompt,
-          provider: parsed.data.provider,
-          strictProvider: parsed.data.strict_provider,
-          taskType,
-          model: parsed.data.model,
-          temperature: groundingDecision.requiresGrounding ? strictFactualTemperature : parsed.data.temperature,
-          topP: groundingDecision.requiresGrounding ? 0.9 : undefined,
-          stop: groundingDecision.requiresGrounding ? ['<|im_start|>', '<|im_end|>', '<|endoftext|>'] : undefined,
-          maxOutputTokens: groundingDecision.requiresGrounding ? strictFactualMaxTokens : parsed.data.max_output_tokens,
-          excludeProviders: groundingDecision.requiresGrounding && !canUseLocalGroundedFallback ? ['local'] : undefined
-        });
+        const routed = useRetrievalOnlyFallback
+          ? null
+          : await providerRouter.generate({
+              prompt: generationPrompt,
+              systemPrompt: generationSystemPrompt,
+              provider: parsed.data.provider,
+              strictProvider: parsed.data.strict_provider,
+              taskType,
+              model: parsed.data.model,
+              temperature: groundingDecision.requiresGrounding ? strictFactualTemperature : parsed.data.temperature,
+              topP: groundingDecision.requiresGrounding ? 0.9 : undefined,
+              stop: groundingDecision.requiresGrounding ? ['<|im_start|>', '<|im_end|>', '<|endoftext|>'] : undefined,
+              maxOutputTokens: groundingDecision.requiresGrounding ? strictFactualMaxTokens : parsed.data.max_output_tokens,
+              excludeProviders: groundingDecision.requiresGrounding && !canUseLocalGroundedFallback ? ['local'] : undefined
+            });
+        const routedOutputText = routed?.result.outputText ?? '';
 
         const groundedLocalViolation =
-          groundingDecision.requiresGrounding && routed.result.provider === 'local' && !canUseLocalGroundedFallback;
+          groundingDecision.requiresGrounding && routed?.result.provider === 'local' && !canUseLocalGroundedFallback;
         const extractedFacts = useStructuredLocalNewsFlow
           ? extractNewsFactsFromOutput(
-              routed.result.outputText,
+              routedOutputText,
               retrievalPack?.sources ?? [],
               5,
               languagePolicy.expectedLanguage
@@ -392,7 +452,7 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
                 maxFacts: 5
               })
             : structuredFacts;
-        const renderedNewsBriefing =
+        const renderedNewsBriefingFromModel =
           diversifiedFacts.length > 0
             ? renderNewsBriefingFromFacts({
                 facts: diversifiedFacts,
@@ -401,7 +461,29 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
                 retrievedAt: new Date().toISOString()
               })
             : '';
-        const candidateOutputText = renderedNewsBriefing || routed.result.outputText;
+        const retrievalOnlyFacts = useRetrievalOnlyFallback
+          ? ensureFactDomainCoverage({
+              facts: buildFallbackNewsFactsFromSources({
+                sources: retrievalPack?.sources ?? [],
+                expectedLanguage: languagePolicy.expectedLanguage,
+                maxFacts: 5
+              }),
+              sources: retrievalPack?.sources ?? [],
+              expectedLanguage: languagePolicy.expectedLanguage,
+              maxFacts: 5
+            })
+          : [];
+        const retrievalOnlyOutput =
+          useRetrievalOnlyFallback && retrievalOnlyFacts.length > 0
+            ? renderNewsBriefingFromFacts({
+                facts: retrievalOnlyFacts,
+                sources: retrievalPack?.sources ?? [],
+                expectedLanguage: languagePolicy.expectedLanguage,
+                retrievedAt: new Date().toISOString()
+              })
+            : '';
+        const renderedNewsBriefing = retrievalOnlyOutput || renderedNewsBriefingFromModel;
+        const candidateOutputText = renderedNewsBriefing || routedOutputText;
         const modelSources = extractGroundingSourcesFromText(candidateOutputText);
         const sources = mergeGroundingSources(retrievalPack?.sources ?? [], modelSources);
         const outputWithSources = ensureGroundingSourcesSection(candidateOutputText, sources);
@@ -410,7 +492,7 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
           decision: groundingDecision,
           sources,
           claims: groundingClaims,
-          hasTemplateArtifact: hasTemplateArtifact(routed.result.outputText),
+          hasTemplateArtifact: routed ? hasTemplateArtifact(routed.result.outputText) : false,
           outputText: candidateOutputText,
           expectedLanguage: languagePolicy.expectedLanguage
         });
@@ -438,23 +520,61 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
           contextId: prepared.id,
           claims: groundingClaims
         });
-        const qualityGuardTriggered = groundedLocalViolation || !effectiveGroundingQuality.passed;
+        const needsRealtimeEvidence = groundingDecision.signals.news || groundingDecision.signals.recency;
+        const missingRealtimeEvidence =
+          groundingDecision.requiresGrounding && needsRealtimeEvidence && (retrievalPack?.sources.length ?? 0) === 0;
+        const normalizedQualityReasons = normalizeGroundingQualityReasons(
+          Array.from(
+            new Set([
+              ...effectiveGroundingQuality.reasons,
+              ...(missingRealtimeEvidence ? ['insufficient_retrieval_sources'] : [])
+            ])
+          )
+        );
+        const baseGateResult = classifyGroundingGateResult(normalizedQualityReasons);
+        const qualityGateResult =
+          groundedLocalViolation || missingRealtimeEvidence
+            ? 'hard_fail'
+            : !QUALITY_SOFT_GATE_ENABLED && normalizedQualityReasons.length > 0
+              ? 'hard_fail'
+              : baseGateResult;
+        const softenedByQualityPolicy = QUALITY_SOFT_GATE_ENABLED && qualityGateResult === 'soft_warn';
+        const qualityGuardTriggered = qualityGateResult === 'hard_fail';
+        const blockedReasonCodes = groundedLocalViolation
+          ? ['grounding_local_violation', ...normalizedQualityReasons]
+          : normalizedQualityReasons;
+        const qualityGuardReason = qualityGuardTriggered ? blockedReasonCodes[0] ?? null : null;
         const guardedOutput = qualityGuardTriggered
           ? groundedLocalViolation
             ? buildRadarQualityFallbackMessage()
-            : buildGroundingQualityBlockedMessage(effectiveGroundingQuality)
+            : missingRealtimeEvidence && retrievalQualityGate
+              ? buildRetrievalQualityBlockedMessage(retrievalQualityGate)
+              : buildGroundingQualityBlockedMessage({
+                  ...effectiveGroundingQuality,
+                  passed: false,
+                  reasons: blockedReasonCodes
+                })
           : outputWithSources;
         const sourceDomains = Array.from(new Set(sources.map((item) => item.domain)));
         const fallbackTraceTag =
-          useStructuredLocalNewsFlow && renderedNewsBriefing.length === 0 && routed.result.outputText.length > 0
+          useRetrievalOnlyFallback
+            ? 'retrieval_only_fallback'
+            : useStructuredLocalNewsFlow && renderedNewsBriefing.length === 0 && routedOutputText.length > 0
             ? 'raw_model_output_fallback'
             : null;
         const normalizedRetrievalReasonCodes = retrievalQualityGate
           ? normalizeRetrievalQualityReasons(retrievalQualityGate.reasons)
           : [];
+        const resolvedProvider = routed?.result.provider ?? 'local';
+        const resolvedModel = routed?.result.model ?? 'retrieval-fallback-v1';
+        const resolvedAttempts =
+          routed?.attempts ?? [{ provider: 'local', status: 'skipped' as const, error: 'retrieval_only_fallback' }];
+        const resolvedUsedFallback = routed?.usedFallback ?? true;
+        const resolvedSelectionReason =
+          routed?.selection?.reason ?? (useRetrievalOnlyFallback ? 'retrieval_only_fallback_without_model_provider' : null);
 
         const evalResult = evaluateEvalGate({
-          accuracy: qualityGuardTriggered ? 0.4 : routed.result.outputText.length > 10 ? 0.85 : 0.4,
+          accuracy: qualityGuardTriggered ? 0.4 : candidateOutputText.length > 10 ? 0.85 : 0.4,
           safety: 0.95,
           costDeltaPct: 0
         });
@@ -467,23 +587,23 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
             data: {
               passed: false,
               reasons: evalResult.reasons,
-              provider: routed.result.provider,
-              model: routed.result.model
+              provider: resolvedProvider,
+              model: resolvedModel
             },
             traceId,
             spanId: createSpanId()
           });
-          notificationService?.emitEvalGateDegradation(routed.result.provider);
+          notificationService?.emitEvalGateDegradation(resolvedProvider);
         }
 
         const completed = await store.updateAssistantContext({
           userId,
           contextId: prepared.id,
           status: 'completed',
-          servedProvider: routed.result.provider,
-          servedModel: routed.result.model,
-          usedFallback: routed.usedFallback,
-          selectionReason: routed.selection?.reason ?? null,
+          servedProvider: resolvedProvider,
+          servedModel: resolvedModel,
+          usedFallback: resolvedUsedFallback,
+          selectionReason: resolvedSelectionReason,
           output: guardedOutput,
           error: null
         });
@@ -495,20 +615,35 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
             eventType: 'assistant.context.run.completed',
             data: {
               task_type: taskType,
-              provider: routed.result.provider,
-              model: routed.result.model,
-              used_fallback: routed.usedFallback,
-              selection_reason: routed.selection?.reason ?? null,
+              provider: resolvedProvider,
+              model: resolvedModel,
+              used_fallback: resolvedUsedFallback,
+              selection_reason: resolvedSelectionReason,
               quality_guard_triggered: qualityGuardTriggered,
-              quality_guard_reason: groundedLocalViolation
-                ? 'grounding_local_violation'
-                : effectiveGroundingQuality.reasons[0] ?? null,
-              quality_gate_code: effectiveGroundingQuality.reasons,
+              quality_guard_reason: qualityGuardReason,
+              quality_gate_result: qualityGateResult,
+              quality_gate_softened: softenedByQualityPolicy,
+              transition_from: 'running',
+              transition_to: 'completed',
+              transition_valid: true,
+              client_run_nonce: clientRunNonce,
+              quality_gate_code: normalizedQualityReasons,
               grounding_policy: groundingDecision.policy,
               grounding_required: groundingDecision.requiresGrounding,
-              grounding_status: groundingDecision.requiresGrounding ? 'provider_only' : 'not_required',
+              grounding_status: qualityGuardTriggered
+                ? 'blocked_due_to_quality_gate'
+                : qualityGateResult === 'soft_warn'
+                  ? 'soft_warn'
+                  : useRetrievalOnlyFallback
+                    ? 'served_with_limits'
+                  : groundingDecision.requiresGrounding && retrievalQualityGate && !retrievalQualityGate.passed
+                    ? 'served_with_limits'
+                    : groundingDecision.requiresGrounding
+                      ? 'provider_only'
+                      : 'not_required',
               render_mode: 'user_mode',
-              retrieval_fallback_enabled: canUseLocalGroundedFallback,
+              retrieval_fallback_enabled: canServeGroundedRequest,
+              retrieval_only_fallback: useRetrievalOnlyFallback,
               sources_count: sources.length,
               domain_count: sourceDomains.length,
               claims_count: groundingClaims.length,
@@ -522,8 +657,24 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
                 detected: effectiveGroundingQuality.metrics.detectedLanguage,
                 score: effectiveGroundingQuality.metrics.languageAlignmentScore
               },
-              quality_gate: effectiveGroundingQuality,
-              attempts: routed.attempts,
+              quality_gate: {
+                ...effectiveGroundingQuality,
+                passed: !qualityGuardTriggered,
+                reasons: normalizedQualityReasons
+              },
+              quality: {
+                gateResult: qualityGateResult,
+                reasons: normalizedQualityReasons,
+                softened: softenedByQualityPolicy,
+                languageAligned: !normalizedQualityReasons.includes('language_mismatch'),
+                claimCitationCoverage: effectiveGroundingQuality.metrics.claimCitationCoverage ?? 0
+              },
+              delivery: {
+                mode: qualityGateResult === 'pass' && !useRetrievalOnlyFallback ? 'normal' : 'degraded',
+                contextId: completed.id,
+                revision: completed.revision
+              },
+              attempts: resolvedAttempts,
               eval_gate: { passed: evalResult.passed, reasons: evalResult.reasons }
             },
             traceId,
@@ -550,9 +701,9 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
             data: {
               source: 'assistant_context_run',
               context_id: prepared.id,
-              provider: routed.result.provider,
-              model: routed.result.model,
-              used_fallback: routed.usedFallback,
+              provider: resolvedProvider,
+              model: resolvedModel,
+              used_fallback: resolvedUsedFallback,
               quality_guard_triggered: qualityGuardTriggered
             }
           });
@@ -590,7 +741,11 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
             data: {
               task_type: taskType,
               reason,
-              attempts
+              attempts,
+              transition_from: 'running',
+              transition_to: 'failed',
+              transition_valid: true,
+              client_run_nonce: clientRunNonce
             },
             traceId,
             spanId: createSpanId()
@@ -620,7 +775,13 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
 
     return sendSuccess(reply, request, 202, prepared, {
       accepted: true,
-      task_type: taskType
+      task_type: taskType,
+      client_run_nonce: clientRunNonce,
+      delivery: {
+        mode: 'normal',
+        contextId: prepared.id,
+        revision: prepared.revision
+      }
     });
   });
 }

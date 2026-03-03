@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useHUD } from "@/components/providers/HUDProvider";
 import { canAccessWidget, useCurrentRole } from "@/lib/auth/role";
@@ -10,6 +10,25 @@ import { buildMissionIntake, dispatchMissionIntake, dispatchMissionIntakeTaskLin
 import { classifyPromptComplexity } from "@/lib/hud/complexity";
 import { resolveWorkspaceForIntent } from "@/lib/hud/intent-router";
 import { getHudWorkspacePrimaryWidget } from "@/lib/hud/widget-presets";
+import { emitRuntimeEvent } from "@/lib/runtime-events";
+import { isFeatureEnabled } from "@/lib/feature-flags";
+
+const DUPLICATE_WINDOW_MS = 800;
+
+function hashPrompt(value: string): string {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(16);
+}
+
+function createRequestNonce(prefix = "qc"): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `${prefix}_${crypto.randomUUID()}`;
+  }
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
 
 export function useQuickCommand() {
   const { openWidgets, startSession, linkSessionTask } = useHUD();
@@ -19,15 +38,61 @@ export function useQuickCommand() {
   const [commandInput, setCommandInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const inFlightRef = useRef(false);
+  const recentPromptRef = useRef<{ hash: string; atMs: number } | null>(null);
 
   const execute = useCallback(async (input?: string) => {
     const trimmed = (input ?? commandInput).trim();
-    if (!trimmed || isSubmitting) return;
+    if (!trimmed) return;
+    const singleFlightEnabled = isFeatureEnabled("hud.single_flight_quick_command", true);
+    const nowMs = Date.now();
+    const promptHash = hashPrompt(trimmed);
+    const recent = recentPromptRef.current;
+
+    if ((singleFlightEnabled && inFlightRef.current) || isSubmitting) {
+      emitRuntimeEvent("quick_command_ignored_duplicate", {
+        reason: "in_flight",
+        promptHash,
+        singleFlightEnabled,
+      });
+      return;
+    }
+    if (
+      singleFlightEnabled &&
+      recent &&
+      recent.hash === promptHash &&
+      nowMs - recent.atMs < DUPLICATE_WINDOW_MS
+    ) {
+      emitRuntimeEvent("quick_command_ignored_duplicate", {
+        reason: "duplicate_window",
+        promptHash,
+        ageMs: nowMs - recent.atMs,
+        singleFlightEnabled,
+      });
+      return;
+    }
+    if (singleFlightEnabled) {
+      recentPromptRef.current = { hash: promptHash, atMs: nowMs };
+      inFlightRef.current = true;
+    }
 
     setIsSubmitting(true);
     setError(null);
-    const intake = buildMissionIntake(trimmed, "inbox_quick_command");
+    const requestNonce = createRequestNonce();
+    const intake = buildMissionIntake(trimmed, "inbox_quick_command", {
+      requestNonce,
+    });
     const complexity = classifyPromptComplexity(trimmed);
+    emitRuntimeEvent("quick_command_started", {
+      intakeId: intake.id,
+      sessionId: intake.id,
+      requestNonce,
+      complexity,
+      promptHash,
+      prompt: trimmed,
+      taskMode: intake.taskMode,
+      singleFlightEnabled,
+    });
 
     const workspacePreset = complexity !== "simple"
       ? ("mission" as const)
@@ -85,6 +150,8 @@ export function useQuickCommand() {
     });
 
     try {
+      let linkedTaskId: string | null = null;
+      let linkedContextId: string | null = null;
       if (complexity !== "simple") {
         const result = await generateMissionPlan({
           prompt: trimmed,
@@ -102,6 +169,7 @@ export function useQuickCommand() {
             taskId: result.mission.id,
           });
           linkSessionTask(sessionId, undefined, result.mission.id);
+          linkedTaskId = result.mission.id;
         }
       } else {
         const task = await createTask({
@@ -122,6 +190,7 @@ export function useQuickCommand() {
           taskId: task.id,
         });
         linkSessionTask(sessionId, task.id);
+        linkedTaskId = task.id;
 
         try {
           const context = await createAssistantContext({
@@ -134,12 +203,15 @@ export function useQuickCommand() {
           });
           await runAssistantContext(context.id, {
             task_type: intake.taskMode,
+            client_run_nonce: requestNonce,
           });
+          linkedContextId = context.id;
 
           setTimeout(() => {
             dispatchMissionIntake({
               ...intake,
               prestarted: true,
+              prestartedContextId: context.id,
             });
           }, 0);
         } catch {
@@ -151,14 +223,45 @@ export function useQuickCommand() {
       }
 
       setCommandInput("");
+      emitRuntimeEvent("quick_command_completed", {
+        intakeId: intake.id,
+        requestNonce,
+        prompt: trimmed,
+        sessionId,
+        taskId: linkedTaskId,
+        contextId: linkedContextId,
+        taskMode: intake.taskMode,
+        singleFlightEnabled,
+      });
     } catch (err) {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
+        emitRuntimeEvent("quick_command_failed", {
+          intakeId: intake.id,
+          requestNonce,
+          prompt: trimmed,
+          code: err.code,
+          message: err.message,
+          taskMode: intake.taskMode,
+          singleFlightEnabled,
+        });
       } else {
         setError("failed to create task");
+        emitRuntimeEvent("quick_command_failed", {
+          intakeId: intake.id,
+          requestNonce,
+          prompt: trimmed,
+          code: "unknown",
+          message: "failed to create task",
+          taskMode: intake.taskMode,
+          singleFlightEnabled,
+        });
       }
     } finally {
       setIsSubmitting(false);
+      if (singleFlightEnabled) {
+        inFlightRef.current = false;
+      }
     }
   }, [commandInput, isSubmitting, linkSessionTask, openWidgets, pathname, role, router, startSession]);
 

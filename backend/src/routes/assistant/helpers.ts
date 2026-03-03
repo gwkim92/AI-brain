@@ -5,17 +5,31 @@ export async function resolveTaskIdForContext(
   userId: string,
   clientContextId: string
 ): Promise<string | null> {
-  const tasks = await store.listTasks({ userId, status: undefined, limit: 200 });
-  for (const task of tasks) {
+  const tasks = await store.listTasks({ userId, status: undefined, limit: 400 });
+  const sorted = [...tasks].sort((left, right) => {
+    const leftTs = Date.parse(left.createdAt);
+    const rightTs = Date.parse(right.createdAt);
+    const safeLeftTs = Number.isNaN(leftTs) ? 0 : leftTs;
+    const safeRightTs = Number.isNaN(rightTs) ? 0 : rightTs;
+    return safeRightTs - safeLeftTs;
+  });
+
+  const matched = sorted.find((task) => {
     if (task.userId !== userId) {
-      continue;
+      return false;
     }
     const missionIntakeId = typeof task.input?.mission_intake_id === 'string' ? task.input.mission_intake_id : null;
     if (missionIntakeId === clientContextId) {
-      return task.id;
+      return true;
     }
-  }
-  return null;
+    const clientContextFromTask = typeof task.input?.client_context_id === 'string' ? task.input.client_context_id : null;
+    if (clientContextFromTask === clientContextId) {
+      return true;
+    }
+    return false;
+  });
+
+  return matched?.id ?? null;
 }
 
 export function hasTemplateArtifact(output: string): boolean {

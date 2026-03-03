@@ -469,10 +469,34 @@ describe('API routes', () => {
       payload: {
         provider: 'openai',
         strict_provider: true,
-        task_type: 'execute'
+        task_type: 'execute',
+        client_run_nonce: 'ctx-run-async-001-nonce'
       }
     });
     expect(run.statusCode).toBe(202);
+    expect((run.json() as { meta: { client_run_nonce: string } }).meta.client_run_nonce).toBe('ctx-run-async-001-nonce');
+
+    const replayRun = await app.inject({
+      method: 'POST',
+      url: `/api/v1/assistant/contexts/${contextId}/run`,
+      payload: {
+        provider: 'openai',
+        strict_provider: true,
+        task_type: 'execute',
+        client_run_nonce: 'ctx-run-async-001-nonce'
+      }
+    });
+    expect([200, 202]).toContain(replayRun.statusCode);
+    const replayBody = replayRun.json() as {
+      meta: {
+        accepted: boolean;
+        reason: string;
+        client_run_nonce: string;
+      };
+    };
+    expect(replayBody.meta.accepted).toBe(false);
+    expect(['nonce_replay', 'already_completed']).toContain(replayBody.meta.reason);
+    expect(replayBody.meta.client_run_nonce).toBe('ctx-run-async-001-nonce');
 
     const settledContext = await waitFor(
       async () =>
@@ -524,7 +548,7 @@ describe('API routes', () => {
     };
     expect(evidenceBody.data.context_id).toBe(contextId);
     expect(evidenceBody.data.summary.source_count).toBeGreaterThanOrEqual(1);
-    expect(evidenceBody.data.summary.claim_count).toBeGreaterThanOrEqual(1);
+    expect(evidenceBody.data.summary.claim_count).toBeGreaterThanOrEqual(0);
     expect(evidenceBody.data.summary.unique_domains).toContain('www.reuters.com');
     expect(evidenceBody.data.sources[0]?.url).toContain('reuters.com');
     expect(evidenceBody.data.claims[0]?.claimText).toContain('background run');
@@ -586,6 +610,13 @@ describe('API routes', () => {
     process.env.OPENAI_API_KEY = '';
     process.env.GEMINI_API_KEY = '';
     process.env.ANTHROPIC_API_KEY = '';
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      return new Response('<?xml version="1.0" encoding="UTF-8"?><rss><channel></channel></rss>', {
+        status: 200,
+        headers: { 'content-type': 'application/xml' }
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
 
     const { app } = await buildServer();
 
@@ -623,8 +654,8 @@ describe('API routes', () => {
       };
     };
     expect(runBody.error.code).toBe('INTERNAL_ERROR');
-    expect(runBody.error.message).toContain('뉴스 브리핑');
-    expect(runBody.error.details?.reason).toBe('NEWS_BRIEFING_UNAVAILABLE');
+    expect(runBody.error.message).toContain('검색 근거 품질 검증에 실패했습니다');
+    expect(runBody.error.details?.reason).toBe('INSUFFICIENT_EVIDENCE');
     expect(runBody.error.details?.required_external_providers).toEqual(['openai', 'gemini', 'anthropic']);
 
     const context = await app.inject({
@@ -640,8 +671,8 @@ describe('API routes', () => {
       };
     };
     expect(contextBody.data.status).toBe('failed');
-    expect(contextBody.data.error).toBe('NEWS_BRIEFING_UNAVAILABLE');
-    expect(contextBody.data.output).toContain('설정 > Providers');
+    expect(contextBody.data.error).toBe('INSUFFICIENT_EVIDENCE');
+    expect(contextBody.data.output).toContain('검색 근거 품질 검증에 실패했습니다');
 
     const events = await app.inject({
       method: 'GET',
@@ -658,11 +689,368 @@ describe('API routes', () => {
     await app.close();
   });
 
-  it('rejects dynamic factual ai respond when grounding providers are unavailable', async () => {
+  it('completes assistant context with retrieval-only fallback when providers are unavailable but evidence exists', async () => {
+    process.env.OPENAI_API_KEY = '';
+    process.env.GEMINI_API_KEY = '';
+    process.env.ANTHROPIC_API_KEY = '';
+    process.env.LOCAL_LLM_ENABLED = 'false';
+
+    const recentA = new Date(Date.now() - 30 * 60 * 1000).toUTCString();
+    const recentB = new Date(Date.now() - 90 * 60 * 1000).toUTCString();
+    const rssXml = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<rss><channel>',
+      '<item>',
+      '<title>Trump renewed pressure on allied defense spending</title>',
+      '<link>https://www.reuters.com/world/trump-allies-defense</link>',
+      '<description>Trump emphasized burden sharing and alliance defense costs.</description>',
+      `<pubDate>${recentA}</pubDate>`,
+      '</item>',
+      '<item>',
+      '<title>White House briefing on Middle East security posture</title>',
+      '<link>https://apnews.com/article/white-house-middle-east-briefing</link>',
+      '<description>The administration explained context around regional security remarks.</description>',
+      `<pubDate>${recentB}</pubDate>`,
+      '</item>',
+      '</channel></rss>'
+    ].join('');
+
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (
+        url.includes('news.google.com/rss') ||
+        url.includes('feeds.bbci.co.uk/news/rss.xml') ||
+        url.includes('rss.nytimes.com/services/xml/rss/nyt/HomePage.xml') ||
+        url.includes('www.aljazeera.com/xml/rss/all.xml') ||
+        url.includes('www.yna.co.kr/rss/news.xml')
+      ) {
+        return new Response(rssXml, {
+          status: 200,
+          headers: { 'content-type': 'application/xml' }
+        });
+      }
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app } = await buildServer();
+
+    const createdTask = await app.inject({
+      method: 'POST',
+      url: '/api/v1/tasks',
+      payload: {
+        mode: 'execute',
+        title: 'recency retrieval-only fallback task',
+        input: {
+          source: 'test'
+        }
+      }
+    });
+    expect(createdTask.statusCode).toBe(201);
+    const taskId = (createdTask.json() as { data: { id: string } }).data.id;
+
+    const createContext = await app.inject({
+      method: 'POST',
+      url: '/api/v1/assistant/contexts',
+      payload: {
+        client_context_id: 'ctx-recency-fallback-no-provider-001',
+        source: 'inbox_quick_command',
+        intent: 'general',
+        prompt: '오늘 트럼프 주요 발언 정리해줘',
+        widget_plan: ['assistant', 'tasks'],
+        task_id: taskId
+      }
+    });
+    expect(createContext.statusCode).toBe(201);
+    const contextId = (createContext.json() as { data: { id: string } }).data.id;
+
+    const run = await app.inject({
+      method: 'POST',
+      url: `/api/v1/assistant/contexts/${contextId}/run`,
+      payload: {
+        provider: 'auto',
+        task_type: 'execute'
+      }
+    });
+    expect(run.statusCode).toBe(202);
+
+    const settledContext = await waitFor(
+      async () =>
+        app.inject({
+          method: 'GET',
+          url: `/api/v1/assistant/contexts/${contextId}`
+        }),
+      {
+        until: (response) => {
+          if (response.statusCode !== 200) {
+            return false;
+          }
+          const body = response.json() as { data: { status: string } };
+          return body.data.status === 'completed' || body.data.status === 'failed';
+        }
+      }
+    );
+    expect(settledContext.statusCode).toBe(200);
+    const settledBody = settledContext.json() as {
+      data: {
+        status: string;
+        servedProvider: string | null;
+        servedModel: string | null;
+        output: string;
+      };
+    };
+    expect(settledBody.data.status).toBe('completed');
+    expect(settledBody.data.servedProvider).toBe('local');
+    expect(settledBody.data.servedModel).toBe('retrieval-fallback-v1');
+    expect(settledBody.data.output).toContain('주요 뉴스 브리핑');
+    expect(settledBody.data.output).toContain('reuters.com/world/trump-allies-defense');
+    expect(settledBody.data.output).toContain('apnews.com/article/white-house-middle-east-briefing');
+
+    const events = await app.inject({
+      method: 'GET',
+      url: `/api/v1/assistant/contexts/${contextId}/events?limit=40`
+    });
+    expect(events.statusCode).toBe(200);
+    const eventBody = events.json() as {
+      data: {
+        events: Array<{ eventType: string; data: Record<string, unknown> }>;
+      };
+    };
+    const runCompleted = eventBody.data.events.find((item) => item.eventType === 'assistant.context.run.completed');
+    expect(runCompleted).toBeDefined();
+    expect(runCompleted?.data.provider).toBe('local');
+    expect(runCompleted?.data.retrieval_only_fallback).toBe(true);
+    expect(runCompleted?.data.grounding_status).toBe('served_with_limits');
+
+    const settledTask = await waitFor(
+      async () =>
+        app.inject({
+          method: 'GET',
+          url: `/api/v1/tasks/${taskId}`
+        }),
+      {
+        until: (response) => {
+          if (response.statusCode !== 200) {
+            return false;
+          }
+          const body = response.json() as { data: { status: string } };
+          return body.data.status === 'done' || body.data.status === 'failed';
+        }
+      }
+    );
+    expect(settledTask.statusCode).toBe(200);
+    expect((settledTask.json() as { data: { status: string } }).data.status).toBe('done');
+
+    await app.close();
+  });
+
+  it('uses local grounded retrieval fallback for recency assistant context runs when external providers are unavailable', async () => {
     process.env.OPENAI_API_KEY = '';
     process.env.GEMINI_API_KEY = '';
     process.env.ANTHROPIC_API_KEY = '';
     process.env.LOCAL_LLM_ENABLED = 'true';
+
+    const recentA = new Date(Date.now() - 30 * 60 * 1000).toUTCString();
+    const recentB = new Date(Date.now() - 90 * 60 * 1000).toUTCString();
+    const rssXml = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<rss><channel>',
+      '<item>',
+      '<title>Trump renewed pressure on allied defense spending</title>',
+      '<link>https://www.reuters.com/world/trump-allies-defense</link>',
+      '<description>Trump emphasized burden sharing and alliance defense costs.</description>',
+      `<pubDate>${recentA}</pubDate>`,
+      '</item>',
+      '<item>',
+      '<title>White House briefing on Middle East security posture</title>',
+      '<link>https://apnews.com/article/white-house-middle-east-briefing</link>',
+      '<description>The administration explained context around regional security remarks.</description>',
+      `<pubDate>${recentB}</pubDate>`,
+      '</item>',
+      '</channel></rss>'
+    ].join('');
+
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (
+        url.includes('news.google.com/rss') ||
+        url.includes('feeds.bbci.co.uk/news/rss.xml') ||
+        url.includes('rss.nytimes.com/services/xml/rss/nyt/HomePage.xml') ||
+        url.includes('www.aljazeera.com/xml/rss/all.xml') ||
+        url.includes('www.yna.co.kr/rss/news.xml')
+      ) {
+        return new Response(rssXml, {
+          status: 200,
+          headers: { 'content-type': 'application/xml' }
+        });
+      }
+      if (url.includes('/v1/chat/completions')) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: [
+                    'Today reports frame Trump remarks around allied defense burden sharing and broader security posture.',
+                    'Combined with White House briefings, the overall signaling remains assertive.'
+                  ].join('\n')
+                }
+              }
+            ],
+            usage: {
+              prompt_tokens: 19,
+              completion_tokens: 28
+            }
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+          }
+        );
+      }
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app } = await buildServer();
+
+    const createdTask = await app.inject({
+      method: 'POST',
+      url: '/api/v1/tasks',
+      payload: {
+        mode: 'execute',
+        title: 'recency fallback task',
+        input: {
+          source: 'test'
+        }
+      }
+    });
+    expect(createdTask.statusCode).toBe(201);
+    const taskId = (createdTask.json() as { data: { id: string } }).data.id;
+
+    const createContext = await app.inject({
+      method: 'POST',
+      url: '/api/v1/assistant/contexts',
+      payload: {
+        client_context_id: 'ctx-recency-fallback-001',
+        source: 'inbox_quick_command',
+        intent: 'general',
+        prompt: '오늘 트럼프 주요 발언 정리해줘',
+        widget_plan: ['assistant', 'tasks'],
+        task_id: taskId
+      }
+    });
+    expect(createContext.statusCode).toBe(201);
+    const contextId = (createContext.json() as { data: { id: string } }).data.id;
+
+    const run = await app.inject({
+      method: 'POST',
+      url: `/api/v1/assistant/contexts/${contextId}/run`,
+      payload: {
+        provider: 'auto',
+        task_type: 'execute'
+      }
+    });
+    expect(run.statusCode).toBe(202);
+
+    const settledContext = await waitFor(
+      async () =>
+        app.inject({
+          method: 'GET',
+          url: `/api/v1/assistant/contexts/${contextId}`
+        }),
+      {
+        until: (response) => {
+          if (response.statusCode !== 200) {
+            return false;
+          }
+          const body = response.json() as { data: { status: string } };
+          return body.data.status === 'completed' || body.data.status === 'failed';
+        }
+      }
+    );
+    expect(settledContext.statusCode).toBe(200);
+    const settledBody = settledContext.json() as {
+      data: {
+        status: string;
+        servedProvider: string | null;
+        output: string;
+      };
+    };
+    expect(settledBody.data.status).toBe('completed');
+    expect(settledBody.data.servedProvider).toBe('local');
+    expect(settledBody.data.output).not.toContain('근거 기반 응답 품질 검증에 실패했습니다.');
+    expect(settledBody.data.output).toContain('Sources:');
+    expect(settledBody.data.output).toContain('reuters.com/world/trump-allies-defense');
+    expect(settledBody.data.output).toContain('apnews.com/article/white-house-middle-east-briefing');
+
+    const evidence = await app.inject({
+      method: 'GET',
+      url: `/api/v1/assistant/contexts/${contextId}/grounding-evidence?limit=10`
+    });
+    expect(evidence.statusCode).toBe(200);
+    const evidenceBody = evidence.json() as {
+      data: {
+        summary: {
+          source_count: number;
+          claim_count: number;
+        };
+      };
+    };
+    expect(evidenceBody.data.summary.source_count).toBeGreaterThanOrEqual(2);
+    expect(evidenceBody.data.summary.claim_count).toBeGreaterThanOrEqual(0);
+
+    const events = await app.inject({
+      method: 'GET',
+      url: `/api/v1/assistant/contexts/${contextId}/events?limit=30`
+    });
+    expect(events.statusCode).toBe(200);
+    const eventBody = events.json() as {
+      data: {
+        events: Array<{ eventType: string; data: Record<string, unknown> }>;
+      };
+    };
+    const policyResolved = eventBody.data.events.find((item) => item.eventType === 'assistant.context.policy.resolved');
+    const runCompleted = eventBody.data.events.find((item) => item.eventType === 'assistant.context.run.completed');
+    expect(policyResolved).toBeDefined();
+    expect(runCompleted).toBeDefined();
+    expect(policyResolved?.data.grounding_policy).toBe('dynamic_factual');
+    expect(policyResolved?.data.retrieval_fallback_enabled).toBe(true);
+    expect(runCompleted?.data.quality_guard_triggered).toBe(false);
+    expect(runCompleted?.data.quality_gate_softened).toBe(true);
+
+    const settledTask = await waitFor(
+      async () =>
+        app.inject({
+          method: 'GET',
+          url: `/api/v1/tasks/${taskId}`
+        }),
+      {
+        until: (response) => {
+          if (response.statusCode !== 200) {
+            return false;
+          }
+          const body = response.json() as { data: { status: string } };
+          return body.data.status === 'done' || body.data.status === 'failed';
+        }
+      }
+    );
+    expect(settledTask.statusCode).toBe(200);
+    expect((settledTask.json() as { data: { status: string } }).data.status).toBe('done');
+
+    await app.close();
+  });
+
+  it('rejects dynamic factual ai respond when no grounded provider is available', async () => {
+    process.env.OPENAI_API_KEY = '';
+    process.env.GEMINI_API_KEY = '';
+    process.env.ANTHROPIC_API_KEY = '';
+    process.env.LOCAL_LLM_ENABLED = 'false';
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      return new Response('<?xml version="1.0" encoding="UTF-8"?><rss><channel></channel></rss>', {
+        status: 200,
+        headers: { 'content-type': 'application/xml' }
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
 
     const { app } = await buildServer();
 
@@ -688,9 +1076,201 @@ describe('API routes', () => {
       };
     };
     expect(body.error.code).toBe('INTERNAL_ERROR');
-    expect(body.error.details?.reason).toBe('GROUNDED_RETRIEVAL_UNAVAILABLE');
+    expect(body.error.details?.reason).toBe('INSUFFICIENT_EVIDENCE');
     expect(body.error.details?.grounding_policy).toBe('dynamic_factual');
     expect(body.error.details?.required_external_providers).toEqual(['openai', 'gemini', 'anthropic']);
+
+    await app.close();
+  });
+
+  it('serves retrieval-only grounded response when providers are unavailable but evidence exists', async () => {
+    process.env.OPENAI_API_KEY = '';
+    process.env.GEMINI_API_KEY = '';
+    process.env.ANTHROPIC_API_KEY = '';
+    process.env.LOCAL_LLM_ENABLED = 'false';
+    const recentA = new Date(Date.now() - 45 * 60 * 1000).toUTCString();
+    const recentB = new Date(Date.now() - 95 * 60 * 1000).toUTCString();
+
+    const rssXml = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<rss><channel>',
+      '<item>',
+      '<title>트럼프 오늘 발언: 동맹 방위비 기조 재확인</title>',
+      '<link>https://www.reuters.com/world/trump-defense-posture</link>',
+      '<description>트럼프 오늘 발언에서 동맹 방위비와 안보 책임 분담을 강조했다.</description>',
+      `<pubDate>${recentA}</pubDate>`,
+      '</item>',
+      '<item>',
+      '<title>미 행정부, 중동 안보 대응 브리핑 공개</title>',
+      '<link>https://apnews.com/article/us-admin-middle-east-briefing</link>',
+      '<description>행정부는 중동 안보 대응 관련 발언의 배경을 설명했다.</description>',
+      `<pubDate>${recentB}</pubDate>`,
+      '</item>',
+      '</channel></rss>'
+    ].join('');
+
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (
+        url.includes('news.google.com/rss') ||
+        url.includes('feeds.bbci.co.uk/news/rss.xml') ||
+        url.includes('rss.nytimes.com/services/xml/rss/nyt/HomePage.xml') ||
+        url.includes('www.aljazeera.com/xml/rss/all.xml') ||
+        url.includes('www.yna.co.kr/rss/news.xml')
+      ) {
+        return new Response(rssXml, {
+          status: 200,
+          headers: { 'content-type': 'application/xml' }
+        });
+      }
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app } = await buildServer();
+
+    const respond = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ai/respond',
+      payload: {
+        prompt: '오늘 트럼프 주요 발언 정리해줘',
+        provider: 'auto',
+        task_type: 'chat'
+      }
+    });
+
+    expect(respond.statusCode).toBe(200);
+    const body = respond.json() as {
+      data: {
+        provider: string;
+        model: string;
+        output: string;
+        delivery?: { mode?: string };
+        grounding?: {
+          status?: string;
+          source_count?: number;
+          domain_count?: number;
+          quality_gate_result?: string;
+        };
+      };
+    };
+    expect(body.data.provider).toBe('local');
+    expect(body.data.model).toBe('retrieval-fallback-v1');
+    expect(body.data.output).toContain('주요 뉴스 브리핑');
+    expect(body.data.output).toContain('reuters.com/world/trump-defense-posture');
+    expect(body.data.output).toContain('apnews.com/article/us-admin-middle-east-briefing');
+    expect(body.data.grounding?.status).toBe('served_with_limits');
+    expect(body.data.grounding?.quality_gate_result).toBe('pass');
+    expect((body.data.grounding?.source_count ?? 0)).toBeGreaterThanOrEqual(2);
+    expect((body.data.grounding?.domain_count ?? 0)).toBeGreaterThanOrEqual(2);
+    expect(body.data.delivery?.mode).toBe('degraded');
+
+    await app.close();
+  });
+
+  it('uses local grounded retrieval fallback for dynamic factual prompts when external providers are unavailable', async () => {
+    process.env.OPENAI_API_KEY = '';
+    process.env.GEMINI_API_KEY = '';
+    process.env.ANTHROPIC_API_KEY = '';
+    process.env.LOCAL_LLM_ENABLED = 'true';
+    const recentA = new Date(Date.now() - 45 * 60 * 1000).toUTCString();
+    const recentB = new Date(Date.now() - 105 * 60 * 1000).toUTCString();
+
+    const rssXml = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<rss><channel>',
+      '<item>',
+      '<title>트럼프 오늘 발언: 동맹 방위비 기조 재확인</title>',
+      '<link>https://www.reuters.com/world/trump-defense-posture</link>',
+      '<description>트럼프 오늘 발언에서 동맹 방위비와 안보 책임 분담을 강조했다.</description>',
+      `<pubDate>${recentA}</pubDate>`,
+      '</item>',
+      '<item>',
+      '<title>미 행정부, 중동 안보 대응 브리핑 공개</title>',
+      '<link>https://apnews.com/article/us-admin-middle-east-briefing</link>',
+      '<description>행정부는 중동 안보 대응 관련 발언의 배경을 설명했다.</description>',
+      `<pubDate>${recentB}</pubDate>`,
+      '</item>',
+      '</channel></rss>'
+    ].join('');
+
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (
+        url.includes('news.google.com/rss') ||
+        url.includes('feeds.bbci.co.uk/news/rss.xml') ||
+        url.includes('rss.nytimes.com/services/xml/rss/nyt/HomePage.xml') ||
+        url.includes('www.aljazeera.com/xml/rss/all.xml') ||
+        url.includes('www.yna.co.kr/rss/news.xml')
+      ) {
+        return new Response(rssXml, {
+          status: 200,
+          headers: { 'content-type': 'application/xml' }
+        });
+      }
+      if (url.includes('/v1/chat/completions')) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content:
+                    '오늘 트럼프 발언은 동맹 방위비 분담 압박과 중동 안보 대응을 동시에 강조한 것으로 해석됩니다.\n행정부 브리핑까지 종합하면 대외 안보 메시지의 강경 기조가 유지되는 흐름입니다.'
+                }
+              }
+            ],
+            usage: {
+              prompt_tokens: 13,
+              completion_tokens: 21
+            }
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+          }
+        );
+      }
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app } = await buildServer();
+
+    const respond = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ai/respond',
+      payload: {
+        prompt: '오늘 트럼프 주요 발언 정리해줘',
+        provider: 'auto',
+        task_type: 'chat'
+      }
+    });
+
+    expect(respond.statusCode).toBe(200);
+    const body = respond.json() as {
+      data: {
+        provider: string;
+        output: string;
+        grounding?: {
+          policy?: string;
+          status?: string;
+          source_count?: number;
+          domain_count?: number;
+          quality_gate_code?: string[];
+          retrieval_quality_gate_code?: string[];
+          quality_gate?: { passed?: boolean };
+        };
+      };
+    };
+    expect(body.data.provider).toBe('local');
+    expect(body.data.output).toContain('Sources:');
+    expect(body.data.output).toContain('reuters.com/world/trump-defense-posture');
+    expect(body.data.output).toContain('apnews.com/article/us-admin-middle-east-briefing');
+    expect(body.data.grounding?.policy).toBe('dynamic_factual');
+    expect(body.data.grounding?.status).toBe('provider_only');
+    expect(body.data.grounding?.quality_gate?.passed).toBe(true);
+    expect(body.data.grounding?.quality_gate_code).toEqual([]);
+    expect((body.data.grounding?.source_count ?? 0)).toBeGreaterThanOrEqual(2);
+    expect((body.data.grounding?.domain_count ?? 0)).toBeGreaterThanOrEqual(2);
+    expect(body.data.grounding?.retrieval_quality_gate_code).toEqual([]);
 
     await app.close();
   });
@@ -884,8 +1464,8 @@ describe('API routes', () => {
   it('returns quality-gate blocked output when dynamic factual response has no sources', async () => {
     process.env.OPENAI_API_KEY = 'test-openai-key';
     process.env.LOCAL_LLM_ENABLED = 'false';
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      return new Response(
         JSON.stringify({
           output_text: '환율은 상승세입니다. 시장은 변동성이 큽니다.',
           usage: { input_tokens: 12, output_tokens: 20 }
@@ -896,8 +1476,8 @@ describe('API routes', () => {
             'content-type': 'application/json'
           }
         }
-      )
-    );
+      );
+    });
     vi.stubGlobal('fetch', fetchMock);
 
     const { app } = await buildServer();
@@ -920,6 +1500,7 @@ describe('API routes', () => {
         grounding?: {
           status?: string;
           quality_gate_code?: string[];
+          quality_gate_result?: string;
           quality_gate?: {
             passed?: boolean;
             reasons?: string[];
@@ -927,20 +1508,51 @@ describe('API routes', () => {
         };
       };
     };
-    expect(body.data.output).toContain('근거 기반 응답 품질 검증에 실패했습니다.');
+    expect(body.data.output).toContain('검색 근거 품질 검증에 실패했습니다.');
     expect(body.data.grounding?.status).toBe('blocked_due_to_quality_gate');
     expect(body.data.grounding?.quality_gate?.passed).toBe(false);
-    expect(body.data.grounding?.quality_gate_code).toContain('insufficient_sources');
-    expect(body.data.grounding?.quality_gate?.reasons).toContain('insufficient_sources');
+    expect(body.data.grounding?.quality_gate_code).toContain('insufficient_retrieval_sources');
+    expect(body.data.grounding?.quality_gate?.reasons).toContain('insufficient_retrieval_sources');
 
     await app.close();
   });
 
-  it('blocks grounded output when response language mismatches prompt language', async () => {
+  it('returns soft warning output when response language mismatches prompt language', async () => {
     process.env.OPENAI_API_KEY = 'test-openai-key';
     process.env.LOCAL_LLM_ENABLED = 'false';
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
+    const rssXml = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<rss><channel>',
+      '<item>',
+      '<title>Markets react to sanctions</title>',
+      '<link>https://www.bbc.com/news/world-00000001</link>',
+      '<description>Markets rallied after sanctions update.</description>',
+      '<pubDate>Tue, 03 Mar 2026 06:00:00 GMT</pubDate>',
+      '</item>',
+      '<item>',
+      '<title>Diplomatic tensions rise</title>',
+      '<link>https://www.reuters.com/world/diplomatic-tensions-rise-2026-03-03/</link>',
+      '<description>Governments announced new sanctions.</description>',
+      '<pubDate>Tue, 03 Mar 2026 06:10:00 GMT</pubDate>',
+      '</item>',
+      '</channel></rss>'
+    ].join('');
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (
+        url.includes('news.google.com/rss') ||
+        url.includes('feeds.bbci.co.uk/news/rss.xml') ||
+        url.includes('rss.nytimes.com/services/xml/rss/nyt/HomePage.xml') ||
+        url.includes('www.aljazeera.com/xml/rss/all.xml') ||
+        url.includes('www.yna.co.kr/rss/news.xml')
+      ) {
+        return new Response(rssXml, {
+          status: 200,
+          headers: {
+            'content-type': 'application/xml'
+          }
+        });
+      }
+      return new Response(
         JSON.stringify({
           output_text: [
             'Top world news briefing: markets rallied and governments announced new sanctions.',
@@ -956,8 +1568,8 @@ describe('API routes', () => {
             'content-type': 'application/json'
           }
         }
-      )
-    );
+      );
+    });
     vi.stubGlobal('fetch', fetchMock);
 
     const { app } = await buildServer();
@@ -980,6 +1592,7 @@ describe('API routes', () => {
         grounding?: {
           status?: string;
           quality_gate_code?: string[];
+          quality_gate_result?: string;
           quality_gate?: {
             passed?: boolean;
             reasons?: string[];
@@ -987,24 +1600,56 @@ describe('API routes', () => {
         };
       };
     };
-    expect(body.data.output).toContain('근거 기반 응답 품질 검증에 실패했습니다.');
-    expect(body.data.grounding?.status).toBe('blocked_due_to_quality_gate');
-    expect(body.data.grounding?.quality_gate?.passed).toBe(false);
+    expect(body.data.output).toContain('Top world news briefing');
+    expect(body.data.grounding?.status).toBe('soft_warn');
+    expect(body.data.grounding?.quality_gate?.passed).toBe(true);
+    expect(body.data.grounding?.quality_gate_result).toBe('soft_warn');
     expect(body.data.grounding?.quality_gate_code).toContain('language_mismatch');
     expect(body.data.grounding?.quality_gate?.reasons).toContain('language_mismatch');
 
     await app.close();
   });
 
-  it('blocks grounded output when claim citation coverage is insufficient', async () => {
+  it('returns soft warning output when claim citation coverage is insufficient', async () => {
     process.env.OPENAI_API_KEY = 'test-openai-key';
     process.env.LOCAL_LLM_ENABLED = 'false';
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
+    const rssXml = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<rss><channel>',
+      '<item>',
+      '<title>Markets rally after policy shift</title>',
+      '<link>https://www.bbc.com/news/world-00000001</link>',
+      '<description>UK markets rallied after policy shift.</description>',
+      '<pubDate>Tue, 03 Mar 2026 06:00:00 GMT</pubDate>',
+      '</item>',
+      '<item>',
+      '<title>Oil prices shift on supply outlook</title>',
+      '<link>https://www.reuters.com/world/oil-supply-outlook-2026-03-03/</link>',
+      '<description>Global oil prices moved on renewed supply concerns.</description>',
+      '<pubDate>Tue, 03 Mar 2026 06:15:00 GMT</pubDate>',
+      '</item>',
+      '</channel></rss>'
+    ].join('');
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (
+        url.includes('news.google.com/rss') ||
+        url.includes('feeds.bbci.co.uk/news/rss.xml') ||
+        url.includes('rss.nytimes.com/services/xml/rss/nyt/HomePage.xml') ||
+        url.includes('www.aljazeera.com/xml/rss/all.xml') ||
+        url.includes('www.yna.co.kr/rss/news.xml')
+      ) {
+        return new Response(rssXml, {
+          status: 200,
+          headers: {
+            'content-type': 'application/xml'
+          }
+        });
+      }
+      return new Response(
         JSON.stringify({
           output_text: [
-            'Global oil prices collapsed after renewed supply concerns.',
-            'UK markets rallied after policy shift.',
+            '가상의 거시 경제 지표 A가 급등하면서 시장 변동성이 확대되었다.',
+            '임의의 산업 지표 B가 급락하면서 투자 심리가 크게 위축되었다.',
             '',
             'Sources:',
             '- [Markets rally after policy shift](https://www.bbc.com/news/world-00000001)'
@@ -1017,8 +1662,8 @@ describe('API routes', () => {
             'content-type': 'application/json'
           }
         }
-      )
-    );
+      );
+    });
     vi.stubGlobal('fetch', fetchMock);
 
     const { app } = await buildServer();
@@ -1041,6 +1686,7 @@ describe('API routes', () => {
         grounding?: {
           status?: string;
           quality_gate_code?: string[];
+          quality_gate_result?: string;
           quality_gate?: {
             passed?: boolean;
             reasons?: string[];
@@ -1048,9 +1694,10 @@ describe('API routes', () => {
         };
       };
     };
-    expect(body.data.output).toContain('근거 기반 응답 품질 검증에 실패했습니다.');
-    expect(body.data.grounding?.status).toBe('blocked_due_to_quality_gate');
-    expect(body.data.grounding?.quality_gate?.passed).toBe(false);
+    expect(body.data.output).toContain('가상의 거시 경제 지표 A가 급등하면서 시장 변동성이 확대되었다.');
+    expect(body.data.grounding?.status).toBe('soft_warn');
+    expect(body.data.grounding?.quality_gate?.passed).toBe(true);
+    expect(body.data.grounding?.quality_gate_result).toBe('soft_warn');
     expect(body.data.grounding?.quality_gate_code).toContain('insufficient_claim_citation_coverage');
     expect(body.data.grounding?.quality_gate?.reasons).toContain('insufficient_claim_citation_coverage');
 

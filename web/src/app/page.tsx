@@ -775,8 +775,8 @@ export default function JarvisHUD() {
 
     openWidgets(nextMounted, {
       focus: missionRecommendedWidget,
-      replace: true,
-      activate: "all",
+      replace: false,
+      activate: "focus_only",
     });
 
     missionAutoFocusRef.current = signature;

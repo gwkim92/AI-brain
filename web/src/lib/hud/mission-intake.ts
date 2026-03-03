@@ -11,6 +11,8 @@ export type MissionIntakePayload = {
   taskMode: HudTaskMode;
   widgetPlan: HudWidgetId[];
   prestarted?: boolean;
+  requestNonce?: string;
+  prestartedContextId?: string;
   missionContract?: {
     constraints?: MissionContractConstraintsInput;
     approval_policy?: MissionApprovalPolicyInput;
@@ -33,7 +35,14 @@ function createIntakeId(): string {
   return `intake_${Date.now()}`;
 }
 
-export function buildMissionIntake(prompt: string, source: MissionIntakeSource = "inbox_quick_command"): MissionIntakePayload {
+export function buildMissionIntake(
+  prompt: string,
+  source: MissionIntakeSource = "inbox_quick_command",
+  options?: {
+    requestNonce?: string;
+    prestartedContextId?: string;
+  }
+): MissionIntakePayload {
   const intent = inferHudIntent(prompt);
   return {
     id: createIntakeId(),
@@ -42,6 +51,8 @@ export function buildMissionIntake(prompt: string, source: MissionIntakeSource =
     intent,
     taskMode: resolveTaskModeForIntent(intent),
     widgetPlan: buildWidgetPlan(intent, prompt),
+    requestNonce: options?.requestNonce,
+    prestartedContextId: options?.prestartedContextId,
     createdAt: new Date().toISOString(),
   };
 }

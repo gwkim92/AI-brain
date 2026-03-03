@@ -12,12 +12,14 @@ import {
     type HudSessionRestoreMode,
     type HudSession,
 } from "@/lib/hud/session";
+import { emitRuntimeEvent } from "@/lib/runtime-events";
 
 const STORE_KEY_ACTIVE = "hud-active-widgets";
 const STORE_KEY_MOUNTED = "hud-mounted-widgets";
 const STORE_KEY_FOCUSED = "hud-focused-widget";
 const STORE_KEY_PRESET = "hud-workspace-preset";
 const FALLBACK_WIDGET = "inbox";
+const SESSION_PROMPT_DEDUPE_WINDOW_MS = 3 * 60 * 1000;
 const KNOWN_WIDGET_IDS = new Set([
     "inbox",
     "assistant",
@@ -84,6 +86,141 @@ function normalizeWidgetIds(value: unknown): string[] {
     );
 }
 
+function normalizeWidgetSnapshot(input: {
+    activeWidgets: string[];
+    mountedWidgets: string[];
+    focusedWidget: string | null;
+}): {
+    activeWidgets: string[];
+    mountedWidgets: string[];
+    focusedWidget: string | null;
+} {
+    const normalizedMounted = normalizeWidgetIds(input.mountedWidgets).filter((id) => KNOWN_WIDGET_IDS.has(id));
+    const normalizedActive = normalizeWidgetIds(input.activeWidgets).filter((id) => KNOWN_WIDGET_IDS.has(id));
+    const mountedWidgets =
+        normalizedMounted.length > 0
+            ? normalizedMounted
+            : normalizedActive.length > 0
+                ? [...normalizedActive]
+                : [FALLBACK_WIDGET];
+    const activeFromMounted = normalizedActive.filter((id) => mountedWidgets.includes(id));
+    const activeWidgets =
+        activeFromMounted.length > 0
+            ? activeFromMounted
+            : [input.focusedWidget && mountedWidgets.includes(input.focusedWidget) ? input.focusedWidget : mountedWidgets[0] ?? FALLBACK_WIDGET];
+    const focusedWidget =
+        input.focusedWidget && activeWidgets.includes(input.focusedWidget)
+            ? input.focusedWidget
+            : activeWidgets[activeWidgets.length - 1] ?? mountedWidgets[0] ?? FALLBACK_WIDGET;
+
+    return {
+        activeWidgets,
+        mountedWidgets: Array.from(new Set([...mountedWidgets, ...activeWidgets])),
+        focusedWidget,
+    };
+}
+
+function normalizePromptKey(prompt: string): string {
+    return prompt.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function resolvePreferredSessionFocus(
+    mountedWidgets: string[],
+    activeWidgets: string[],
+    fallbackFocusedWidget: string | null | undefined,
+    options?: {
+        taskLinked?: boolean;
+        preferAssistant?: boolean;
+    }
+): string | null {
+    if (options?.preferAssistant && mountedWidgets.includes("assistant")) {
+        return "assistant";
+    }
+    if (options?.taskLinked && mountedWidgets.includes("assistant")) {
+        return "assistant";
+    }
+    if (fallbackFocusedWidget && mountedWidgets.includes(fallbackFocusedWidget)) {
+        return fallbackFocusedWidget;
+    }
+    const activeCandidate = activeWidgets.find((widgetId) => mountedWidgets.includes(widgetId));
+    if (activeCandidate) {
+        return activeCandidate;
+    }
+    if (mountedWidgets.includes("assistant")) {
+        return "assistant";
+    }
+    if (mountedWidgets.includes("tasks")) {
+        return "tasks";
+    }
+    return mountedWidgets[mountedWidgets.length - 1] ?? null;
+}
+
+function dedupeRuntimeSessions(sessions: HudSession[]): HudSession[] {
+    const seenIds = new Set<string>();
+    const seenTaskIds = new Set<string>();
+    const seenMissionIds = new Set<string>();
+    const seenPromptTs = new Map<string, number>();
+    let activeConsumed = false;
+    const next: HudSession[] = [];
+
+    for (const session of sessions) {
+        const id = session.id.trim();
+        if (!id || seenIds.has(id)) {
+            continue;
+        }
+
+        const taskId = typeof session.taskId === "string" && session.taskId.trim().length > 0 ? session.taskId.trim() : null;
+        if (taskId && seenTaskIds.has(taskId)) {
+            continue;
+        }
+        const missionId =
+            typeof session.missionId === "string" && session.missionId.trim().length > 0 ? session.missionId.trim() : null;
+        if (missionId && seenMissionIds.has(missionId)) {
+            continue;
+        }
+
+        const promptKey = normalizePromptKey(session.prompt);
+        if (promptKey) {
+            const createdAtMs = Date.parse(session.createdAt);
+            const seenCreatedAtMs = seenPromptTs.get(promptKey);
+            if (
+                typeof seenCreatedAtMs === "number" &&
+                Number.isFinite(createdAtMs) &&
+                Math.abs(createdAtMs - seenCreatedAtMs) <= SESSION_PROMPT_DEDUPE_WINDOW_MS
+            ) {
+                continue;
+            }
+            if (Number.isFinite(createdAtMs)) {
+                seenPromptTs.set(promptKey, createdAtMs);
+            }
+        }
+
+        seenIds.add(id);
+        if (taskId) {
+            seenTaskIds.add(taskId);
+        }
+        if (missionId) {
+            seenMissionIds.add(missionId);
+        }
+
+        if (session.status === "active") {
+            if (activeConsumed) {
+                next.push({
+                    ...session,
+                    status: "background",
+                });
+            } else {
+                next.push(session);
+                activeConsumed = true;
+            }
+        } else {
+            next.push(session);
+        }
+    }
+
+    return next.slice(0, 20);
+}
+
 interface HUDContextType {
     activeWidgets: string[];
     mountedWidgets: string[];
@@ -121,6 +258,7 @@ interface HUDContextType {
     switchSession: (sessionId: string, options?: { restoreMode?: HudSessionRestoreMode }) => void;
     archiveSession: (sessionId: string) => void;
     linkSessionTask: (sessionId: string, taskId?: string, missionId?: string) => void;
+    markSessionContextDelivered: (sessionId: string, contextId: string, revision: number) => void;
     setActiveWorkspacePreset: (preset: HudWorkspacePreset | null) => void;
     visualCoreScene: Jarvis3DScene | null;
     setVisualCoreScene: (scene: Jarvis3DScene) => void;
@@ -142,15 +280,16 @@ export function HUDProvider({ children }: { children: ReactNode }) {
         restoredRef.current = true;
         const savedMounted = readStoredArray(STORE_KEY_MOUNTED, [FALLBACK_WIDGET]);
         const savedActive = readStoredArray(STORE_KEY_ACTIVE, savedMounted);
-        const normalizedActive = savedActive.filter((widgetId) => savedMounted.includes(widgetId));
-        const resolvedActive = normalizedActive.length > 0 ? normalizedActive : [...savedMounted];
         const savedFocused = readStoredString(STORE_KEY_FOCUSED);
-        const resolvedFocused =
-            savedFocused && resolvedActive.includes(savedFocused) ? savedFocused : resolvedActive[resolvedActive.length - 1] ?? FALLBACK_WIDGET;
+        const normalized = normalizeWidgetSnapshot({
+            activeWidgets: savedActive,
+            mountedWidgets: savedMounted,
+            focusedWidget: savedFocused,
+        });
         const savedPreset = readStoredString(STORE_KEY_PRESET) as HudWorkspacePreset | null;
-        setActiveWidgets(resolvedActive);
-        setMountedWidgets(savedMounted);
-        setFocusedWidget(resolvedFocused);
+        setActiveWidgets(normalized.activeWidgets);
+        setMountedWidgets(normalized.mountedWidgets);
+        setFocusedWidget(normalized.focusedWidget);
         setActiveWorkspacePreset(savedPreset);
     }, []);
 
@@ -308,6 +447,24 @@ export function HUDProvider({ children }: { children: ReactNode }) {
         persistSessions(sessions);
     }, [sessions, sessionsLoaded]);
 
+    useEffect(() => {
+        if (!sessionsLoaded) {
+            return;
+        }
+        setSessions((prev) => {
+            const deduped = dedupeRuntimeSessions(prev);
+            if (deduped.length !== prev.length) {
+                return deduped;
+            }
+            for (let index = 0; index < deduped.length; index += 1) {
+                if (deduped[index]?.id !== prev[index]?.id || deduped[index]?.status !== prev[index]?.status) {
+                    return deduped;
+                }
+            }
+            return prev;
+        });
+    }, [sessionsLoaded]);
+
     const startSession = useCallback((
         prompt: string,
         snapshot?: {
@@ -343,12 +500,24 @@ export function HUDProvider({ children }: { children: ReactNode }) {
         const nextPreset = Object.prototype.hasOwnProperty.call(snapshot ?? {}, "workspacePreset")
             ? snapshot?.workspacePreset ?? null
             : activeWorkspacePreset;
+        const normalizedSnapshot = normalizeWidgetSnapshot({
+            activeWidgets: resolvedActiveWidgets,
+            mountedWidgets: resolvedMountedWidgets,
+            focusedWidget: nextFocused,
+        });
 
-        const newSession = buildSession(prompt, resolvedActiveWidgets, resolvedMountedWidgets, nextFocused, nextPreset, {
+        const newSession = buildSession(
+            prompt,
+            normalizedSnapshot.activeWidgets,
+            normalizedSnapshot.mountedWidgets,
+            normalizedSnapshot.focusedWidget,
+            nextPreset,
+            {
             id: snapshot?.sessionId,
             intent: snapshot?.intent,
             restoreMode: snapshot?.restoreMode,
-        });
+            }
+        );
 
         setSessions((prev) => {
             let updated = prev.map((s) =>
@@ -364,7 +533,25 @@ export function HUDProvider({ children }: { children: ReactNode }) {
                     }
                     : s,
             );
-            updated = [newSession, ...updated.filter((session) => session.id !== newSession.id)];
+            const newPromptKey = normalizePromptKey(newSession.prompt);
+            const newCreatedAtMs = Date.parse(newSession.createdAt);
+            updated = [
+                newSession,
+                ...updated.filter((session) => {
+                    if (session.id === newSession.id) {
+                        return false;
+                    }
+                    const existingPromptKey = normalizePromptKey(session.prompt);
+                    if (!newPromptKey || newPromptKey !== existingPromptKey) {
+                        return true;
+                    }
+                    const existingCreatedAtMs = Date.parse(session.createdAt);
+                    if (Number.isNaN(newCreatedAtMs) || Number.isNaN(existingCreatedAtMs)) {
+                        return false;
+                    }
+                    return Math.abs(newCreatedAtMs - existingCreatedAtMs) > SESSION_PROMPT_DEDUPE_WINDOW_MS;
+                }),
+            ];
             return updated.slice(0, 20);
         });
         setActiveSessionId(newSession.id);
@@ -413,12 +600,15 @@ export function HUDProvider({ children }: { children: ReactNode }) {
                 )
             );
             const restoreMode = options?.restoreMode ?? target.restoreMode ?? "full";
-            const candidateFocused =
-                target.focusedWidget && resolvedTargetMountedWidgets.includes(target.focusedWidget)
-                    ? target.focusedWidget
-                    : targetActiveWidgets.find((id) => resolvedTargetMountedWidgets.includes(id)) ??
-                    resolvedTargetMountedWidgets[resolvedTargetMountedWidgets.length - 1] ??
-                    null;
+            const candidateFocused = resolvePreferredSessionFocus(
+                resolvedTargetMountedWidgets,
+                targetActiveWidgets,
+                target.focusedWidget,
+                {
+                    taskLinked: Boolean(target.taskId || target.missionId),
+                    preferAssistant: restoreMode === "focus_only",
+                }
+            );
             const resolvedTargetActiveWidgets = restoreMode === "focus_only"
                 ? [candidateFocused ?? resolvedTargetMountedWidgets[0] ?? "inbox"]
                 : [...resolvedTargetMountedWidgets];
@@ -426,6 +616,11 @@ export function HUDProvider({ children }: { children: ReactNode }) {
                 candidateFocused && resolvedTargetActiveWidgets.includes(candidateFocused)
                     ? candidateFocused
                     : resolvedTargetActiveWidgets[resolvedTargetActiveWidgets.length - 1] ?? null;
+            const normalizedTarget = normalizeWidgetSnapshot({
+                activeWidgets: resolvedTargetActiveWidgets,
+                mountedWidgets: resolvedTargetMountedWidgets,
+                focusedWidget: targetFocused,
+            });
 
             const currentActive = prev.find((s) => s.status === "active");
             let updated = prev.map((s) => {
@@ -433,9 +628,9 @@ export function HUDProvider({ children }: { children: ReactNode }) {
                     return {
                         ...s,
                         status: "active" as const,
-                        activeWidgets: resolvedTargetActiveWidgets,
-                        mountedWidgets: resolvedTargetMountedWidgets,
-                        focusedWidget: targetFocused,
+                        activeWidgets: normalizedTarget.activeWidgets,
+                        mountedWidgets: normalizedTarget.mountedWidgets,
+                        focusedWidget: normalizedTarget.focusedWidget,
                         workspacePreset: targetPreset,
                         lastWorkspacePreset: targetPreset,
                         restoreMode,
@@ -465,12 +660,20 @@ export function HUDProvider({ children }: { children: ReactNode }) {
                 });
             }
 
-            setActiveWidgets(resolvedTargetActiveWidgets);
-            setFocusedWidget(targetFocused);
+            setActiveWidgets(normalizedTarget.activeWidgets);
+            setFocusedWidget(normalizedTarget.focusedWidget);
             setActiveWorkspacePreset(targetPreset as HudWorkspacePreset | null);
-            setMountedWidgets(resolvedTargetMountedWidgets);
+            setMountedWidgets(normalizedTarget.mountedWidgets);
 
             setActiveSessionId(sessionId);
+            emitRuntimeEvent("session_switched", {
+                fromSessionId: currentActive?.id ?? null,
+                toSessionId: sessionId,
+                restoreMode,
+                activeWidgets: normalizedTarget.activeWidgets,
+                mountedWidgets: normalizedTarget.mountedWidgets,
+                focusedWidget: normalizedTarget.focusedWidget,
+            });
             return updated;
         });
     }, [activeWidgets, mountedWidgets, focusedWidget, activeWorkspacePreset]);
@@ -486,19 +689,75 @@ export function HUDProvider({ children }: { children: ReactNode }) {
     }, [activeSessionId]);
 
     const linkSessionTask = useCallback((sessionId: string, taskId?: string, missionId?: string) => {
-        setSessions((prev) => patchSession(prev, sessionId, { taskId, missionId }));
+        setSessions((prev) => {
+            const patched = patchSession(prev, sessionId, { taskId, missionId });
+            return patched
+                .filter((session) => {
+                    if (session.id === sessionId) {
+                        return true;
+                    }
+                    if (taskId && session.taskId === taskId) {
+                        return false;
+                    }
+                    if (missionId && session.missionId === missionId) {
+                        return false;
+                    }
+                    return true;
+                })
+                .slice(0, 20);
+        });
+    }, []);
+
+    const markSessionContextDelivered = useCallback((sessionId: string, contextId: string, revision: number) => {
+        if (!sessionId || !contextId || !Number.isFinite(revision)) {
+            return;
+        }
+        setSessions((prev) => {
+            const target = prev.find((session) => session.id === sessionId);
+            if (!target) {
+                return prev;
+            }
+            const currentMap = target.lastDeliveredContextRevision ?? {};
+            const currentRevision = currentMap[contextId];
+            if (typeof currentRevision === "number" && revision <= currentRevision) {
+                return prev;
+            }
+            return patchSession(prev, sessionId, {
+                lastDeliveredContextRevision: {
+                    ...currentMap,
+                    [contextId]: revision,
+                },
+            });
+        });
     }, []);
 
     useEffect(() => {
         if (!activeSessionId) return;
         setSessions((prev) =>
-            patchSession(prev, activeSessionId, {
-                activeWidgets: [...activeWidgets],
-                mountedWidgets: [...mountedWidgets],
-                focusedWidget,
-                workspacePreset: activeWorkspacePreset as string | null,
-                lastWorkspacePreset: activeWorkspacePreset as string | null,
-            })
+            {
+                const current = prev.find((session) => session.id === activeSessionId);
+                if (!current) {
+                    return prev;
+                }
+                const hasVisibleActiveWidgets = activeWidgets.length > 0;
+                const nextMountedWidgets = [...mountedWidgets];
+                const nextActiveWidgets = hasVisibleActiveWidgets
+                    ? [...activeWidgets]
+                    : current.activeWidgets.length > 0
+                        ? [...current.activeWidgets]
+                        : [resolvePreferredSessionFocus(nextMountedWidgets, [], current.focusedWidget) ?? "inbox"];
+                const nextFocusedWidget = hasVisibleActiveWidgets
+                    ? focusedWidget
+                    : current.focusedWidget ?? resolvePreferredSessionFocus(nextMountedWidgets, nextActiveWidgets, null);
+
+                return patchSession(prev, activeSessionId, {
+                    activeWidgets: nextActiveWidgets,
+                    mountedWidgets: nextMountedWidgets,
+                    focusedWidget: nextFocusedWidget,
+                    workspacePreset: activeWorkspacePreset as string | null,
+                    lastWorkspacePreset: activeWorkspacePreset as string | null,
+                });
+            }
         );
     }, [activeSessionId, activeWidgets, mountedWidgets, focusedWidget, activeWorkspacePreset]);
 
@@ -521,6 +780,7 @@ export function HUDProvider({ children }: { children: ReactNode }) {
             switchSession,
             archiveSession,
             linkSessionTask,
+            markSessionContextDelivered,
             setActiveWorkspacePreset,
             visualCoreScene,
             setVisualCoreScene

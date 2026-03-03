@@ -16,6 +16,8 @@ import {
     shouldRetryGpgpu,
 } from "@/lib/visual-core/runtime";
 import { classifyGpgpuSample, isSampleStalled } from "@/lib/visual-core/health";
+import { emitRuntimeEvent } from "@/lib/runtime-events";
+import { isFeatureEnabled } from "@/lib/feature-flags";
 
 const SIZE = 512;
 const TOTAL_PARTICLES = SIZE * SIZE;
@@ -42,7 +44,6 @@ const GPGPU_HEALTH_CHECK_INTERVAL_MS = 450;
 const GPGPU_STALLED_THRESHOLD = 4;
 const GPGPU_RECOVERY_RETRY_DELAY_MS = 12000;
 const ENGINE_CROSSFADE_MS = 280;
-const AUTO_FAILOVER_ENABLED = process.env.NEXT_PUBLIC_VISUAL_CORE_FAILOVER !== "0";
 
 function radicalInverseVdC(index: number): number {
     let bits = index;
@@ -1188,9 +1189,14 @@ export function Jarvis3DCore({ hideUI = false, baseMode, overlayFx, highVisibili
     const [lastSwitchAtMs, setLastSwitchAtMs] = useState(() => Date.now());
 
     const activeEngineRef = useRef<VisualCoreEngine>(activeEngine);
+    const lastRuntimeEventEngineRef = useRef<VisualCoreEngine>(activeEngine);
     const crossfadeTimerRef = useRef<number | null>(null);
     const fadeRafRef = useRef<number | null>(null);
     const initializedEngineRef = useRef(false);
+    const autoFailoverEnabled = useMemo(
+        () => isFeatureEnabled("visual_core.auto_failover", true),
+        []
+    );
 
     useEffect(() => {
         activeEngineRef.current = activeEngine;
@@ -1286,7 +1292,7 @@ export function Jarvis3DCore({ hideUI = false, baseMode, overlayFx, highVisibili
             if (activeEngineRef.current !== engine) {
                 return;
             }
-            if (!AUTO_FAILOVER_ENABLED) {
+            if (!autoFailoverEnabled) {
                 setFailureCode(code);
                 setIsRecovered(false);
                 return;
@@ -1300,7 +1306,7 @@ export function Jarvis3DCore({ hideUI = false, baseMode, overlayFx, highVisibili
             const nextEngine = getFallbackEngine(engine);
             performEngineSwitch(nextEngine, code, false);
         },
-        [performEngineSwitch]
+        [autoFailoverEnabled, performEngineSwitch]
     );
 
     const handleGpgpuHealthSnapshot = React.useCallback(
@@ -1336,7 +1342,7 @@ export function Jarvis3DCore({ hideUI = false, baseMode, overlayFx, highVisibili
     }, [forcedEngine, forcedEngineHydrated, performEngineSwitch, webGlRenderTier]);
 
     useEffect(() => {
-        if (!AUTO_FAILOVER_ENABLED) {
+        if (!autoFailoverEnabled) {
             return;
         }
         if (
@@ -1358,7 +1364,7 @@ export function Jarvis3DCore({ hideUI = false, baseMode, overlayFx, highVisibili
         return () => {
             window.clearTimeout(timer);
         };
-    }, [activeEngine, forcedEngine, lastSwitchAtMs, performEngineSwitch, webGlRenderTier]);
+    }, [activeEngine, autoFailoverEnabled, forcedEngine, lastSwitchAtMs, performEngineSwitch, webGlRenderTier]);
 
     const resolvedBaseMode = baseMode ?? manualBaseMode;
     const resolvedOverlayFx = overlayFx ?? manualOverlayFx;
@@ -1396,6 +1402,23 @@ export function Jarvis3DCore({ hideUI = false, baseMode, overlayFx, highVisibili
                 detail,
             })
         );
+    }, [activeEngine, failureCode, isRecovered, runtimeReason, runtimeStatus, switchCount]);
+
+    useEffect(() => {
+        const previous = lastRuntimeEventEngineRef.current;
+        if (previous === activeEngine) {
+            return;
+        }
+        emitRuntimeEvent("visual_core_engine_switched", {
+            fromEngine: previous,
+            toEngine: activeEngine,
+            failureCode,
+            switchCount,
+            isRecovered,
+            reason: runtimeReason,
+            status: runtimeStatus,
+        });
+        lastRuntimeEventEngineRef.current = activeEngine;
     }, [activeEngine, failureCode, isRecovered, runtimeReason, runtimeStatus, switchCount]);
 
     const renderEngineLayer = (engine: VisualCoreEngine, activeLayer: boolean) => {

@@ -49,6 +49,24 @@ export type GroundingQualityGateResult = {
   };
 };
 
+export type GroundingGateResult = 'pass' | 'soft_warn' | 'hard_fail';
+
+const SOFT_WARN_REASON_CODES = new Set<string>([
+  'insufficient_claim_citation_coverage',
+  'language_mismatch'
+]);
+
+export function classifyGroundingGateResult(reasons: string[]): GroundingGateResult {
+  const normalizedReasons = normalizeGroundingQualityReasons(reasons);
+  if (normalizedReasons.length === 0) {
+    return 'pass';
+  }
+  if (normalizedReasons.every((reason) => SOFT_WARN_REASON_CODES.has(reason))) {
+    return 'soft_warn';
+  }
+  return 'hard_fail';
+}
+
 function resolveThresholds(decision: GroundingDecision): { minSources: number; minDomains: number } {
   if (decision.signals.news) {
     return { minSources: 2, minDomains: 2 };

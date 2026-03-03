@@ -14,6 +14,7 @@ import {
 import { buildGroundingUnavailableMessage, resolveGroundingPolicy, toGroundingUnavailableCode } from '../retrieval/policy-router';
 import {
   buildGroundingQualityBlockedMessage,
+  classifyGroundingGateResult,
   evaluateGroundingQualityGate,
   normalizeGroundingQualityReasons
 } from '../retrieval/quality-gate';
@@ -47,6 +48,8 @@ const AiRespondSchema = z.object({
   max_output_tokens: z.number().int().positive().max(32000).optional()
 });
 
+const QUALITY_SOFT_GATE_ENABLED = process.env.JARVIS_FF_ASSISTANT_QUALITY_SOFT_GATE_V2 !== '0';
+
 export async function aiRoutes(app: FastifyInstance, ctx: RouteContext) {
   app.post('/api/v1/ai/respond', async (request, reply) => {
     const parsed = AiRespondSchema.safeParse(request.body);
@@ -63,10 +66,9 @@ export async function aiRoutes(app: FastifyInstance, ctx: RouteContext) {
     const externalProviderEnabled = providerAvailability.some((item) => item.enabled && item.provider !== 'local');
     const localProviderEnabled = providerAvailability.some((item) => item.provider === 'local' && item.enabled);
     const strictLocalOnly = parsed.data.provider === 'local' && parsed.data.strict_provider;
-    const shouldTryNewsRetrievalFallback =
-      grounding.requiresGrounding && grounding.signals.news && localProviderEnabled && (!externalProviderEnabled || strictLocalOnly);
+    const shouldRunGroundedRetrieval = grounding.requiresGrounding;
     let retrievalPack: Awaited<ReturnType<typeof retrieveWebEvidence>> | null = null;
-    if (shouldTryNewsRetrievalFallback) {
+    if (shouldRunGroundedRetrieval) {
       retrievalPack = await retrieveWebEvidence({
         prompt: parsed.data.prompt,
         rewrittenQueries: generateQueryRewriteCandidates({
@@ -86,8 +88,12 @@ export async function aiRoutes(app: FastifyInstance, ctx: RouteContext) {
     const canUseLocalGroundedFallback = Boolean(
       retrievalPack && retrievalPack.sources.length > 0 && localProviderEnabled && !retrievalGateBlocked
     );
+    const canUseRetrievalOnlyFallback = Boolean(
+      retrievalPack && retrievalPack.sources.length > 0 && !retrievalGateBlocked
+    );
+    const canServeGroundedRequest = canUseLocalGroundedFallback || canUseRetrievalOnlyFallback;
 
-    if (grounding.requiresGrounding && (!externalProviderEnabled || strictLocalOnly) && !canUseLocalGroundedFallback) {
+    if (grounding.requiresGrounding && (!externalProviderEnabled || strictLocalOnly) && !canServeGroundedRequest) {
       const errorCode = retrievalGateBlocked ? 'INSUFFICIENT_EVIDENCE' : toGroundingUnavailableCode(grounding);
       const blockedMessage =
         retrievalGateBlocked && retrievalQualityGate
@@ -107,6 +113,11 @@ export async function aiRoutes(app: FastifyInstance, ctx: RouteContext) {
     }
 
     try {
+      const useRetrievalOnlyFallback =
+        grounding.requiresGrounding &&
+        canUseRetrievalOnlyFallback &&
+        (!externalProviderEnabled || strictLocalOnly) &&
+        !localProviderEnabled;
       const useStructuredLocalNewsFlow = Boolean(canUseLocalGroundedFallback && grounding.signals.news);
       const groundingInstruction = useStructuredLocalNewsFlow ? '' : buildGroundingSystemInstruction(grounding);
       const retrievalInstruction = useStructuredLocalNewsFlow ? '' : retrievalPack ? buildRetrievalSystemInstruction(retrievalPack) : '';
@@ -130,25 +141,29 @@ export async function aiRoutes(app: FastifyInstance, ctx: RouteContext) {
             ),
             languagePolicy.instruction
           );
-      const routed = await ctx.providerRouter.generate({
-        prompt: generationPrompt,
-        systemPrompt: generationSystemPrompt,
-        provider: parsed.data.provider,
-        strictProvider: parsed.data.strict_provider,
-        taskType: parsed.data.task_type,
-        model: parsed.data.model,
-        temperature: grounding.requiresGrounding ? strictFactualTemperature : parsed.data.temperature,
-        topP: grounding.requiresGrounding ? 0.9 : undefined,
-        stop: grounding.requiresGrounding ? ['<|im_start|>', '<|im_end|>', '<|endoftext|>'] : undefined,
-        maxOutputTokens: grounding.requiresGrounding ? strictFactualMaxTokens : parsed.data.max_output_tokens,
-        excludeProviders: grounding.requiresGrounding && !canUseLocalGroundedFallback ? ['local'] : undefined
-      });
+      const routed = useRetrievalOnlyFallback
+        ? null
+        : await ctx.providerRouter.generate({
+            prompt: generationPrompt,
+            systemPrompt: generationSystemPrompt,
+            provider: parsed.data.provider,
+            strictProvider: parsed.data.strict_provider,
+            taskType: parsed.data.task_type,
+            model: parsed.data.model,
+            temperature: grounding.requiresGrounding ? strictFactualTemperature : parsed.data.temperature,
+            topP: grounding.requiresGrounding ? 0.9 : undefined,
+            stop: grounding.requiresGrounding ? ['<|im_start|>', '<|im_end|>', '<|endoftext|>'] : undefined,
+            maxOutputTokens: grounding.requiresGrounding ? strictFactualMaxTokens : parsed.data.max_output_tokens,
+            excludeProviders: grounding.requiresGrounding && !canUseLocalGroundedFallback ? ['local'] : undefined
+          });
       const groundedLocalViolation =
-        grounding.requiresGrounding && routed.result.provider === 'local' && !canUseLocalGroundedFallback;
-      const hasTemplateArtifact = /<\|im_start\|>|<\|im_end\|>|<\|endoftext\|>/u.test(routed.result.outputText);
+        grounding.requiresGrounding && routed?.result.provider === 'local' && !canUseLocalGroundedFallback;
+      const hasTemplateArtifact = routed
+        ? /<\|im_start\|>|<\|im_end\|>|<\|endoftext\|>/u.test(routed.result.outputText)
+        : false;
       const extractedFacts = useStructuredLocalNewsFlow
         ? extractNewsFactsFromOutput(
-            routed.result.outputText,
+            routed?.result.outputText ?? '',
             retrievalPack?.sources ?? [],
             5,
             languagePolicy.expectedLanguage
@@ -172,7 +187,7 @@ export async function aiRoutes(app: FastifyInstance, ctx: RouteContext) {
               maxFacts: 5
             })
           : structuredFacts;
-      const renderedNewsBriefing =
+      const renderedNewsBriefingFromModel =
         diversifiedFacts.length > 0
           ? renderNewsBriefingFromFacts({
               facts: diversifiedFacts,
@@ -181,7 +196,29 @@ export async function aiRoutes(app: FastifyInstance, ctx: RouteContext) {
               retrievedAt: new Date().toISOString()
             })
           : '';
-      const candidateOutputText = renderedNewsBriefing || routed.result.outputText;
+      const retrievalOnlyFacts = useRetrievalOnlyFallback
+        ? ensureFactDomainCoverage({
+            facts: buildFallbackNewsFactsFromSources({
+              sources: retrievalPack?.sources ?? [],
+              expectedLanguage: languagePolicy.expectedLanguage,
+              maxFacts: 5
+            }),
+            sources: retrievalPack?.sources ?? [],
+            expectedLanguage: languagePolicy.expectedLanguage,
+            maxFacts: 5
+          })
+        : [];
+      const retrievalOnlyOutput =
+        useRetrievalOnlyFallback && retrievalOnlyFacts.length > 0
+          ? renderNewsBriefingFromFacts({
+              facts: retrievalOnlyFacts,
+              sources: retrievalPack?.sources ?? [],
+              expectedLanguage: languagePolicy.expectedLanguage,
+              retrievedAt: new Date().toISOString()
+            })
+          : '';
+      const renderedNewsBriefing = retrievalOnlyOutput || renderedNewsBriefingFromModel;
+      const candidateOutputText = renderedNewsBriefing || (routed?.result.outputText ?? '');
       const modelSources = extractGroundingSourcesFromText(candidateOutputText);
       const sources = mergeGroundingSources(retrievalPack?.sources ?? [], modelSources);
       const outputWithSources = ensureGroundingSourcesSection(candidateOutputText, sources);
@@ -207,43 +244,109 @@ export async function aiRoutes(app: FastifyInstance, ctx: RouteContext) {
             passed: normalizedReasonCodes.length === 0,
             reasons: normalizedReasonCodes
           };
-      const blockedByQuality = groundedLocalViolation || (grounding.requiresGrounding && !effectiveGate.passed);
-      const output = blockedByQuality ? buildGroundingQualityBlockedMessage(effectiveGate) : outputWithSources;
+      const needsRealtimeEvidence = grounding.signals.news || grounding.signals.recency;
+      const missingRealtimeEvidence =
+        grounding.requiresGrounding && needsRealtimeEvidence && (retrievalPack?.sources.length ?? 0) === 0;
+      const normalizedQualityReasons = normalizeGroundingQualityReasons(
+        Array.from(
+          new Set([
+            ...effectiveGate.reasons,
+            ...(missingRealtimeEvidence ? ['insufficient_retrieval_sources'] : [])
+          ])
+        )
+      );
+      const baseGateResult = classifyGroundingGateResult(normalizedQualityReasons);
+      const gateResult =
+        groundedLocalViolation || missingRealtimeEvidence
+          ? 'hard_fail'
+          : !QUALITY_SOFT_GATE_ENABLED && normalizedQualityReasons.length > 0
+            ? 'hard_fail'
+            : baseGateResult;
+      const blockedByQuality = gateResult === 'hard_fail';
+      const softenedByQualityPolicy = QUALITY_SOFT_GATE_ENABLED && gateResult === 'soft_warn';
+      const blockedReasonCodes = groundedLocalViolation
+        ? ['grounding_local_violation', ...normalizedQualityReasons]
+        : normalizedQualityReasons;
+      const output = blockedByQuality
+        ? missingRealtimeEvidence && retrievalQualityGate
+          ? buildRetrievalQualityBlockedMessage(retrievalQualityGate)
+          : buildGroundingQualityBlockedMessage({
+              ...effectiveGate,
+              passed: false,
+              reasons: blockedReasonCodes
+            })
+        : outputWithSources;
       const sourceDomains = Array.from(new Set(sources.map((item) => item.domain)));
       const fallbackTraceTag =
-        useStructuredLocalNewsFlow && renderedNewsBriefing.length === 0 && routed.result.outputText.length > 0
+        useRetrievalOnlyFallback
+          ? 'retrieval_only_fallback'
+          : useStructuredLocalNewsFlow && renderedNewsBriefing.length === 0 && (routed?.result.outputText.length ?? 0) > 0
           ? 'raw_model_output_fallback'
           : null;
       const normalizedRetrievalReasonCodes = retrievalQualityGate
         ? normalizeRetrievalQualityReasons(retrievalQualityGate.reasons)
         : [];
       const freshnessRatio = retrievalQualityGate?.metrics.freshnessRatio ?? null;
+      const responseProvider = routed?.result.provider ?? 'local';
+      const responseModel = routed?.result.model ?? 'retrieval-fallback-v1';
+      const responseUsage = routed?.result.usage;
+      const responseAttempts =
+        routed?.attempts ?? [{ provider: 'local', status: 'skipped' as const, error: 'retrieval_only_fallback' }];
+      const responseSelection =
+        routed?.selection ?? {
+          strategy: 'requested_provider' as const,
+          taskType: parsed.data.task_type,
+          orderedProviders: ['local'] as const,
+          reason: 'retrieval_only_fallback_without_model_provider'
+        };
+      const responseUsedFallback = routed?.usedFallback ?? true;
 
       return sendSuccess(reply, request, 200, {
         ...summarizeResult({
-          ...routed.result,
+          provider: responseProvider,
+          model: responseModel,
+          usage: responseUsage,
           outputText: output
         }),
-        attempts: routed.attempts,
-        used_fallback: routed.usedFallback,
-        selection: routed.selection,
+        attempts: responseAttempts,
+        used_fallback: responseUsedFallback,
+        selection: responseSelection,
         grounding: {
           policy: grounding.policy,
           required: grounding.requiresGrounding,
           reasons: grounding.reasons,
-          status: blockedByQuality ? 'blocked_due_to_quality_gate' : grounding.requiresGrounding ? 'provider_only' : 'not_required',
+          status: blockedByQuality
+            ? 'blocked_due_to_quality_gate'
+            : gateResult === 'soft_warn'
+              ? 'soft_warn'
+              : useRetrievalOnlyFallback
+                ? 'served_with_limits'
+              : grounding.requiresGrounding && retrievalQualityGate && !retrievalQualityGate.passed
+                ? 'served_with_limits'
+                : grounding.requiresGrounding
+                  ? 'provider_only'
+                  : 'not_required',
           render_mode: 'user_mode',
           sources,
           claims,
           source_count: sources.length,
           domain_count: sourceDomains.length,
           freshness_ratio: freshnessRatio,
-          quality_gate_code: effectiveGate.reasons,
+          quality_gate_code: normalizedQualityReasons,
           retrieval_quality_gate_code: normalizedRetrievalReasonCodes,
+          quality_gate_result: gateResult,
+          quality_gate_softened: softenedByQualityPolicy,
           fallback_trace_tag: fallbackTraceTag,
           quality_gate: {
-            passed: effectiveGate.passed,
-            reasons: effectiveGate.reasons
+            passed: gateResult !== 'hard_fail',
+            reasons: normalizedQualityReasons
+          },
+          quality: {
+            gateResult,
+            reasons: normalizedQualityReasons,
+            softened: softenedByQualityPolicy,
+            languageAligned: !normalizedQualityReasons.includes('language_mismatch'),
+            claimCitationCoverage: effectiveGate.metrics.claimCitationCoverage ?? 0
           },
           retrieval_quality_gate: retrievalQualityGate,
           language: {
@@ -251,6 +354,11 @@ export async function aiRoutes(app: FastifyInstance, ctx: RouteContext) {
             detected: groundingGate.metrics.detectedLanguage,
             score: groundingGate.metrics.languageAlignmentScore
           }
+        },
+        delivery: {
+          mode: gateResult === 'pass' && !useRetrievalOnlyFallback ? 'normal' : 'degraded',
+          contextId: null,
+          revision: 0
         }
       });
     } catch (error) {

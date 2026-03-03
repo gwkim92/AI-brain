@@ -1,11 +1,42 @@
 "use client";
 
-import React from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Loader2, Zap } from "lucide-react";
 import { useQuickCommand } from "@/hooks/useQuickCommand";
+import {
+  isRuntimeDebugEnabled,
+  JARVIS_RUNTIME_DEBUG_CHANGED_EVENT,
+  setRuntimeDebugEnabled,
+} from "@/lib/runtime-events";
 
 export function CommandBar() {
   const { commandInput, setCommandInput, isSubmitting, error, execute } = useQuickCommand();
+  const [runtimeDebugEnabled, setRuntimeDebugEnabledState] = useState(false);
+  const showDebugToggle = process.env.NODE_ENV !== "production";
+
+  useEffect(() => {
+    if (!showDebugToggle || typeof window === "undefined") {
+      return;
+    }
+    const sync = () => {
+      setRuntimeDebugEnabledState(isRuntimeDebugEnabled());
+    };
+    sync();
+    window.addEventListener(JARVIS_RUNTIME_DEBUG_CHANGED_EVENT, sync as EventListener);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener(JARVIS_RUNTIME_DEBUG_CHANGED_EVENT, sync as EventListener);
+      window.removeEventListener("storage", sync);
+    };
+  }, [showDebugToggle]);
+
+  const handleExecute = useCallback(() => {
+    void execute();
+  }, [execute]);
+
+  const toggleRuntimeDebug = useCallback(() => {
+    setRuntimeDebugEnabled(!runtimeDebugEnabled);
+  }, [runtimeDebugEnabled]);
 
   return (
     <div className="w-full px-4 py-2 pointer-events-auto">
@@ -20,13 +51,27 @@ export function CommandBar() {
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
-              void execute();
+              handleExecute();
             }
           }}
         />
+        {showDebugToggle && (
+          <button
+            type="button"
+            className={`text-[10px] font-mono font-bold tracking-widest border px-2 py-1 rounded transition-colors ${
+              runtimeDebugEnabled
+                ? "text-amber-200 border-amber-400/50 bg-amber-500/15 hover:bg-amber-500/25"
+                : "text-white/55 border-white/20 bg-white/5 hover:bg-white/10"
+            }`}
+            onClick={toggleRuntimeDebug}
+            aria-label="Toggle runtime debug events"
+          >
+            TRACE {runtimeDebugEnabled ? "ON" : "OFF"}
+          </button>
+        )}
         <button
           className="text-[10px] font-mono font-bold tracking-widest text-cyan-400 border border-cyan-500/40 bg-cyan-500/10 px-3 py-1 rounded hover:bg-cyan-500/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
-          onClick={() => void execute()}
+          onClick={handleExecute}
           disabled={isSubmitting || !commandInput.trim()}
         >
           {isSubmitting && <Loader2 size={10} className="animate-spin" />}

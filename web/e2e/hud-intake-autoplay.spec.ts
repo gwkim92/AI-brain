@@ -10,7 +10,12 @@ function envelope<T>(data: T, meta: Record<string, unknown> = {}) {
   };
 }
 
-async function installHomeMocks(page: Page) {
+async function installHomeMocks(page: Page): Promise<{
+  getCounts: () => {
+    createdTaskCount: number;
+    createdContextCount: number;
+  };
+}> {
   let createdTaskCount = 0;
   let createdContextCount = 0;
   const assistantContexts = new Map<string, {
@@ -491,6 +496,13 @@ async function installHomeMocks(page: Page) {
       ),
     });
   });
+
+  return {
+    getCounts: () => ({
+      createdTaskCount,
+      createdContextCount,
+    }),
+  };
 }
 
 test("quick command auto-opens assistant/workbench/tasks and assistant auto-runs", async ({ page, context }) => {
@@ -511,7 +523,7 @@ test("quick command auto-opens assistant/workbench/tasks and assistant auto-runs
     },
   ]);
 
-  await installHomeMocks(page);
+  const mocks = await installHomeMocks(page);
 
   await page.goto("/?widget=inbox");
 
@@ -523,7 +535,52 @@ test("quick command auto-opens assistant/workbench/tasks and assistant auto-runs
   await expect(page.getByRole("heading", { name: "TASK MANAGER", exact: true }).first()).toBeVisible();
 
   await expect(page.getByText("자동 위젯 오픈 후 Assistant가 요청을 처리했습니다.").first()).toBeVisible();
-  await expect(page.getByText("completed · openai/gpt-4.1").first()).toBeVisible();
-  await expect(page.getByRole("button", { name: /COMPLETED/i }).first()).toBeVisible();
-  await expect(page.getByText("ATTEMPTS (1)").first()).toBeVisible();
+  const counts = mocks.getCounts();
+  expect(counts.createdTaskCount).toBe(1);
+  expect(counts.createdContextCount).toBe(1);
+});
+
+test("quick command ignores rapid duplicate submits and creates a single context", async ({ page, context }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("jarvis.auth.role", "admin");
+    window.localStorage.setItem("jarvis.auth.token", "e2e-token");
+  });
+
+  await context.addCookies([
+    {
+      name: "jarvis_auth_token",
+      value: "e2e-token",
+      domain: "127.0.0.1",
+      path: "/",
+      httpOnly: false,
+      secure: false,
+      sameSite: "Lax",
+    },
+  ]);
+
+  const mocks = await installHomeMocks(page);
+  await page.goto("/?widget=inbox");
+
+  await page.getByPlaceholder("Ask JARVIS anything...").fill("중복 실행 방지 확인해");
+  await page.evaluate(() => {
+    const button = Array.from(document.querySelectorAll("button")).find((item) => item.textContent?.trim() === "EXEC");
+    button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+
+  await expect(page.getByText("자동 위젯 오픈 후 Assistant가 요청을 처리했습니다.").first()).toBeVisible();
+
+  const counts = mocks.getCounts();
+  expect(counts.createdTaskCount).toBe(1);
+  expect(counts.createdContextCount).toBe(1);
+
+  const sessionCount = await page.evaluate(() => {
+    const raw = window.localStorage.getItem("hud-sessions");
+    if (!raw) {
+      return 0;
+    }
+    const parsed = JSON.parse(raw) as unknown[];
+    return Array.isArray(parsed) ? parsed.length : 0;
+  });
+  expect(sessionCount).toBe(1);
 });

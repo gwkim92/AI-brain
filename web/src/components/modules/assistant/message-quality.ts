@@ -1,6 +1,8 @@
 export type ProviderUnavailableReason = "NEWS_BRIEFING_UNAVAILABLE" | "GROUNDED_RETRIEVAL_UNAVAILABLE";
+export type QualityGateResult = "hard_fail" | "soft_warn" | "pass";
 
 type BlockedReasonCode =
+    | "grounding_local_violation"
     | "template_artifact"
     | "language_mismatch"
     | "insufficient_claim_citation_coverage"
@@ -13,6 +15,7 @@ type BlockedReasonCode =
     | "low_retrieval_freshness_ratio";
 
 const BLOCKED_REASON_LABELS: Record<BlockedReasonCode, string> = {
+    grounding_local_violation: "로컬 모델 경로에서 grounding 정책 위반이 감지되었습니다.",
     template_artifact: "모델 출력 형식이 깨져 안전하게 표시할 수 없습니다.",
     language_mismatch: "요청한 언어와 응답 언어가 일치하지 않았습니다.",
     insufficient_claim_citation_coverage: "문장과 출처 연결이 부족해 근거 신뢰도가 낮습니다.",
@@ -59,14 +62,64 @@ export function resolveProviderUnavailableReason(details: unknown): ProviderUnav
     return null;
 }
 
-export function isBlockedQualityOutput(content: string, groundingStatus?: string): boolean {
-    if (groundingStatus === "blocked_due_to_quality_gate") {
-        return true;
+function normalizeQualityGateResult(value: unknown): QualityGateResult | null {
+    if (value === "hard_fail" || value === "soft_warn" || value === "pass") {
+        return value;
     }
-    return (
-        content.includes("근거 기반 응답 품질 검증에 실패했습니다.") ||
-        content.includes("검색 근거 품질 검증에 실패했습니다.")
-    );
+    return null;
+}
+
+export function resolveQualityGateResult(params: {
+    content: string;
+    groundingStatus?: string;
+    qualityGateResult?: string;
+}): QualityGateResult {
+    const explicit = normalizeQualityGateResult(params.qualityGateResult);
+    if (explicit) {
+        return explicit;
+    }
+    if (params.groundingStatus === "blocked_due_to_quality_gate") {
+        return "hard_fail";
+    }
+    if (params.groundingStatus === "soft_warn" || params.groundingStatus === "served_with_limits") {
+        return "soft_warn";
+    }
+    if (
+        params.content.includes("근거 기반 응답 품질 검증에 실패했습니다.") ||
+        params.content.includes("검색 근거 품질 검증에 실패했습니다.")
+    ) {
+        return "hard_fail";
+    }
+    return "pass";
+}
+
+export function isBlockedQualityOutput(content: string, groundingStatus?: string, qualityGateResult?: string): boolean {
+    return resolveQualityGateResult({ content, groundingStatus, qualityGateResult }) === "hard_fail";
+}
+
+export function isSoftWarnQualityOutput(content: string, groundingStatus?: string, qualityGateResult?: string): boolean {
+    return resolveQualityGateResult({ content, groundingStatus, qualityGateResult }) === "soft_warn";
+}
+
+export function parseQualityReasonCodes(content: string, preferredCodes?: string[]): string[] {
+    if (Array.isArray(preferredCodes) && preferredCodes.length > 0) {
+        return Array.from(
+            new Set(
+                preferredCodes
+                    .map((item) => item.trim())
+                    .filter((item) => item.length > 0)
+            )
+        );
+    }
+    return parseBlockedReasons(content);
+}
+
+export function isSoftWarnReasonCode(code: string): boolean {
+    return code === "language_mismatch" || code === "insufficient_claim_citation_coverage";
+}
+
+export function hasOnlySoftWarnReasons(codes: string[]): boolean {
+    return codes.length > 0 && codes.every((code) => isSoftWarnReasonCode(code));
 }
 
 export function parseBlockedReasons(content: string): string[] {

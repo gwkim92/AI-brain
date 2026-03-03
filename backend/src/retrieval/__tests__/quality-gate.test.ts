@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { resolveGroundingPolicy } from '../policy-router';
-import { buildGroundingQualityBlockedMessage, evaluateGroundingQualityGate } from '../quality-gate';
+import { buildGroundingQualityBlockedMessage, classifyGroundingGateResult, evaluateGroundingQualityGate } from '../quality-gate';
 
 describe('evaluateGroundingQualityGate', () => {
   it('passes static prompt with no sources', () => {
@@ -102,5 +102,26 @@ describe('evaluateGroundingQualityGate', () => {
 
     expect(result.passed).toBe(false);
     expect(result.reasons).toContain('insufficient_claim_citation_coverage');
+  });
+
+  it('classifies soft reasons as soft_warn', () => {
+    const result = classifyGroundingGateResult([
+      'language_mismatch',
+      'insufficient_claim_citation_coverage'
+    ]);
+    expect(result).toBe('soft_warn');
+  });
+
+  it('classifies strong failures as hard_fail', () => {
+    const result = classifyGroundingGateResult([
+      'insufficient_sources',
+      'language_mismatch'
+    ]);
+    expect(result).toBe('hard_fail');
+  });
+
+  it('classifies empty reasons as pass', () => {
+    const result = classifyGroundingGateResult([]);
+    expect(result).toBe('pass');
   });
 });

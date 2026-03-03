@@ -56,5 +56,6 @@ export const AssistantContextRunSchema = z.object({
   model: z.string().max(160).optional(),
   temperature: z.number().min(0).max(2).optional(),
   max_output_tokens: z.number().int().positive().max(32000).optional(),
-  force_rerun: z.boolean().default(false)
+  force_rerun: z.boolean().default(false),
+  client_run_nonce: z.string().min(1).max(160).optional()
 });

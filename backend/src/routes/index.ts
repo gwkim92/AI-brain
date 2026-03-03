@@ -245,14 +245,30 @@ export async function registerRoutes(
         : Promise.resolve([])
     ]);
 
+    const ACTIVE_QUEUED_WINDOW_MS = 2 * 60 * 1000;
+    const nowMs = Date.now();
+    const isActiveTask = (task: (typeof tasks)[number]): boolean => {
+      if (task.status === 'running' || task.status === 'retrying') {
+        return true;
+      }
+      if (task.status !== 'queued') {
+        return false;
+      }
+      const updatedAtMs = Date.parse(task.updatedAt);
+      if (Number.isNaN(updatedAtMs)) {
+        return false;
+      }
+      return nowMs - updatedAtMs <= ACTIVE_QUEUED_WINDOW_MS;
+    };
+
     const runningTasks = tasks
-      .filter((t) => t.status === 'running' || t.status === 'retrying')
+      .filter((t) => isActiveTask(t))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, input.running_task_limit);
 
     const blockedCount = tasks.filter((t) => t.status === 'blocked').length;
     const failedCount = tasks.filter((t) => t.status === 'failed' || t.status === 'cancelled').length;
-    const runningCount = tasks.filter((t) => t.status === 'running' || t.status === 'retrying').length;
+    const runningCount = tasks.filter((t) => isActiveTask(t)).length;
 
     return {
       generated_at: new Date().toISOString(),

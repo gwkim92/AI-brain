@@ -84,7 +84,13 @@ export type HealthPayload = ApiSchemas["Health"];
 
 export type AiRespondRequest = OptionalByDefault<ApiSchemas["AiRespondRequest"], "provider" | "strict_provider" | "task_type">;
 export type GroundingPolicy = "static" | "dynamic_factual" | "high_risk_factual";
-export type GroundingStatus = "not_required" | "provider_only" | "required_unavailable" | "blocked_due_to_quality_gate";
+export type GroundingStatus =
+  | "not_required"
+  | "provider_only"
+  | "required_unavailable"
+  | "blocked_due_to_quality_gate"
+  | "soft_warn"
+  | "served_with_limits";
 export type GroundingQualityCode = string;
 export type AiRespondData = ApiSchemas["AiRespondResult"] & {
   selection?: {
@@ -126,11 +132,29 @@ export type AiRespondData = ApiSchemas["AiRespondResult"] & {
     freshness_ratio?: number | null;
     quality_gate_code?: GroundingQualityCode[];
     retrieval_quality_gate_code?: GroundingQualityCode[];
+    quality_gate_result?: "hard_fail" | "soft_warn" | "pass";
     fallback_trace_tag?: string | null;
     quality_gate?: {
       passed: boolean;
       reasons: string[];
     };
+    quality?: {
+      gateResult: "hard_fail" | "soft_warn" | "pass";
+      reasons: string[];
+      softened: boolean;
+      languageAligned: boolean;
+      claimCitationCoverage: number;
+    };
+    language?: {
+      expected?: string | null;
+      detected?: string | null;
+      score?: number;
+    };
+  };
+  delivery?: {
+    mode: "normal" | "degraded";
+    contextId: string | null;
+    revision: number;
   };
 };
 
@@ -567,6 +591,7 @@ export type AssistantContextRunRequest = {
   temperature?: number;
   max_output_tokens?: number;
   force_rerun?: boolean;
+  client_run_nonce?: string;
 };
 
 export type AssistantContextEventRecord = {
