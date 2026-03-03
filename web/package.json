@@ -1,0 +1,44 @@
+{
+  "name": "web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "api:types": "npm run api:types:generate",
+    "api:types:generate": "openapi-typescript ../docs/openapi-v1.yaml -o src/lib/api/generated/openapi.ts",
+    "api:types:check": "npm run api:types:generate && git diff --exit-code -- src/lib/api/generated/openapi.ts",
+    "e2e": "playwright test",
+    "e2e:smoke": "playwright test e2e/auth-and-settings.spec.ts e2e/sidebar-studio-navigation.spec.ts e2e/hud-intake-autoplay.spec.ts",
+    "e2e:list": "playwright test --list",
+    "e2e:headed": "playwright test --headed"
+  },
+  "dependencies": {
+    "@react-three/fiber": "^9.5.0",
+    "@react-three/postprocessing": "^3.0.4",
+    "@types/three": "^0.183.1",
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.34.3",
+    "lucide-react": "^0.575.0",
+    "next": "16.1.6",
+    "postprocessing": "^6.38.3",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "tailwind-merge": "^3.5.0",
+    "three": "^0.183.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.1",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.1.6",
+    "openapi-typescript": "^7.13.0",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

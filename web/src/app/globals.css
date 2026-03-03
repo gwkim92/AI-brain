@@ -1,0 +1,96 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+:root {
+  /* Base Neutral Scale (Expert Console) */
+  --background: #0a0a0f;
+  /* Very dark gray/black */
+  --foreground: #f2f2f2;
+  /* Off-white */
+  --surface-100: #14141a;
+  --surface-200: #1a1a24;
+  --surface-300: #242433;
+
+  /* Semantic Colors (Cyan/Amber/Red) */
+  --accent: #00ffff;
+  /* Cyan */
+  --accent-glow: rgba(0, 255, 255, 0.3);
+
+  --success: #00ff88;
+  /* Emerald */
+  --warning: #ffaa00;
+  /* Amber */
+  --danger: #ff0044;
+  /* Red */
+
+  /* Domain Specific */
+  --color-chat: #33aaff;
+  --color-council: #bb55ff;
+  --color-code: #00cc44;
+  --color-compute: #ff8800;
+
+  /* Spacing: 4px grid system via Tailwind */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: var(--font-geist-sans), sans-serif;
+  overflow-x: hidden;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+@media (max-width: 768px) {
+  body {
+    padding-left: 0;
+    padding-right: 0;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--surface-300);
+  border-radius: var(--radius-sm);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
+.glass-panel {
+  background: rgba(10, 10, 15, 0.4);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+}
+
+.glitch-text {
+  text-shadow: 0 0 10px var(--accent-glow);
+}
+
+/* Strict Monospace for Data Cells and Logs */
+.data-mono {
+  font-family: var(--font-geist-mono), monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
