@@ -6,5 +6,15 @@ backend/.turbo/
 backend/.vite/
 backend/*.log
 
+# env files (never commit real secrets)
+.env
+.env.*
+backend/.env
+backend/.env.*
+core-only-lab/.env
+core-only-lab/.env.*
+!backend/.env.example
+!core-only-lab/.env.example
+
 # macOS
 .DS_Store
