@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "docs/openapi-v1.yaml"
+      - "docs/openapi-v2.yaml"
       - "web/**"
       - "backend/src/**"
       - ".github/workflows/web-api-contract.yml"
@@ -13,6 +14,7 @@ on:
       - master
     paths:
       - "docs/openapi-v1.yaml"
+      - "docs/openapi-v2.yaml"
       - "web/**"
       - "backend/src/**"
       - ".github/workflows/web-api-contract.yml"
