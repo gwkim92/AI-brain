@@ -701,6 +701,7 @@ export type V2CapabilityModuleRecord = {
 
 export type V2CapabilityModuleVersionRecord = {
   id: string;
+  moduleId: string;
   moduleRecordId: string;
   moduleVersion: string;
   abiVersion: string;
@@ -711,6 +712,26 @@ export type V2CapabilityModuleVersionRecord = {
   failureModes: string[];
   metadata: Record<string, unknown>;
   createdAt: string;
+};
+
+export type V2CapabilityModuleRegistrationInput = {
+  moduleId: string;
+  title: string;
+  description: string;
+  owner?: string | null;
+  moduleVersion: string;
+  abiVersion: string;
+  inputSchemaRef: string;
+  outputSchemaRef: string;
+  requiredPermissions: string[];
+  dependencies: string[];
+  failureModes: string[];
+  metadata?: Record<string, unknown>;
+};
+
+export type V2CapabilityModuleRegistrationRecord = {
+  module: V2CapabilityModuleRecord;
+  version: V2CapabilityModuleVersionRecord;
 };
 
 export type V2PolicyRuleRecord = {
@@ -798,7 +819,9 @@ export type V2RepositoryContract = {
     input: Array<Omit<V2RetrievalEvidenceItemRecord, 'id' | 'createdAt'>>
   ) => Promise<V2RetrievalEvidenceItemRecord[]>;
   createRetrievalScore: (input: Omit<V2RetrievalScoreRecord, 'id' | 'createdAt'>) => Promise<V2RetrievalScoreRecord>;
+  registerCapabilityModule: (input: V2CapabilityModuleRegistrationInput) => Promise<V2CapabilityModuleRegistrationRecord>;
   listCapabilityModules: () => Promise<V2CapabilityModuleRecord[]>;
+  listCapabilityModuleVersions: (input: { moduleId: string }) => Promise<V2CapabilityModuleVersionRecord[]>;
   saveTaskViewSchema: (input: Omit<V2TaskViewSchemaRecord, 'id' | 'createdAt'>) => Promise<V2TaskViewSchemaRecord>;
 };
 

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 
 import type { RouteContext } from '../types';
+import { registerV2CapabilityRoutes } from './capabilities';
 import { registerV2CommandRoutes } from './command';
 import { registerV2RetrievalRoutes } from './retrieval';
 import { resolveV2FeatureFlags, type V2RouteContext } from './types';
@@ -31,4 +32,5 @@ export async function registerV2Routes(app: FastifyInstance, ctx: RouteContext):
 
   await registerV2CommandRoutes(app, v2Ctx);
   await registerV2RetrievalRoutes(app, v2Ctx);
+  await registerV2CapabilityRoutes(app, v2Ctx);
 }

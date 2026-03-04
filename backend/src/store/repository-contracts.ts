@@ -111,7 +111,9 @@ export const V2_REPOSITORY_METHOD_KEYS = [
   'createRetrievalQuery',
   'createRetrievalEvidenceItems',
   'createRetrievalScore',
+  'registerCapabilityModule',
   'listCapabilityModules',
+  'listCapabilityModuleVersions',
   'saveTaskViewSchema'
 ] as const satisfies readonly (keyof V2RepositoryContract)[];
 

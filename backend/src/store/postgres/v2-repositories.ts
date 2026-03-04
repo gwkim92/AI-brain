@@ -3,6 +3,9 @@ import type { Pool } from 'pg';
 
 import type { V2StoreRepositoryContract } from '../repository-contracts';
 import type {
+  V2CapabilityModuleRegistrationInput,
+  V2CapabilityModuleRegistrationRecord,
+  V2CapabilityModuleVersionRecord,
   V2ExecutionContractRecord,
   V2RetrievalEvidenceItemRecord,
   V2RetrievalQueryRecord,
@@ -14,6 +17,7 @@ type V2ExecutionContractInsert = Omit<V2ExecutionContractRecord, 'id' | 'created
 type V2RetrievalQueryInsert = Omit<V2RetrievalQueryRecord, 'id' | 'createdAt'>;
 type V2RetrievalEvidenceInsert = Omit<V2RetrievalEvidenceItemRecord, 'id' | 'createdAt'>;
 type V2RetrievalScoreInsert = Omit<V2RetrievalScoreRecord, 'id' | 'createdAt'>;
+type V2CapabilityModuleRegistrationInsert = V2CapabilityModuleRegistrationInput;
 type V2TaskViewSchemaInsert = Omit<V2TaskViewSchemaRecord, 'id' | 'createdAt'>;
 
 export function createPostgresV2Repository(pool: Pool): V2StoreRepositoryContract {
@@ -210,6 +214,104 @@ export function createPostgresV2Repository(pool: Pool): V2StoreRepositoryContrac
       };
     },
 
+    async registerCapabilityModule(input: V2CapabilityModuleRegistrationInsert): Promise<V2CapabilityModuleRegistrationRecord> {
+      const upsertModuleResult = await pool.query(
+        `
+          INSERT INTO capability_modules (id, module_id, title, description, owner)
+          VALUES ($1::uuid, $2, $3, $4, $5)
+          ON CONFLICT (module_id)
+          DO UPDATE SET
+            title = EXCLUDED.title,
+            description = EXCLUDED.description,
+            owner = EXCLUDED.owner,
+            updated_at = now()
+          RETURNING id, module_id, title, description, owner, created_at, updated_at
+        `,
+        [randomUUID(), input.moduleId, input.title, input.description, input.owner ?? null]
+      );
+      const moduleRow = upsertModuleResult.rows[0] as {
+        id: string;
+        module_id: string;
+        title: string;
+        description: string;
+        owner: string | null;
+        created_at: Date;
+        updated_at: Date;
+      };
+
+      const upsertVersionResult = await pool.query(
+        `
+          INSERT INTO capability_module_versions (
+            id, module_record_id, module_version, abi_version, input_schema_ref, output_schema_ref,
+            required_permissions, dependencies, failure_modes, metadata
+          )
+          VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb)
+          ON CONFLICT (module_record_id, module_version)
+          DO UPDATE SET
+            abi_version = EXCLUDED.abi_version,
+            input_schema_ref = EXCLUDED.input_schema_ref,
+            output_schema_ref = EXCLUDED.output_schema_ref,
+            required_permissions = EXCLUDED.required_permissions,
+            dependencies = EXCLUDED.dependencies,
+            failure_modes = EXCLUDED.failure_modes,
+            metadata = EXCLUDED.metadata
+          RETURNING id, module_record_id, module_version, abi_version, input_schema_ref, output_schema_ref,
+            required_permissions, dependencies, failure_modes, metadata, created_at
+        `,
+        [
+          randomUUID(),
+          moduleRow.id,
+          input.moduleVersion,
+          input.abiVersion,
+          input.inputSchemaRef,
+          input.outputSchemaRef,
+          JSON.stringify(input.requiredPermissions),
+          JSON.stringify(input.dependencies),
+          JSON.stringify(input.failureModes),
+          JSON.stringify(input.metadata ?? {})
+        ]
+      );
+      const versionRow = upsertVersionResult.rows[0] as {
+        id: string;
+        module_record_id: string;
+        module_version: string;
+        abi_version: string;
+        input_schema_ref: string;
+        output_schema_ref: string;
+        required_permissions: string[] | null;
+        dependencies: string[] | null;
+        failure_modes: string[] | null;
+        metadata: Record<string, unknown> | null;
+        created_at: Date;
+      };
+
+      return {
+        module: {
+          id: moduleRow.id,
+          moduleId: moduleRow.module_id,
+          title: moduleRow.title,
+          description: moduleRow.description,
+          owner: moduleRow.owner,
+          createdAt: moduleRow.created_at.toISOString(),
+          updatedAt: moduleRow.updated_at.toISOString()
+        },
+        version: {
+          id: versionRow.id,
+          moduleId: moduleRow.module_id,
+          moduleRecordId: versionRow.module_record_id,
+          moduleVersion: versionRow.module_version,
+          abiVersion: versionRow.abi_version,
+          inputSchemaRef: versionRow.input_schema_ref,
+          outputSchemaRef: versionRow.output_schema_ref,
+          requiredPermissions: versionRow.required_permissions ?? [],
+          dependencies: versionRow.dependencies ?? [],
+          failureModes: versionRow.failure_modes ?? [],
+          metadata: versionRow.metadata ?? {},
+          createdAt: versionRow.created_at.toISOString()
+        }
+      };
+    },
+
     async listCapabilityModules() {
       const result = await pool.query(
         `
@@ -227,6 +329,37 @@ export function createPostgresV2Repository(pool: Pool): V2StoreRepositoryContrac
         owner: row.owner ? String(row.owner) : null,
         createdAt: new Date(row.created_at as string | Date).toISOString(),
         updatedAt: new Date(row.updated_at as string | Date).toISOString()
+      }));
+    },
+
+    async listCapabilityModuleVersions(input: { moduleId: string }): Promise<V2CapabilityModuleVersionRecord[]> {
+      const result = await pool.query(
+        `
+          SELECT
+            v.id, v.module_record_id, m.module_id, v.module_version, v.abi_version, v.input_schema_ref,
+            v.output_schema_ref, v.required_permissions, v.dependencies, v.failure_modes, v.metadata, v.created_at
+          FROM capability_module_versions v
+          JOIN capability_modules m ON m.id = v.module_record_id
+          WHERE m.module_id = $1
+          ORDER BY v.created_at DESC
+          LIMIT 500
+        `,
+        [input.moduleId]
+      );
+
+      return result.rows.map((row) => ({
+        id: String(row.id),
+        moduleId: String(row.module_id),
+        moduleRecordId: String(row.module_record_id),
+        moduleVersion: String(row.module_version),
+        abiVersion: String(row.abi_version),
+        inputSchemaRef: String(row.input_schema_ref),
+        outputSchemaRef: String(row.output_schema_ref),
+        requiredPermissions: Array.isArray(row.required_permissions) ? (row.required_permissions as string[]) : [],
+        dependencies: Array.isArray(row.dependencies) ? (row.dependencies as string[]) : [],
+        failureModes: Array.isArray(row.failure_modes) ? (row.failure_modes as string[]) : [],
+        metadata: (row.metadata as Record<string, unknown> | null) ?? {},
+        createdAt: new Date(row.created_at as string | Date).toISOString()
       }));
     },
 
