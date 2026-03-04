@@ -4,6 +4,7 @@ import type { RouteContext } from '../types';
 import { registerV2CapabilityRoutes } from './capabilities';
 import { registerV2CodeLoopRoutes } from './code-loops';
 import { registerV2CommandRoutes } from './command';
+import { registerV2FinanceRoutes } from './finance';
 import { registerV2RetrievalRoutes } from './retrieval';
 import { registerV2TeamRoutes } from './teams';
 import { resolveV2FeatureFlags, type V2RouteContext } from './types';
@@ -37,4 +38,5 @@ export async function registerV2Routes(app: FastifyInstance, ctx: RouteContext):
   await registerV2CapabilityRoutes(app, v2Ctx);
   await registerV2TeamRoutes(app, v2Ctx);
   await registerV2CodeLoopRoutes(app, v2Ctx);
+  await registerV2FinanceRoutes(app, v2Ctx);
 }
