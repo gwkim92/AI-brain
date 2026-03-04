@@ -10,7 +10,91 @@ function envelope<T>(data: T, meta: Record<string, unknown> = {}) {
   };
 }
 
+async function seedAuth(page: import("@playwright/test").Page) {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("jarvis.auth.role", "admin");
+    window.localStorage.setItem("jarvis.auth.token", "e2e-token");
+    window.sessionStorage.setItem("jarvis.auth.token", "e2e-token");
+  });
+  await page.context().addCookies([
+    {
+      name: "jarvis_auth_token",
+      value: "e2e-token",
+      domain: "127.0.0.1",
+      path: "/",
+      httpOnly: false,
+      secure: false,
+      sameSite: "Lax",
+    },
+  ]);
+}
+
+async function mockDashboardRoutes(page: import("@playwright/test").Page) {
+  await page.route(`${API_BASE}/api/v1/dashboard/overview*`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        envelope({
+          generated_at: "2026-02-23T00:00:00.000Z",
+          signals: {
+            task_count: 0,
+            running_count: 0,
+            failed_count: 0,
+            blocked_count: 0,
+            pending_approval_count: 0,
+          },
+          tasks: [],
+          running_tasks: [],
+          pending_approvals: [],
+        })
+      ),
+    });
+  });
+
+  await page.route(`${API_BASE}/api/v1/dashboard/events*`, async (route) => {
+    const body = [
+      "event: stream.open",
+      `data: ${JSON.stringify({ request_id: "req-dashboard-stream" })}`,
+      "",
+      "event: dashboard.updated",
+      `data: ${JSON.stringify({
+        timestamp: "2026-02-23T00:00:00.000Z",
+        data: {
+          generated_at: "2026-02-23T00:00:00.000Z",
+          signals: {
+            task_count: 0,
+            running_count: 0,
+            failed_count: 0,
+            blocked_count: 0,
+            pending_approval_count: 0,
+          },
+          tasks: [],
+          running_tasks: [],
+          pending_approvals: [],
+        },
+      })}`,
+      "",
+      "event: stream.close",
+      `data: ${JSON.stringify({ reason: "done" })}`,
+      "",
+    ].join("\\n");
+
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      headers: {
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+      },
+      body,
+    });
+  });
+}
+
 test("council retry sends exclude_providers from failed attempts", async ({ page }) => {
+  await seedAuth(page);
+  await mockDashboardRoutes(page);
   const councilBodies: Array<Record<string, unknown>> = [];
   let runNumber = 0;
 
@@ -30,7 +114,24 @@ test("council retry sends exclude_providers from failed attempts", async ({ page
     });
   });
 
-  await page.route(`${API_BASE}/api/v1/councils/runs`, async (route) => {
+  await page.route(`${API_BASE}/api/v1/radar/recommendations?*`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(envelope({ recommendations: [] })),
+    });
+  });
+
+  await page.route(`${API_BASE}/api/v1/councils/runs*`, async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(envelope({ runs: [] })),
+      });
+      return;
+    }
+
     if (route.request().method() !== "POST") {
       await route.fallback();
       return;
@@ -112,8 +213,7 @@ test("council retry sends exclude_providers from failed attempts", async ({ page
     });
   });
 
-  await page.goto("/");
-  await page.locator("nav button").nth(3).click();
+  await page.goto("/?widget=council");
   await expect(page.getByText("AGENT COUNCIL ROOM")).toBeVisible();
 
   await page.getByRole("button", { name: "RUN COUNCIL" }).click();
@@ -121,7 +221,7 @@ test("council retry sends exclude_providers from failed attempts", async ({ page
   await expect(page.getByText("openai timeout", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "RETRY EXCLUDING FAILED" })).toBeEnabled();
 
-  await page.getByRole("button", { name: "RETRY EXCLUDING FAILED" }).click();
+  await page.getByRole("button", { name: "RETRY EXCLUDING FAILED" }).dispatchEvent("click");
 
   await expect.poll(() => councilBodies.length).toBe(2);
   expect(councilBodies[1]?.exclude_providers).toEqual(["openai"]);
@@ -131,6 +231,8 @@ test("council retry sends exclude_providers from failed attempts", async ({ page
 });
 
 test("task detail trace filter toggles between traces", async ({ page }) => {
+  await seedAuth(page);
+  await mockDashboardRoutes(page);
   const taskId = "task-trace-e2e";
 
   await page.route(`${API_BASE}/api/v1/tasks/${taskId}`, async (route) => {

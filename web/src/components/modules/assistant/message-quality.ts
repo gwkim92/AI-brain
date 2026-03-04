@@ -84,12 +84,6 @@ export function resolveQualityGateResult(params: {
     if (params.groundingStatus === "soft_warn" || params.groundingStatus === "served_with_limits") {
         return "soft_warn";
     }
-    if (
-        params.content.includes("근거 기반 응답 품질 검증에 실패했습니다.") ||
-        params.content.includes("검색 근거 품질 검증에 실패했습니다.")
-    ) {
-        return "hard_fail";
-    }
     return "pass";
 }
 

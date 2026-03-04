@@ -12,6 +12,7 @@ import {
     type HudSessionRestoreMode,
     type HudSession,
 } from "@/lib/hud/session";
+import { isFeatureEnabled } from "@/lib/feature-flags";
 import { emitRuntimeEvent } from "@/lib/runtime-events";
 
 const STORE_KEY_ACTIVE = "hud-active-widgets";
@@ -599,7 +600,10 @@ export function HUDProvider({ children }: { children: ReactNode }) {
                     )
                 )
             );
-            const restoreMode = options?.restoreMode ?? target.restoreMode ?? "full";
+            const deterministicRestoreEnabled = isFeatureEnabled("session.restore_deterministic_v2", true);
+            const restoreMode =
+                options?.restoreMode ??
+                (deterministicRestoreEnabled ? "focus_only" : target.restoreMode ?? "full");
             const candidateFocused = resolvePreferredSessionFocus(
                 resolvedTargetMountedWidgets,
                 targetActiveWidgets,

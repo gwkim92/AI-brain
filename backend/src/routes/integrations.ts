@@ -15,8 +15,10 @@ export async function integrationRoutes(app: FastifyInstance, ctx: RouteContext)
     if (!env.OPENAI_WEBHOOK_SECRET) {
       return sendError(reply, request, 503, 'INTERNAL_ERROR', 'OPENAI_WEBHOOK_SECRET not configured');
     }
-
-    const rawBody = JSON.stringify(request.body ?? {});
+    const rawBody = (request as { rawBody?: string }).rawBody;
+    if (typeof rawBody !== 'string') {
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', 'raw request body unavailable');
+    }
     const result = await handleResponsesWebhook(
       { rawBody, signature: typeof signature === 'string' ? signature : undefined, secret: env.OPENAI_WEBHOOK_SECRET },
       { async onEvent() { return; } }

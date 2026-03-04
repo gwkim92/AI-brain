@@ -18,6 +18,10 @@ import { registerRoutes } from './routes';
 import { createStore } from './store';
 import type { JarvisStore } from './store/types';
 
+type RawBodyFastifyRequest = {
+  rawBody?: string;
+};
+
 if (typeof process.loadEnvFile === 'function') {
   try {
     process.loadEnvFile();
@@ -49,6 +53,22 @@ export async function buildServer() {
 
   const app = Fastify({
     logger: env.NODE_ENV === 'development'
+  });
+
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (request, body, done) => {
+    const raw = typeof body === 'string' ? body : String(body ?? '');
+    (request as unknown as RawBodyFastifyRequest).rawBody = raw;
+
+    if (raw.length === 0) {
+      done(null, {});
+      return;
+    }
+
+    try {
+      done(null, JSON.parse(raw));
+    } catch (error) {
+      done(error as Error, undefined);
+    }
   });
 
   await app.register(cors, {

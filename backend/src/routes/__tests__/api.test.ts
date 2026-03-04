@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHmac } from 'node:crypto';
 
 import { createTelegramApprovalCallbackData, validateTelegramApprovalCallbackData } from '../../integrations/telegram/commands';
 import { buildServer } from '../../server';
@@ -580,11 +581,18 @@ describe('API routes', () => {
     expect(events.statusCode).toBe(200);
     const eventBody = events.json() as {
       data: {
-        events: Array<{ eventType: string }>;
+        events: Array<{ eventType: string; data: Record<string, unknown> }>;
       };
     };
     expect(eventBody.data.events.map((item) => item.eventType)).toContain('assistant.context.run.accepted');
     expect(eventBody.data.events.map((item) => item.eventType)).toContain('assistant.context.run.completed');
+    const stageRows = eventBody.data.events.filter((item) => item.eventType === 'assistant.context.stage.updated');
+    expect(stageRows.length).toBeGreaterThan(0);
+    const stageNames = stageRows
+      .map((item) => item.data.stage)
+      .filter((item): item is string => typeof item === 'string');
+    expect(stageNames).toContain('accepted');
+    expect(stageNames).toContain('finalized');
 
     const stream = await app.inject({
       method: 'GET',
@@ -1837,6 +1845,40 @@ describe('API routes', () => {
     await app.close();
   });
 
+  it('requires admin role to update provider policies', async () => {
+    const { app } = await buildServer();
+
+    const memberAttempt = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/providers/policies',
+      headers: {
+        'x-user-role': 'member'
+      },
+      payload: {
+        task_type: 'execute',
+        provider: 'openai',
+        model_id: 'gpt-4.1-mini'
+      }
+    });
+    expect(memberAttempt.statusCode).toBe(403);
+
+    const adminAttempt = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/providers/policies',
+      headers: {
+        'x-user-role': 'admin'
+      },
+      payload: {
+        task_type: 'execute',
+        provider: 'openai',
+        model_id: 'gpt-4.1-mini'
+      }
+    });
+    expect(adminAttempt.statusCode).toBe(422);
+
+    await app.close();
+  });
+
   it('streams dashboard overview snapshots over SSE', async () => {
     const { app } = await buildServer();
 
@@ -1898,6 +1940,58 @@ describe('API routes', () => {
     await app.close();
   });
 
+  it('supports static token login endpoint and issues auth cookie', async () => {
+    process.env.AUTH_REQUIRED = 'true';
+    process.env.AUTH_TOKEN = 'auth_token_for_test';
+    const { app } = await buildServer();
+
+    const denied = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/static-token/login',
+      payload: {
+        token: 'invalid_token'
+      }
+    });
+    expect(denied.statusCode).toBe(401);
+
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/static-token/login',
+      payload: {
+        token: 'auth_token_for_test'
+      }
+    });
+    expect(login.statusCode).toBe(200);
+    const body = login.json() as {
+      data: {
+        user: {
+          role: string;
+        };
+        auth_type: string;
+        expires_at: string;
+      };
+    };
+    expect(body.data.auth_type).toBe('static_token');
+    expect(body.data.user.role).toBe('admin');
+    expect(typeof body.data.expires_at).toBe('string');
+
+    const setCookieHeader = login.headers['set-cookie'];
+    const setCookie = Array.isArray(setCookieHeader) ? setCookieHeader.join('; ') : String(setCookieHeader ?? '');
+    expect(setCookie).toContain('jarvis_auth_token=');
+    expect(setCookie).toContain('HttpOnly');
+
+    const allowed = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tasks?limit=10',
+      headers: {
+        cookie: setCookie
+      }
+    });
+    expect(allowed.statusCode).toBe(200);
+
+    await app.close();
+  });
+
   it('supports signup, login, and session auth flow', async () => {
     process.env.AUTH_REQUIRED = 'true';
     process.env.AUTH_TOKEN = '';
@@ -1927,6 +2021,21 @@ describe('API routes', () => {
     expect(signupBody.data.token.length).toBeGreaterThan(20);
     expect(signupBody.data.user.email).toBe('member@example.com');
     expect(signupBody.data.user.role).toBe('member');
+    const signupSetCookieHeader = signup.headers['set-cookie'];
+    const signupSetCookie = Array.isArray(signupSetCookieHeader)
+      ? signupSetCookieHeader.join('; ')
+      : String(signupSetCookieHeader ?? '');
+    expect(signupSetCookie).toContain('jarvis_auth_token=');
+    expect(signupSetCookie).toContain('HttpOnly');
+
+    const meWithCookie = await app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/me',
+      headers: {
+        cookie: signupSetCookie
+      }
+    });
+    expect(meWithCookie.statusCode).toBe(200);
 
     const me = await app.inject({
       method: 'GET',
@@ -1947,6 +2056,12 @@ describe('API routes', () => {
     });
     expect(login.statusCode).toBe(200);
     const loginBody = login.json() as { data: { token: string } };
+    const loginSetCookieHeader = login.headers['set-cookie'];
+    const loginSetCookie = Array.isArray(loginSetCookieHeader)
+      ? loginSetCookieHeader.join('; ')
+      : String(loginSetCookieHeader ?? '');
+    expect(loginSetCookie).toContain('jarvis_auth_token=');
+    expect(loginSetCookie).toContain('HttpOnly');
 
     const logout = await app.inject({
       method: 'POST',
@@ -1958,6 +2073,12 @@ describe('API routes', () => {
     expect(logout.statusCode).toBe(200);
     const logoutBody = logout.json() as { data: { revoked: boolean } };
     expect(logoutBody.data.revoked).toBe(true);
+    const logoutSetCookieHeader = logout.headers['set-cookie'];
+    const logoutSetCookie = Array.isArray(logoutSetCookieHeader)
+      ? logoutSetCookieHeader.join('; ')
+      : String(logoutSetCookieHeader ?? '');
+    expect(logoutSetCookie).toContain('jarvis_auth_token=');
+    expect(logoutSetCookie).toContain('Max-Age=0');
 
     const afterLogout = await app.inject({
       method: 'GET',
@@ -3452,6 +3573,41 @@ describe('API routes', () => {
     expect(body.data.accepted).toBe(false);
     expect(body.data.ignored).toBe(true);
     expect(body.data.reason).toBe('missing_signature');
+
+    await app.close();
+  });
+
+  it('verifies openai webhook signature using raw request body', async () => {
+    process.env.OPENAI_WEBHOOK_SECRET = 'openai_secret';
+    const { app } = await buildServer();
+
+    const rawPayload = JSON.stringify({
+      id: 'evt_123',
+      type: 'response.completed'
+    });
+    const signature = createHmac('sha256', 'openai_secret').update(rawPayload).digest('hex');
+
+    const accepted = await app.inject({
+      method: 'POST',
+      url: '/api/v1/integrations/openai/webhook',
+      headers: {
+        'content-type': 'application/json',
+        'x-jarvis-openai-signature': signature
+      },
+      payload: rawPayload
+    });
+    expect(accepted.statusCode).toBe(200);
+
+    const rejected = await app.inject({
+      method: 'POST',
+      url: '/api/v1/integrations/openai/webhook',
+      headers: {
+        'content-type': 'application/json',
+        'x-jarvis-openai-signature': 'invalid'
+      },
+      payload: rawPayload
+    });
+    expect(rejected.statusCode).toBe(401);
 
     await app.close();
   });

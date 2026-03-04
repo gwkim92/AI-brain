@@ -23,7 +23,7 @@ export type AutoMissionEvent = {
     id: string;
     sequence: number;
     eventType: string;
-    kind: "accepted" | "started" | "completed" | "failed" | "other";
+    kind: "accepted" | "started" | "completed" | "failed" | "stage" | "other";
     data: Record<string, unknown>;
     createdAt: string;
     summary: string;
@@ -128,6 +128,20 @@ export function mergeAutoContexts(prev: AutoMissionContext[], restored: AutoMiss
 
 export function toAutoMissionEventSummary(record: AssistantContextEventRecord): string {
     const data = record.data ?? {};
+    if (record.eventType === "assistant.context.stage.updated") {
+        const stage = typeof data.stage === "string" ? data.stage : "unknown";
+        const stageSeqRaw = data.stage_seq;
+        const seq =
+            typeof stageSeqRaw === "number" && Number.isFinite(stageSeqRaw)
+                ? stageSeqRaw
+                : typeof stageSeqRaw === "string" && stageSeqRaw.trim().length > 0 && Number.isFinite(Number(stageSeqRaw))
+                    ? Number(stageSeqRaw)
+                    : null;
+        const finalized = typeof data.finalized === "string" ? data.finalized : null;
+        const reasonCode = typeof data.reason_code === "string" ? data.reason_code : null;
+        const suffix = [finalized, reasonCode].filter((item) => item && item.length > 0).join(" · ");
+        return `stage${seq !== null ? `#${seq}` : ""} · ${stage}${suffix ? ` · ${suffix}` : ""}`;
+    }
     if (record.eventType === "assistant.context.run.accepted") {
         const taskType = typeof data.task_type === "string" ? data.task_type : "execute";
         const provider = typeof data.provider === "string" ? data.provider : "auto";
@@ -164,6 +178,9 @@ export function toAutoMissionEventSummary(record: AssistantContextEventRecord): 
 }
 
 export function toAutoMissionEventKind(eventType: string): AutoMissionEvent["kind"] {
+    if (eventType === "assistant.context.stage.updated") {
+        return "stage";
+    }
     if (eventType === "assistant.context.run.accepted") {
         return "accepted";
     }

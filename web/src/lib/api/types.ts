@@ -408,6 +408,16 @@ export type AuthLoginRequest = {
   password: string;
 };
 
+export type AuthStaticTokenLoginRequest = {
+  token: string;
+};
+
+export type AuthStaticTokenLoginData = {
+  user: AuthUser;
+  auth_type: "static_token";
+  expires_at: string;
+};
+
 export type MissionDomain = "code" | "research" | "finance" | "news" | "mixed";
 export type MissionStatus = "draft" | "planned" | "running" | "blocked" | "completed" | "failed";
 export type MissionStepPattern = "llm_generate" | "council_debate" | "human_gate" | "tool_call" | "sub_mission";
@@ -416,6 +426,39 @@ export type MissionStepType = MissionStepPattern | LegacyMissionStepType;
 export type MissionStepStatus = "pending" | "running" | "done" | "blocked" | "failed";
 export type ComplexityLevel = "simple" | "moderate" | "complex";
 export type AssistantContextStatus = "running" | "completed" | "failed";
+export type AssistantStage =
+  | "accepted"
+  | "policy_resolved"
+  | "retrieval_started"
+  | "retrieval_completed"
+  | "generation_started"
+  | "quality_checked"
+  | "finalized";
+
+export type AssistantStageTimelineItem = {
+  stage: AssistantStage;
+  stageSeq: number;
+  startedAt: string;
+  endedAt: string | null;
+  reasonCode: string | null;
+  finalized: "delivered" | "failed" | null;
+  contextId: string;
+  revision: number;
+  taskId: string | null;
+};
+
+export type AssistantQualityMeta = {
+  gateResult: "hard_fail" | "soft_warn" | "pass";
+  reasons: string[];
+  softened: boolean;
+  languageAligned: boolean;
+  claimCitationCoverage: number;
+};
+
+export type SessionRestoreMeta = {
+  lastRenderedContextRevision?: Record<string, number>;
+  restoreMode?: "full" | "focus_only";
+};
 
 export type MissionStepRecord = {
   id: string;
@@ -592,6 +635,26 @@ export type AssistantContextRunRequest = {
   max_output_tokens?: number;
   force_rerun?: boolean;
   client_run_nonce?: string;
+};
+
+export type AssistantContextRunMeta = {
+  accepted: boolean;
+  reason?: string;
+  client_run_nonce?: string | null;
+  run?: {
+    accepted: boolean;
+    replayed?: boolean;
+    nonce?: string | null;
+  };
+  stage?: {
+    current?: AssistantStage;
+    seq?: number;
+  };
+  delivery?: {
+    mode: "normal" | "degraded";
+    contextId: string;
+    revision: number;
+  };
 };
 
 export type AssistantContextEventRecord = {

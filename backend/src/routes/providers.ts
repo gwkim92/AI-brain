@@ -15,7 +15,7 @@ function isMissingTableError(error: unknown): boolean {
 }
 
 export async function providerRoutes(app: FastifyInstance, ctx: RouteContext) {
-  const { store, env, providerRouter, loadRuntimeProviderApiKeys } = ctx;
+  const { store, env, providerRouter, loadRuntimeProviderApiKeys, ensureMinRole } = ctx;
 
   app.get('/api/v1/providers', async (request, reply) => {
     return sendSuccess(reply, request, 200, { providers: providerRouter.listAvailability() });
@@ -70,6 +70,9 @@ export async function providerRoutes(app: FastifyInstance, ctx: RouteContext) {
   });
 
   app.put('/api/v1/providers/policies', async (request, reply) => {
+    const roleError = ensureMinRole(request, reply, 'admin');
+    if (roleError) return roleError;
+
     const schema = z.object({
       task_type: z.string().min(1).max(60),
       provider: z.enum(['openai', 'gemini', 'anthropic', 'local']),

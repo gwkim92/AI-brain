@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import React, { useEffect, useState } from "react";
 
 import { ApiRequestError } from "@/lib/api/client";
-import { authConfig as getAuthConfig, authLogin } from "@/lib/api/endpoints";
+import { authConfig as getAuthConfig, authLogin, authStaticTokenLogin } from "@/lib/api/endpoints";
 import { Jarvis3DCore } from "@/components/ui/Jarvis3DCore";
 import { saveAuthSession, saveManualToken } from "@/lib/auth/session";
 import type { AuthConfigData } from "@/lib/api/types";
@@ -86,18 +86,31 @@ export default function LoginPage() {
     }
   };
 
-  const submitManualToken = () => {
+  const submitManualToken = async () => {
     if (!manualToken.trim()) {
       setError("manual token is required");
       return;
     }
 
-    saveManualToken({
-      token: manualToken.trim(),
-      role: manualRole,
-      userId: manualUserId.trim() || undefined,
-    });
-    router.replace(resolveNextPath());
+    setLoading(true);
+    setError(null);
+    try {
+      const session = await authStaticTokenLogin({ token: manualToken.trim() });
+      saveManualToken({
+        role: session.user.role || manualRole,
+        userId: session.user.id || manualUserId.trim() || undefined,
+        email: session.user.email || undefined,
+      });
+      router.replace(resolveNextPath());
+    } catch (err) {
+      if (err instanceof ApiRequestError) {
+        setError(`${err.code}: ${err.message}`);
+      } else {
+        setError("static token login failed");
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleLoginSubmit = (event: React.FormEvent<HTMLFormElement>) => {
@@ -107,7 +120,7 @@ export default function LoginPage() {
 
   const handleManualTokenSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    submitManualToken();
+    void submitManualToken();
   };
 
   return (
@@ -150,7 +163,7 @@ export default function LoginPage() {
           <section className="glass-panel rounded-xl border border-white/10 p-6 bg-black/70 backdrop-blur-xl">
             <h2 className="text-sm font-mono font-bold tracking-widest text-white/80">STATIC TOKEN MODE</h2>
             <p className="text-[11px] font-mono text-white/50 mt-1">
-              For admin bootstrap: paste `AUTH_TOKEN`, set role, then enter.
+              For admin bootstrap: paste `AUTH_TOKEN` and issue an HttpOnly session cookie.
             </p>
 
             <form className="mt-4 space-y-3" onSubmit={handleManualTokenSubmit}>
@@ -179,9 +192,10 @@ export default function LoginPage() {
               </div>
               <button
                 type="submit"
+                disabled={loading}
                 className="w-full h-10 rounded bg-white/10 border border-white/20 text-white/80 text-xs font-mono tracking-widest"
               >
-                ENTER WITH TOKEN
+                {loading ? "VERIFYING TOKEN..." : "ENTER WITH TOKEN"}
               </button>
             </form>
           </section>

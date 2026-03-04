@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useHUD } from "@/components/providers/HUDProvider";
 import { canAccessWidget, useCurrentRole } from "@/lib/auth/role";
 import { ApiRequestError } from "@/lib/api/client";
-import { createAssistantContext, createTask, generateMissionPlan, runAssistantContext } from "@/lib/api/endpoints";
+import { createAssistantContext, createTask, generateMissionPlan, runAssistantContextWithMeta } from "@/lib/api/endpoints";
 import { buildMissionIntake, dispatchMissionIntake, dispatchMissionIntakeTaskLink } from "@/lib/hud/mission-intake";
 import { classifyPromptComplexity } from "@/lib/hud/complexity";
 import { resolveWorkspaceForIntent } from "@/lib/hud/intent-router";
@@ -201,9 +201,17 @@ export function useQuickCommand() {
             widget_plan: intake.widgetPlan,
             task_id: task.id,
           });
-          await runAssistantContext(context.id, {
+          const runResult = await runAssistantContextWithMeta(context.id, {
             task_type: intake.taskMode,
             client_run_nonce: requestNonce,
+          });
+          emitRuntimeEvent("assistant_stage_updated", {
+            contextId: context.id,
+            stage: runResult.meta.stage?.current ?? "accepted",
+            stageSeq: runResult.meta.stage?.seq ?? null,
+            accepted: runResult.meta.run?.accepted ?? runResult.meta.accepted ?? true,
+            replayed: runResult.meta.run?.replayed ?? false,
+            nonce: runResult.meta.run?.nonce ?? requestNonce,
           });
           linkedContextId = context.id;
 

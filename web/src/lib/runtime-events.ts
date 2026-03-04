@@ -11,6 +11,7 @@ export type JarvisRuntimeEventName =
   | "quick_command_failed"
   | "session_switched"
   | "auto_context_delivered"
+  | "assistant_stage_updated"
   | "assistant_quality_evaluated"
   | "assistant_quality_softened"
   | "assistant_delivery_rendered"

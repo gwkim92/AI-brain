@@ -44,6 +44,15 @@ import { createSpanId, resolveAssistantContextTaskType } from '../types';
 // --- Routes ---
 const QUALITY_SOFT_GATE_ENABLED = process.env.JARVIS_FF_ASSISTANT_QUALITY_SOFT_GATE_V2 !== '0';
 
+type AssistantContextRunStage =
+  | 'accepted'
+  | 'policy_resolved'
+  | 'retrieval_started'
+  | 'retrieval_completed'
+  | 'generation_started'
+  | 'quality_checked'
+  | 'finalized';
+
 export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: RouteContext): void {
   const {
     store,
@@ -165,14 +174,17 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
     const localProviderEnabled = providerAvailability.some((item) => item.provider === 'local' && item.enabled);
     const strictLocalOnly = parsed.data.provider === 'local' && parsed.data.strict_provider;
     const shouldRunGroundedRetrieval = groundingDecision.requiresGrounding;
+    const retrievalRewrittenQueries = shouldRunGroundedRetrieval
+      ? generateQueryRewriteCandidates({
+          prompt: prepared.prompt,
+          maxVariants: 4
+        })
+      : [];
     let retrievalPack: Awaited<ReturnType<typeof retrieveWebEvidence>> | null = null;
     if (shouldRunGroundedRetrieval) {
       retrievalPack = await retrieveWebEvidence({
         prompt: prepared.prompt,
-        rewrittenQueries: generateQueryRewriteCandidates({
-          prompt: prepared.prompt,
-          maxVariants: 4
-        }),
+        rewrittenQueries: retrievalRewrittenQueries,
         maxItems: 8
       });
     }
@@ -190,6 +202,40 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
       retrievalPack && retrievalPack.sources.length > 0 && !retrievalGateBlocked
     );
     const canServeGroundedRequest = canUseLocalGroundedFallback || canUseRetrievalOnlyFallback;
+    let stageSequence = 0;
+    const appendStageEvent = async (
+      stage: AssistantContextRunStage,
+      data: Record<string, unknown> = {},
+      options?: {
+        reasonCode?: string | null;
+        finalized?: 'delivered' | 'failed' | null;
+        revision?: number;
+        taskId?: string | null;
+      }
+    ): Promise<void> => {
+      stageSequence += 1;
+      const nowIso = new Date().toISOString();
+      await store.appendAssistantContextEvent({
+        userId,
+        contextId: prepared.id,
+        eventType: 'assistant.context.stage.updated',
+        data: {
+          stage,
+          stage_seq: stageSequence,
+          started_at: nowIso,
+          ended_at: stage === 'finalized' ? nowIso : null,
+          reason_code: options?.reasonCode ?? null,
+          finalized: options?.finalized ?? null,
+          context_id: prepared.id,
+          client_context_id: prepared.clientContextId,
+          task_id: options?.taskId ?? prepared.taskId ?? resolvedRunTaskId ?? null,
+          revision: options?.revision ?? prepared.revision,
+          ...data
+        },
+        traceId,
+        spanId: createSpanId()
+      });
+    };
 
     if (groundingDecision.requiresGrounding && (!externalProviderEnabled || strictLocalOnly) && !canServeGroundedRequest) {
       const blockedMessage =
@@ -237,6 +283,21 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
         traceId,
         spanId: createSpanId()
       });
+      await appendStageEvent(
+        'finalized',
+        {
+          task_type: taskType,
+          status: 'failed',
+          outcome: 'rejected_preflight',
+          retrieval_sources_count: retrievalPack?.sources.length ?? 0
+        },
+        {
+          reasonCode: errorCode,
+          finalized: 'failed',
+          revision: rejected?.revision ?? prepared.revision,
+          taskId: effectiveTaskId
+        }
+      );
 
       if (effectiveTaskId) {
         await store.setTaskStatus({
@@ -308,6 +369,34 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
       traceId,
       spanId: createSpanId()
     });
+    await appendStageEvent('accepted', {
+      task_type: taskType,
+      provider: parsed.data.provider,
+      strict_provider: parsed.data.strict_provider,
+      model: parsed.data.model ?? null,
+      force_rerun: parsed.data.force_rerun,
+      client_run_nonce: clientRunNonce
+    });
+    await appendStageEvent('policy_resolved', {
+      task_type: taskType,
+      grounding_policy: groundingDecision.policy,
+      grounding_required: groundingDecision.requiresGrounding,
+      grounding_reasons: groundingDecision.reasons,
+      retrieval_fallback_enabled: canServeGroundedRequest,
+      retrieval_only_fallback_enabled: canUseRetrievalOnlyFallback && !canUseLocalGroundedFallback
+    });
+    if (shouldRunGroundedRetrieval) {
+      await appendStageEvent('retrieval_started', {
+        task_type: taskType,
+        rewritten_queries: retrievalRewrittenQueries
+      });
+      await appendStageEvent('retrieval_completed', {
+        task_type: taskType,
+        retrieval_sources_count: retrievalPack?.sources.length ?? 0,
+        retrieval_quality_gate_passed: retrievalQualityGate?.passed ?? null,
+        retrieval_quality_reasons: retrievalQualityGate?.reasons ?? []
+      });
+    }
 
     assistantContextRunsInFlight.add(prepared.id);
 
@@ -333,10 +422,7 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
         return linkedTaskId;
       };
       try {
-        const rewrittenQueries = generateQueryRewriteCandidates({
-          prompt: prepared.prompt,
-          maxVariants: 4
-        });
+        const rewrittenQueries = retrievalRewrittenQueries;
         const contextResult = await runContextPipeline(store, {
           userId,
           prompt: prepared.prompt,
@@ -362,6 +448,15 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
           },
           traceId,
           spanId
+        });
+        await appendStageEvent('generation_started', {
+          task_type: taskType,
+          provider: parsed.data.provider,
+          strict_provider: parsed.data.strict_provider,
+          model: parsed.data.model ?? null,
+          rewritten_queries: rewrittenQueries
+        }, {
+          taskId: linkedTaskId
         });
 
         if (linkedTaskId) {
@@ -555,6 +650,16 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
                   reasons: blockedReasonCodes
                 })
           : outputWithSources;
+        await appendStageEvent('quality_checked', {
+          task_type: taskType,
+          quality_gate_result: qualityGateResult,
+          quality_gate_code: normalizedQualityReasons,
+          quality_gate_softened: softenedByQualityPolicy,
+          quality_guard_triggered: qualityGuardTriggered,
+          quality_guard_reason: qualityGuardReason
+        }, {
+          reasonCode: qualityGuardReason
+        });
         const sourceDomains = Array.from(new Set(sources.map((item) => item.domain)));
         const fallbackTraceTag =
           useRetrievalOnlyFallback
@@ -680,6 +785,17 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
             traceId,
             spanId: createSpanId()
           });
+          await appendStageEvent('finalized', {
+            task_type: taskType,
+            status: 'completed',
+            provider: resolvedProvider,
+            model: resolvedModel,
+            delivery_mode: qualityGateResult === 'pass' && !useRetrievalOnlyFallback ? 'normal' : 'degraded'
+          }, {
+            finalized: 'delivered',
+            revision: completed.revision,
+            taskId: linkedTaskId
+          });
 
           void embedAndStore(store, null, {
             userId,
@@ -750,6 +866,16 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
             traceId,
             spanId: createSpanId()
           });
+          await appendStageEvent('finalized', {
+            task_type: taskType,
+            status: 'failed',
+            attempts_count: attempts.length
+          }, {
+            reasonCode: reason,
+            finalized: 'failed',
+            revision: failed.revision,
+            taskId: linkedTaskId
+          });
         }
 
         linkedTaskId = await ensureLinkedTaskId();
@@ -777,6 +903,15 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
       accepted: true,
       task_type: taskType,
       client_run_nonce: clientRunNonce,
+      run: {
+        accepted: true,
+        replayed: false,
+        nonce: clientRunNonce
+      },
+      stage: {
+        current: 'accepted',
+        seq: stageSequence
+      },
       delivery: {
         mode: 'normal',
         contextId: prepared.id,

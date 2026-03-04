@@ -6,6 +6,7 @@ import type {
   AssistantContextEventStreamEnvelope,
   AssistantContextRecord,
   AssistantContextRunRequest,
+  AssistantContextRunMeta,
   AssistantContextStatus,
   AssistantContextUpdateRequest,
   AiRespondData,
@@ -14,6 +15,8 @@ import type {
   AuthConfigData,
   AuthMeData,
   AuthSessionData,
+  AuthStaticTokenLoginData,
+  AuthStaticTokenLoginRequest,
   AuthSignupRequest,
   CouncilAgentRespondedStreamEnvelope,
   CouncilRoundCompletedStreamEnvelope,
@@ -75,6 +78,13 @@ export async function authSignup(payload: AuthSignupRequest): Promise<AuthSessio
 
 export async function authLogin(payload: AuthLoginRequest): Promise<AuthSessionData> {
   return apiRequest<AuthSessionData>("/api/v1/auth/login", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function authStaticTokenLogin(payload: AuthStaticTokenLoginRequest): Promise<AuthStaticTokenLoginData> {
+  return apiRequest<AuthStaticTokenLoginData>("/api/v1/auth/static-token/login", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -550,10 +560,25 @@ export async function runAssistantContext(
   contextId: string,
   payload: AssistantContextRunRequest = {}
 ): Promise<AssistantContextRecord> {
-  return apiRequest<AssistantContextRecord>(`/api/v1/assistant/contexts/${contextId}/run`, {
+  const response = await apiRequestEnvelope<AssistantContextRecord>(`/api/v1/assistant/contexts/${contextId}/run`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
+  return response.data;
+}
+
+export async function runAssistantContextWithMeta(
+  contextId: string,
+  payload: AssistantContextRunRequest = {}
+): Promise<{ context: AssistantContextRecord; meta: AssistantContextRunMeta }> {
+  const response = await apiRequestEnvelope<AssistantContextRecord>(`/api/v1/assistant/contexts/${contextId}/run`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return {
+    context: response.data,
+    meta: response.meta as AssistantContextRunMeta,
+  };
 }
 
 export async function appendAssistantContextEvent(

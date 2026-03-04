@@ -334,7 +334,8 @@ export async function registerRoutes(
     if (
       requestPath === '/api/v1/auth/config' ||
       requestPath === '/api/v1/auth/signup' ||
-      requestPath === '/api/v1/auth/login'
+      requestPath === '/api/v1/auth/login' ||
+      requestPath === '/api/v1/auth/static-token/login'
     ) {
       return;
     }

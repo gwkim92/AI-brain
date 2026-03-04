@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link";
 import { ToolCallTimeline, ToolCall } from "@/components/ui/ToolCallTimeline";
 import { EvidencePanel, Evidence } from "@/components/ui/EvidencePanel";
-import { Send, Sparkles, BrainCircuit } from "lucide-react";
+import { Send, Sparkles, BrainCircuit, Loader2 } from "lucide-react";
 import {
     aiRespond,
     appendAssistantContextEvent,
@@ -46,6 +46,7 @@ import type {
     AssistantFeedbackEventData,
     AssistantFeedbackSignal,
     AssistantRenderMode,
+    AssistantStage,
     AiRespondData,
     AssistantContextGroundingClaimRecord,
     AssistantContextGroundingSourceRecord,
@@ -142,6 +143,51 @@ type AutoMissionQualityState = {
     reason?: string;
     gateResult: QualityGateResult;
     reasons: string[];
+};
+
+type AssistantStageTimelineRow = {
+    stage: AssistantStage;
+    stageSeq: number;
+    startedAt: string;
+    endedAt: string | null;
+    reasonCode: string | null;
+    finalized: "delivered" | "failed" | null;
+    status: "done" | "running" | "failed";
+    contextId: string;
+};
+
+type AssistantReasoningSummary = {
+    headline: string;
+    lines: string[];
+    qualityResult: QualityGateResult | "running" | null;
+};
+
+type AssistantStageProgress = {
+    currentStageLabel: string;
+    progressPercent: number;
+    isRunning: boolean;
+    hasFailed: boolean;
+    elapsedLabel: string | null;
+};
+
+const STAGE_ORDER: AssistantStage[] = [
+    "accepted",
+    "policy_resolved",
+    "retrieval_started",
+    "retrieval_completed",
+    "generation_started",
+    "quality_checked",
+    "finalized",
+];
+
+const STAGE_LABELS: Record<AssistantStage, string> = {
+    accepted: "Accepted",
+    policy_resolved: "Policy",
+    retrieval_started: "Retrieval Start",
+    retrieval_completed: "Retrieval Done",
+    generation_started: "Generation",
+    quality_checked: "Quality",
+    finalized: "Finalized",
 };
 
 type AutoContextSyncRetryOptions = {
@@ -335,6 +381,62 @@ function toStringArray(value: unknown): string[] {
         .filter((item) => item.length > 0);
 }
 
+function toAssistantStage(value: unknown): AssistantStage | null {
+    if (
+        value === "accepted" ||
+        value === "policy_resolved" ||
+        value === "retrieval_started" ||
+        value === "retrieval_completed" ||
+        value === "generation_started" ||
+        value === "quality_checked" ||
+        value === "finalized"
+    ) {
+        return value;
+    }
+    return null;
+}
+
+function toNumber(value: unknown): number | null {
+    if (typeof value === "number" && Number.isFinite(value)) {
+        return value;
+    }
+    if (typeof value === "string" && value.trim().length > 0) {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) {
+            return parsed;
+        }
+    }
+    return null;
+}
+
+function toIsoStringOrNow(value: unknown): string {
+    if (typeof value === "string" && value.trim().length > 0) {
+        return value;
+    }
+    return new Date().toISOString();
+}
+
+function toQualityGateResult(value: unknown): QualityGateResult | null {
+    if (value === "hard_fail" || value === "soft_warn" || value === "pass") {
+        return value;
+    }
+    return null;
+}
+
+function formatElapsedShort(startedAt: string, nowMs: number): string | null {
+    const startedAtMs = Date.parse(startedAt);
+    if (Number.isNaN(startedAtMs)) {
+        return null;
+    }
+    const elapsedSec = Math.max(0, Math.floor((nowMs - startedAtMs) / 1000));
+    if (elapsedSec < 60) {
+        return `${elapsedSec}s`;
+    }
+    const minutes = Math.floor(elapsedSec / 60);
+    const seconds = elapsedSec % 60;
+    return `${minutes}m ${seconds}s`;
+}
+
 export function AssistantModule() {
     const { sessions, activeSessionId, markSessionContextDelivered } = useHUD();
     const [inputVal, setInputVal] = useState("");
@@ -382,6 +484,10 @@ export function AssistantModule() {
     );
     const uiSoftWarnEnabled = useMemo(
         () => isFeatureEnabled("assistant.ui_soft_warn_render", true),
+        []
+    );
+    const stageTimelineEnabled = useMemo(
+        () => isFeatureEnabled("assistant.stage_timeline_v1", true),
         []
     );
 
@@ -595,6 +701,23 @@ export function AssistantModule() {
     const appendAutoContextEvents = useCallback((clientContextId: string, incoming: AutoMissionEvent[]) => {
         if (incoming.length === 0) {
             return;
+        }
+        for (const item of incoming) {
+            if (item.eventType !== "assistant.context.stage.updated") {
+                continue;
+            }
+            const stage = toAssistantStage(item.data.stage);
+            if (!stage) {
+                continue;
+            }
+            emitRuntimeEvent("assistant_stage_updated", {
+                contextId: clientContextId,
+                eventId: item.id,
+                stage,
+                stageSeq: toNumber(item.data.stage_seq),
+                reasonCode: typeof item.data.reason_code === "string" ? item.data.reason_code : null,
+                finalized: typeof item.data.finalized === "string" ? item.data.finalized : null,
+            });
         }
         setAutoContextEvents((prev) => ({
             ...prev,
@@ -1412,6 +1535,386 @@ export function AssistantModule() {
         };
     }, [autoContexts]);
 
+    const userStageTimeline = useMemo<{ context: AutoMissionContext; rows: AssistantStageTimelineRow[] } | null>(() => {
+        if (!stageTimelineEnabled) {
+            return null;
+        }
+        const activeSession = activeSessionId ? sessions.find((session) => session.id === activeSessionId) : null;
+        const candidateContexts = autoContexts
+            .filter((context) => {
+                if (!activeSession) {
+                    return true;
+                }
+                return context.id === activeSession.id || (activeSession.taskId && context.taskId === activeSession.taskId);
+            })
+            .sort((left, right) => {
+                if (left.status !== right.status) {
+                    if (left.status === "running") return -1;
+                    if (right.status === "running") return 1;
+                }
+                const leftTime = Date.parse(left.completedAt ?? left.startedAt);
+                const rightTime = Date.parse(right.completedAt ?? right.startedAt);
+                const safeLeft = Number.isNaN(leftTime) ? 0 : leftTime;
+                const safeRight = Number.isNaN(rightTime) ? 0 : rightTime;
+                return safeRight - safeLeft;
+            });
+        const target = candidateContexts[0];
+        if (!target) {
+            return null;
+        }
+
+        const sourceEvents = autoContextEvents[target.id] ?? [];
+        const parsedRows: AssistantStageTimelineRow[] = sourceEvents
+            .map((event) => {
+                const data = event.data ?? {};
+                if (event.eventType === "assistant.context.stage.updated") {
+                    const stage = toAssistantStage(data.stage);
+                    if (!stage) {
+                        return null;
+                    }
+                    const seq = toNumber(data.stage_seq) ?? event.sequence;
+                    const finalized = data.finalized === "delivered" || data.finalized === "failed" ? data.finalized : null;
+                    return {
+                        stage,
+                        stageSeq: seq,
+                        startedAt: toIsoStringOrNow(data.started_at ?? event.createdAt),
+                        endedAt: typeof data.ended_at === "string" ? data.ended_at : null,
+                        reasonCode: typeof data.reason_code === "string" ? data.reason_code : null,
+                        finalized,
+                        status: finalized === "failed" ? "failed" : "done",
+                        contextId: target.id,
+                    };
+                }
+
+                if (event.eventType === "assistant.context.run.accepted") {
+                    return {
+                        stage: "accepted",
+                        stageSeq: event.sequence,
+                        startedAt: event.createdAt,
+                        endedAt: null,
+                        reasonCode: null,
+                        finalized: null,
+                        status: "done",
+                        contextId: target.id,
+                    };
+                }
+                if (event.eventType === "assistant.context.policy.resolved") {
+                    return {
+                        stage: "policy_resolved",
+                        stageSeq: event.sequence,
+                        startedAt: event.createdAt,
+                        endedAt: null,
+                        reasonCode: null,
+                        finalized: null,
+                        status: "done",
+                        contextId: target.id,
+                    };
+                }
+                if (event.eventType === "assistant.context.run.started") {
+                    return {
+                        stage: "generation_started",
+                        stageSeq: event.sequence,
+                        startedAt: event.createdAt,
+                        endedAt: null,
+                        reasonCode: null,
+                        finalized: null,
+                        status: "done",
+                        contextId: target.id,
+                    };
+                }
+                if (event.eventType === "assistant.context.run.completed") {
+                    return {
+                        stage: "finalized",
+                        stageSeq: event.sequence,
+                        startedAt: event.createdAt,
+                        endedAt: event.createdAt,
+                        reasonCode: null,
+                        finalized: "delivered",
+                        status: "done",
+                        contextId: target.id,
+                    };
+                }
+                if (event.eventType === "assistant.context.run.failed") {
+                    return {
+                        stage: "finalized",
+                        stageSeq: event.sequence,
+                        startedAt: event.createdAt,
+                        endedAt: event.createdAt,
+                        reasonCode: typeof data.reason === "string" ? data.reason : null,
+                        finalized: "failed",
+                        status: "failed",
+                        contextId: target.id,
+                    };
+                }
+                return null;
+            })
+            .filter((item): item is AssistantStageTimelineRow => item !== null);
+
+        if (parsedRows.length === 0) {
+            return {
+                context: target,
+                rows: [
+                    {
+                        stage: "accepted",
+                        stageSeq: 1,
+                        startedAt: target.startedAt,
+                        endedAt: null,
+                        reasonCode: null,
+                        finalized: null,
+                        status: target.status === "running" ? "running" : target.status === "error" ? "failed" : "done",
+                        contextId: target.id,
+                    },
+                ],
+            };
+        }
+
+        const dedupedByStage = new Map<AssistantStage, AssistantStageTimelineRow>();
+        for (const row of parsedRows) {
+            const current = dedupedByStage.get(row.stage);
+            if (!current || row.stageSeq >= current.stageSeq) {
+                dedupedByStage.set(row.stage, row);
+            }
+        }
+
+        const dedupedRows = Array.from(dedupedByStage.values()).sort((left, right) => {
+            if (left.stageSeq !== right.stageSeq) {
+                return left.stageSeq - right.stageSeq;
+            }
+            return STAGE_ORDER.indexOf(left.stage) - STAGE_ORDER.indexOf(right.stage);
+        });
+        const highestSeq = dedupedRows.reduce((max, item) => Math.max(max, item.stageSeq), 0);
+        const hasFinalized = dedupedRows.some((item) => item.stage === "finalized");
+
+        const rows = dedupedRows.map((row) => {
+            if (target.status === "running" && !hasFinalized && row.stageSeq === highestSeq) {
+                return {
+                    ...row,
+                    status: "running" as const,
+                };
+            }
+            if (row.stage === "finalized" && row.finalized === "failed") {
+                return {
+                    ...row,
+                    status: "failed" as const,
+                };
+            }
+            return {
+                ...row,
+                status: "done" as const,
+            };
+        });
+
+        return {
+            context: target,
+            rows,
+        };
+    }, [activeSessionId, autoContextEvents, autoContexts, sessions, stageTimelineEnabled]);
+
+    const [stageTimelineNowMs, setStageTimelineNowMs] = useState(() => Date.now());
+    const timelineContextId = userStageTimeline?.context.id ?? null;
+    const timelineIsRunning = userStageTimeline?.context.status === "running";
+
+    useEffect(() => {
+        if (!timelineContextId || !timelineIsRunning) {
+            return;
+        }
+        setStageTimelineNowMs(Date.now());
+        const timerId = window.setInterval(() => {
+            setStageTimelineNowMs(Date.now());
+        }, 1000);
+        return () => {
+            window.clearInterval(timerId);
+        };
+    }, [timelineContextId, timelineIsRunning]);
+
+    const userStageProgress = useMemo<AssistantStageProgress | null>(() => {
+        if (!userStageTimeline || userStageTimeline.rows.length === 0) {
+            return null;
+        }
+        const rows = userStageTimeline.rows;
+        const runningRow = rows.find((row) => row.status === "running");
+        const failedRow = rows.find((row) => row.status === "failed");
+        const activeRow = runningRow ?? failedRow ?? rows[rows.length - 1];
+        const stageIndex = Math.max(0, STAGE_ORDER.indexOf(activeRow.stage));
+        const rawProgress =
+            activeRow.stage === "finalized" && !runningRow
+                ? 100
+                : ((stageIndex + (runningRow ? 0.45 : 1)) / STAGE_ORDER.length) * 100;
+        const progressPercent = Math.min(100, Math.max(6, Math.round(rawProgress)));
+        return {
+            currentStageLabel: STAGE_LABELS[activeRow.stage],
+            progressPercent,
+            isRunning: Boolean(runningRow),
+            hasFailed: Boolean(failedRow),
+            elapsedLabel: runningRow ? formatElapsedShort(userStageTimeline.context.startedAt, stageTimelineNowMs) : null,
+        };
+    }, [stageTimelineNowMs, userStageTimeline]);
+
+    const userReasoningSummary = useMemo<AssistantReasoningSummary | null>(() => {
+        if (!stageTimelineEnabled || !userStageTimeline) {
+            return null;
+        }
+
+        const context = userStageTimeline.context;
+        const sourceEvents = autoContextEvents[context.id] ?? [];
+        const latestByEventType = new Map<string, AutoMissionEvent>();
+        const stageDataByStage = new Map<AssistantStage, { seq: number; data: Record<string, unknown> }>();
+
+        for (const event of sourceEvents) {
+            const existingEvent = latestByEventType.get(event.eventType);
+            if (!existingEvent || event.sequence >= existingEvent.sequence) {
+                latestByEventType.set(event.eventType, event);
+            }
+            if (event.eventType !== "assistant.context.stage.updated") {
+                continue;
+            }
+            const stage = toAssistantStage(event.data.stage);
+            if (!stage) {
+                continue;
+            }
+            const stageSeq = toNumber(event.data.stage_seq) ?? event.sequence;
+            const current = stageDataByStage.get(stage);
+            if (!current || stageSeq >= current.seq) {
+                stageDataByStage.set(stage, {
+                    seq: stageSeq,
+                    data: event.data,
+                });
+            }
+        }
+
+        const policyData =
+            stageDataByStage.get("policy_resolved")?.data ??
+            latestByEventType.get("assistant.context.policy.resolved")?.data ??
+            {};
+        const retrievalData = stageDataByStage.get("retrieval_completed")?.data ?? {};
+        const qualityData = stageDataByStage.get("quality_checked")?.data ?? {};
+        const finalizedData = stageDataByStage.get("finalized")?.data ?? {};
+        const completedData = latestByEventType.get("assistant.context.run.completed")?.data ?? {};
+
+        const groundingPolicy =
+            typeof policyData.grounding_policy === "string"
+                ? policyData.grounding_policy
+                : typeof completedData.grounding_policy === "string"
+                    ? completedData.grounding_policy
+                    : null;
+        const groundingRequired =
+            policyData.grounding_required === true || completedData.grounding_required === true;
+
+        const retrievalSourceCount = toNumber(
+            retrievalData.retrieval_sources_count ?? completedData.sources_count
+        );
+        const retrievalGatePassedRaw = retrievalData.retrieval_quality_gate_passed;
+        const retrievalGatePassed =
+            typeof retrievalGatePassedRaw === "boolean" ? retrievalGatePassedRaw : null;
+
+        const completedQuality =
+            completedData.quality && typeof completedData.quality === "object"
+                ? (completedData.quality as Record<string, unknown>)
+                : null;
+        const qualityResult =
+            toQualityGateResult(qualityData.quality_gate_result) ??
+            toQualityGateResult(completedData.quality_gate_result) ??
+            toQualityGateResult(completedQuality?.gateResult);
+        const qualityReasonCodes = parseQualityReasonCodes("", [
+            ...toStringArray(qualityData.quality_gate_code),
+            ...toStringArray(completedData.quality_gate_code),
+            ...toStringArray(completedQuality?.reasons),
+        ]);
+
+        const completedDelivery =
+            completedData.delivery && typeof completedData.delivery === "object"
+                ? (completedData.delivery as Record<string, unknown>)
+                : null;
+        const deliveryMode =
+            typeof finalizedData.delivery_mode === "string"
+                ? finalizedData.delivery_mode
+                : typeof completedDelivery?.mode === "string"
+                    ? completedDelivery.mode
+                    : null;
+
+        const provider =
+            typeof finalizedData.provider === "string"
+                ? finalizedData.provider
+                : typeof completedData.provider === "string"
+                    ? completedData.provider
+                    : context.servedProvider;
+        const model =
+            typeof finalizedData.model === "string"
+                ? finalizedData.model
+                : typeof completedData.model === "string"
+                    ? completedData.model
+                    : context.servedModel;
+
+        const runningStage = userStageTimeline.rows.find((item) => item.status === "running");
+        const latestStage = userStageTimeline.rows[userStageTimeline.rows.length - 1];
+        const currentStageLabel = STAGE_LABELS[(runningStage ?? latestStage)?.stage ?? "accepted"];
+        const headline =
+            context.status === "running"
+                ? `현재 단계: ${currentStageLabel}`
+                : context.status === "error"
+                    ? "실행 실패: 품질/공급자 상태를 확인하세요."
+                    : "실행 완료: 최종 응답을 전달했습니다.";
+
+        const lines: string[] = [];
+        if (groundingPolicy) {
+            lines.push(
+                `정책 판정: ${groundingPolicy}${groundingRequired ? " · grounded required" : " · grounded optional"}`
+            );
+        } else {
+            lines.push(`요청 분류: ${context.intent}`);
+        }
+        if (retrievalSourceCount !== null || groundingRequired) {
+            if (retrievalSourceCount === null) {
+                lines.push(
+                    `근거 수집: ${
+                        context.status === "running" ? "수집 단계 진행 중" : "수집 메타 없음"
+                    }`
+                );
+            } else {
+                lines.push(
+                    `근거 수집: ${retrievalSourceCount}개 출처 확보${
+                        retrievalGatePassed === false ? " (retrieval 품질 경고)" : ""
+                    }`
+                );
+            }
+        }
+
+        const qualityLabel =
+            qualityResult === "hard_fail"
+                ? "hard fail"
+                : qualityResult === "soft_warn"
+                    ? "soft warn"
+                    : qualityResult === "pass"
+                        ? "pass"
+                        : context.status === "running"
+                            ? "pending"
+                            : "unknown";
+        if (qualityReasonCodes.length > 0) {
+            lines.push(
+                `품질 게이트: ${qualityLabel} · ${qualityReasonCodes
+                    .slice(0, 2)
+                    .map((code) => mapBlockedReasonLabel(code))
+                    .join(" / ")}`
+            );
+        } else {
+            lines.push(`품질 게이트: ${qualityLabel}`);
+        }
+
+        if (provider || model || deliveryMode) {
+            lines.push(
+                `전달 경로: ${provider ?? "auto"}/${model ?? "default"} · ${
+                    deliveryMode ?? (context.status === "running" ? "preparing" : "normal")
+                }`
+            );
+        }
+
+        return {
+            headline,
+            lines,
+            qualityResult: context.status === "running" && !qualityResult ? "running" : qualityResult,
+        };
+    }, [autoContextEvents, stageTimelineEnabled, userStageTimeline]);
+
     const formatAutoPrompt = (prompt: string): string => {
         const normalized = prompt.replace(/\s+/g, " ").trim();
         if (normalized.length <= 72) {
@@ -1953,11 +2456,127 @@ export function AssistantModule() {
                             </label>
                         </div>
                     ) : (
-                        <div className="px-4 py-2 border-b border-white/5 bg-black/40 flex items-center justify-between text-[10px] font-mono">
-                            <span className="text-white/55 uppercase tracking-widest">User Mode</span>
-                            <span className="text-cyan-300/80">
-                                grounded answers enabled for dynamic factual prompts
-                            </span>
+                        <div className="border-b border-white/5 bg-black/40">
+                            <div className="px-4 py-2 flex items-center justify-between text-[10px] font-mono">
+                                <span className="text-white/55 uppercase tracking-widest">User Mode</span>
+                                <span className="text-cyan-300/80">
+                                    grounded answers enabled for dynamic factual prompts
+                                </span>
+                            </div>
+                            {stageTimelineEnabled && userStageTimeline && (
+                                <div className="px-4 pb-3">
+                                    <div className="rounded border border-cyan-500/20 bg-cyan-500/5 px-3 py-2">
+                                        <div className="flex items-center justify-between gap-3 text-[10px] font-mono tracking-widest">
+                                            <span className="text-cyan-300">AI EXECUTION STAGES</span>
+                                            <div className="flex items-center gap-2 min-w-0">
+                                                {userStageProgress?.isRunning && (
+                                                    <span className="inline-flex items-center gap-1 rounded border border-cyan-500/40 bg-cyan-500/15 px-1.5 py-0.5 text-[9px] text-cyan-200 shrink-0">
+                                                        <span className="h-1.5 w-1.5 rounded-full bg-cyan-300 animate-pulse" />
+                                                        LIVE
+                                                    </span>
+                                                )}
+                                                <span className="text-white/45 truncate">
+                                                    {formatAutoPrompt(userStageTimeline.context.prompt)}
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                            {userStageTimeline.rows.map((item) => {
+                                                const isRunning = item.status === "running";
+                                                const isFailed = item.status === "failed";
+                                                const chipClass = isFailed
+                                                    ? "border-rose-500/40 bg-rose-500/15 text-rose-200"
+                                                    : isRunning
+                                                        ? "border-cyan-500/50 bg-cyan-500/20 text-cyan-200 animate-pulse"
+                                                        : "border-emerald-500/35 bg-emerald-500/10 text-emerald-200";
+                                                return (
+                                                    <span
+                                                        key={`${item.contextId}:${item.stage}:${item.stageSeq}`}
+                                                        className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-[10px] font-mono ${chipClass}`}
+                                                    >
+                                                        <span>{STAGE_LABELS[item.stage]}</span>
+                                                        <span className="text-[9px] opacity-80">#{item.stageSeq}</span>
+                                                    </span>
+                                                );
+                                            })}
+                                        </div>
+                                        {userStageProgress && (
+                                            <div className="mt-2">
+                                                <div className="flex items-center justify-between text-[9px] font-mono tracking-widest text-white/50">
+                                                    <span className="inline-flex items-center gap-1">
+                                                        {userStageProgress.isRunning && (
+                                                            <Loader2 size={11} className="animate-spin text-cyan-200" />
+                                                        )}
+                                                        {userStageProgress.currentStageLabel}
+                                                        {userStageProgress.hasFailed && " · FAILED"}
+                                                    </span>
+                                                    <span>
+                                                        {userStageProgress.progressPercent}%{userStageProgress.elapsedLabel ? ` · ${userStageProgress.elapsedLabel}` : ""}
+                                                    </span>
+                                                </div>
+                                                <div className="mt-1 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                                                    <div
+                                                        className={`h-full rounded-full bg-gradient-to-r from-cyan-400/85 via-cyan-300/75 to-emerald-300/80 transition-[width] duration-500 ${
+                                                            userStageProgress.isRunning ? "animate-pulse" : ""
+                                                        }`}
+                                                        style={{ width: `${userStageProgress.progressPercent}%` }}
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+                                        {userStageTimeline.rows.some((item) => item.reasonCode) && (
+                                            <p className="mt-2 text-[10px] font-mono text-rose-200/80 break-all">
+                                                reason:{" "}
+                                                {userStageTimeline.rows
+                                                    .map((item) => item.reasonCode)
+                                                    .filter((item): item is string => Boolean(item))
+                                                    .join(", ")}
+                                            </p>
+                                        )}
+                                        {userReasoningSummary && (
+                                            <div className="mt-2 rounded border border-white/10 bg-black/30 px-3 py-2">
+                                                <div className="flex items-center justify-between gap-2 text-[10px] font-mono tracking-widest">
+                                                    <span className="inline-flex items-center gap-1 text-cyan-300">
+                                                        {userStageProgress?.isRunning && (
+                                                            <Loader2 size={11} className="animate-spin text-cyan-200" />
+                                                        )}
+                                                        REASONING SUMMARY
+                                                    </span>
+                                                    <span
+                                                        className={`rounded border px-1.5 py-0.5 text-[9px] ${
+                                                            userReasoningSummary.qualityResult === "hard_fail"
+                                                                ? "border-rose-500/40 bg-rose-500/15 text-rose-200"
+                                                                : userReasoningSummary.qualityResult === "soft_warn"
+                                                                    ? "border-amber-500/40 bg-amber-500/15 text-amber-200"
+                                                                    : userReasoningSummary.qualityResult === "pass"
+                                                                        ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-200"
+                                                                        : "border-cyan-500/40 bg-cyan-500/15 text-cyan-200"
+                                                        }`}
+                                                    >
+                                                        {userReasoningSummary.qualityResult === "hard_fail"
+                                                            ? "HARD FAIL"
+                                                            : userReasoningSummary.qualityResult === "soft_warn"
+                                                                ? "SOFT WARN"
+                                                                : userReasoningSummary.qualityResult === "pass"
+                                                                    ? "PASS"
+                                                                    : "RUNNING"}
+                                                    </span>
+                                                </div>
+                                                <p className="mt-1 text-[11px] text-white/85">
+                                                    {userReasoningSummary.headline}
+                                                </p>
+                                                <ul className="mt-1 space-y-0.5 text-[11px] text-white/70">
+                                                    {userReasoningSummary.lines.map((line, index) => (
+                                                        <li key={`${userStageTimeline.context.id}_reasoning_${index}`}>
+                                                            - {line}
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
 

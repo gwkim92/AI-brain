@@ -6,7 +6,9 @@ export type JarvisFeatureFlag =
   | "visual_core.auto_failover"
   | "assistant.quality_soft_gate_v2"
   | "assistant.ui_soft_warn_render"
-  | "assistant.optimistic_running_task";
+  | "assistant.optimistic_running_task"
+  | "assistant.stage_timeline_v1"
+  | "session.restore_deterministic_v2";
 
 const STORAGE_PREFIX = "jarvis.ff.";
 
@@ -17,6 +19,8 @@ const ENV_BY_FLAG: Record<JarvisFeatureFlag, string> = {
   "assistant.quality_soft_gate_v2": "NEXT_PUBLIC_FF_ASSISTANT_QUALITY_SOFT_GATE_V2",
   "assistant.ui_soft_warn_render": "NEXT_PUBLIC_FF_ASSISTANT_UI_SOFT_WARN_RENDER",
   "assistant.optimistic_running_task": "NEXT_PUBLIC_FF_ASSISTANT_OPTIMISTIC_RUNNING_TASK",
+  "assistant.stage_timeline_v1": "NEXT_PUBLIC_FF_ASSISTANT_STAGE_TIMELINE_V1",
+  "session.restore_deterministic_v2": "NEXT_PUBLIC_FF_SESSION_RESTORE_DETERMINISTIC_V2",
 };
 
 function parseBoolean(value: string | null | undefined): boolean | null {

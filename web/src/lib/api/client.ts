@@ -64,7 +64,7 @@ function buildRuntimeAuthHeaders(): Record<string, string> {
   const envRole = process.env.NEXT_PUBLIC_USER_ROLE?.trim();
   const envUserId = process.env.NEXT_PUBLIC_USER_ID?.trim();
   const storedToken =
-    typeof window !== "undefined" ? window.localStorage.getItem("jarvis.auth.token")?.trim() ?? "" : "";
+    typeof window !== "undefined" ? window.sessionStorage.getItem("jarvis.auth.token")?.trim() ?? "" : "";
   const storedRole =
     typeof window !== "undefined" ? window.localStorage.getItem("jarvis.auth.role")?.trim() ?? "" : "";
   const storedUserId =
@@ -132,6 +132,7 @@ export async function apiRequestEnvelope<TData>(
 
   const response = await fetch(buildApiUrl(pathname, query), {
     ...requestInit,
+    credentials: "include",
     headers: {
       ...(hasRequestBody ? { "Content-Type": "application/json" } : {}),
       ...buildRuntimeAuthHeaders(),
