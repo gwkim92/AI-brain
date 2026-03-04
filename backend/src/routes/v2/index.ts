@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 
 import type { RouteContext } from '../types';
+import { registerV2CommandRoutes } from './command';
 import { resolveV2FeatureFlags, type V2RouteContext } from './types';
 
 export async function registerV2Routes(app: FastifyInstance, ctx: RouteContext): Promise<void> {
@@ -26,4 +27,6 @@ export async function registerV2Routes(app: FastifyInstance, ctx: RouteContext):
       meta: {}
     });
   });
+
+  await registerV2CommandRoutes(app, v2Ctx);
 }

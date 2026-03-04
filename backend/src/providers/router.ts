@@ -488,3 +488,5 @@ export function summarizeResult(result: ProviderGenerateResult): {
     usage: result.usage
   };
 }
+
+export type ProviderRouterLike = Pick<ProviderRouter, 'generate' | 'listAvailability'>;
