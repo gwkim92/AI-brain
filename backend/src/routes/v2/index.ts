@@ -1,11 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 
 import type { RouteContext } from '../types';
+import { registerV2ActionRoutes } from './actions';
 import { registerV2CapabilityRoutes } from './capabilities';
 import { registerV2CodeLoopRoutes } from './code-loops';
 import { registerV2CommandRoutes } from './command';
 import { registerV2EvalRoutes } from './evals';
 import { registerV2FinanceRoutes } from './finance';
+import { registerV2IncidentRoutes } from './incidents';
+import { registerV2KgRoutes } from './kg';
 import { registerV2PolicyRoutes } from './policies';
 import { registerV2RetrievalRoutes } from './retrieval';
 import { registerV2TaskViewRoutes } from './task-view';
@@ -45,4 +48,7 @@ export async function registerV2Routes(app: FastifyInstance, ctx: RouteContext):
   await registerV2TaskViewRoutes(app, v2Ctx);
   await registerV2PolicyRoutes(app, v2Ctx);
   await registerV2EvalRoutes(app, v2Ctx);
+  await registerV2IncidentRoutes(app, v2Ctx);
+  await registerV2ActionRoutes(app, v2Ctx);
+  await registerV2KgRoutes(app, v2Ctx);
 }
