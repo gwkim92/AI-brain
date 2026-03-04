@@ -19,6 +19,52 @@ export type DagRunResult = {
   completedOrder: string[];
 };
 
+export function validateDagSteps(steps: DagStep[]): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  const stepById = new Map<string, DagStep>();
+
+  for (const step of steps) {
+    if (stepById.has(step.id)) {
+      errors.push(`duplicate_step_id:${step.id}`);
+      continue;
+    }
+    stepById.set(step.id, step);
+  }
+
+  for (const step of steps) {
+    for (const depId of step.dependencies ?? []) {
+      if (!stepById.has(depId)) {
+        errors.push(`unknown_dependency:${step.id}->${depId}`);
+      }
+    }
+  }
+
+  const visitState = new Map<string, 'visiting' | 'visited'>();
+  const visit = (stepId: string): void => {
+    const state = visitState.get(stepId);
+    if (state === 'visiting') {
+      errors.push(`cycle_detected:${stepId}`);
+      return;
+    }
+    if (state === 'visited') return;
+    visitState.set(stepId, 'visiting');
+    const step = stepById.get(stepId);
+    for (const depId of step?.dependencies ?? []) {
+      visit(depId);
+    }
+    visitState.set(stepId, 'visited');
+  };
+
+  for (const step of steps) {
+    visit(step.id);
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors: Array.from(new Set(errors))
+  };
+}
+
 export async function runDag(steps: DagStep[], options: DagRunOptions = {}): Promise<DagRunResult> {
   if (steps.length === 0) {
     return {
