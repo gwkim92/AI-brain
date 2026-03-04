@@ -1,4 +1,4 @@
-import type { JarvisStore } from './types';
+import type { JarvisStore, V2RepositoryContract } from './types';
 
 export const CORE_STORE_METHOD_KEYS = [
   'getPool',
@@ -105,6 +105,12 @@ export const STORE_METHOD_KEY_GROUPS = {
   memory: MEMORY_REPOSITORY_METHOD_KEYS
 } as const satisfies Record<string, readonly (keyof JarvisStore)[]>;
 
+export const V2_REPOSITORY_METHOD_KEYS = [
+  'createCommandCompilation',
+  'listCapabilityModules',
+  'saveTaskViewSchema'
+] as const satisfies readonly (keyof V2RepositoryContract)[];
+
 export type StoreMethodKeyGroupName = keyof typeof STORE_METHOD_KEY_GROUPS;
 
 export const ALL_STORE_METHOD_KEYS: (keyof JarvisStore)[] = Object.values(STORE_METHOD_KEY_GROUPS).flatMap((keys) =>
@@ -194,3 +200,4 @@ export type MemoryRepositoryContract = Pick<JarvisStore, 'createMemorySegment' |
 
 export type UpgradeExecutorGatewayStoreDepsContract = Pick<JarvisStore, 'findUpgradeProposalById' | 'createUpgradeRun'>;
 export type UpgradeExecutorGatewayContract = ReturnType<JarvisStore['createUpgradeExecutorGateway']>;
+export type V2StoreRepositoryContract = Pick<V2RepositoryContract, (typeof V2_REPOSITORY_METHOD_KEYS)[number]>;
