@@ -1,0 +1,17 @@
+[
+  {
+    "id": "case_code_001",
+    "input": "fix the failing test in auth module",
+    "expected_domain": "code"
+  },
+  {
+    "id": "case_finance_001",
+    "input": "analyze portfolio risk under rate hike",
+    "expected_domain": "finance"
+  },
+  {
+    "id": "case_research_001",
+    "input": "summarize latest retrieval evidence with sources",
+    "expected_domain": "research"
+  }
+]
