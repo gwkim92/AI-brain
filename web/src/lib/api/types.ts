@@ -725,3 +725,57 @@ export type ApprovalRecord = {
   createdAt: string;
   updatedAt: string;
 };
+
+export type V2ExecutionContract = {
+  id: string;
+  goal: string;
+  success_criteria: string[];
+  constraints: Record<string, unknown>;
+  risk: {
+    level: "low" | "medium" | "high";
+    reasons: string[];
+    requires_approval: boolean;
+  };
+  deliverables: Array<Record<string, unknown>>;
+  domain_mix: Record<string, number>;
+};
+
+export type V2CommandCompileResponse = {
+  execution_contract: V2ExecutionContract;
+  routing: {
+    intent: "code" | "research" | "finance" | "news" | "general";
+    complexity: "simple" | "moderate" | "complex";
+    confidence: number;
+    uncertainty: number;
+  };
+  clarification: {
+    required: boolean;
+    questions: string[];
+  };
+};
+
+export type TaskViewSchema = {
+  version: "1.0";
+  task_id: string;
+  layout: "single" | "split" | "board";
+  widgets: Array<{
+    id: string;
+    type: string;
+    title: string;
+    props: Record<string, unknown>;
+    visible_when?: string;
+  }>;
+  actions: Array<{
+    id: "pause" | "resume" | "retry" | "replan" | "approve" | "rollback";
+    enabled: boolean;
+    reason?: string;
+  }>;
+};
+
+export type V2TaskViewSchemaResponse = {
+  task_view_schema: TaskViewSchema;
+  policy: {
+    decision: "allow" | "deny" | "approval_required";
+    matched_rule_ids: string[];
+  };
+};

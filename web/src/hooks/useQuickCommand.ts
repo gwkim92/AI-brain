@@ -5,7 +5,14 @@ import { usePathname, useRouter } from "next/navigation";
 import { useHUD } from "@/components/providers/HUDProvider";
 import { canAccessWidget, useCurrentRole } from "@/lib/auth/role";
 import { ApiRequestError } from "@/lib/api/client";
-import { createAssistantContext, createTask, generateMissionPlan, runAssistantContextWithMeta } from "@/lib/api/endpoints";
+import {
+  compileV2Command,
+  createAssistantContext,
+  createTask,
+  generateMissionPlan,
+  getV2TaskViewSchema,
+  runAssistantContextWithMeta
+} from "@/lib/api/endpoints";
 import { buildMissionIntake, dispatchMissionIntake, dispatchMissionIntakeTaskLink } from "@/lib/hud/mission-intake";
 import { classifyPromptComplexity } from "@/lib/hud/complexity";
 import { resolveWorkspaceForIntent } from "@/lib/hud/intent-router";
@@ -82,6 +89,35 @@ export function useQuickCommand() {
     const intake = buildMissionIntake(trimmed, "inbox_quick_command", {
       requestNonce,
     });
+    const v2CommandCompilerEnabled = isFeatureEnabled("v2.command_compiler", false);
+    const v2SchemaUiEnabled = isFeatureEnabled("v2.schema_ui", false);
+    if (v2CommandCompilerEnabled) {
+      try {
+        const compiled = await compileV2Command({
+          prompt: trimmed,
+          session_id: intake.id,
+          mode_hint: intake.taskMode,
+        });
+        emitRuntimeEvent("v2_command_compiled", {
+          intakeId: intake.id,
+          sessionId: intake.id,
+          requestNonce,
+          executionContract: compiled.execution_contract,
+          routing: compiled.routing,
+          clarification: compiled.clarification,
+        });
+      } catch (compileError) {
+        emitRuntimeEvent("quick_command_failed", {
+          intakeId: intake.id,
+          requestNonce,
+          prompt: trimmed,
+          code: "v2_compile_failed",
+          message: compileError instanceof Error ? compileError.message : "v2 compile failed",
+          taskMode: intake.taskMode,
+          singleFlightEnabled,
+        });
+      }
+    }
     const complexity = classifyPromptComplexity(trimmed);
     emitRuntimeEvent("quick_command_started", {
       intakeId: intake.id,
@@ -191,6 +227,20 @@ export function useQuickCommand() {
         });
         linkSessionTask(sessionId, task.id);
         linkedTaskId = task.id;
+
+        if (v2SchemaUiEnabled) {
+          try {
+            const schema = await getV2TaskViewSchema(task.id);
+            emitRuntimeEvent("v2_task_view_schema_updated", {
+              intakeId: intake.id,
+              taskId: task.id,
+              schema: schema.task_view_schema,
+              policy: schema.policy,
+            });
+          } catch {
+            // keep static HUD fallback when schema is unavailable
+          }
+        }
 
         try {
           const context = await createAssistantContext({

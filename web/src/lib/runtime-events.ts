@@ -16,7 +16,9 @@ export type JarvisRuntimeEventName =
   | "assistant_quality_softened"
   | "assistant_delivery_rendered"
   | "running_task_visible"
-  | "visual_core_engine_switched";
+  | "visual_core_engine_switched"
+  | "v2_command_compiled"
+  | "v2_task_view_schema_updated";
 
 export type JarvisRuntimeEventDetail<
   TPayload extends Record<string, unknown> = Record<string, unknown>,
