@@ -107,6 +107,10 @@ export const STORE_METHOD_KEY_GROUPS = {
 
 export const V2_REPOSITORY_METHOD_KEYS = [
   'createCommandCompilation',
+  'getCommandCompilationById',
+  'createRetrievalQuery',
+  'createRetrievalEvidenceItems',
+  'createRetrievalScore',
   'listCapabilityModules',
   'saveTaskViewSchema'
 ] as const satisfies readonly (keyof V2RepositoryContract)[];

@@ -792,6 +792,12 @@ export type V2LineageEdgeRecord = {
 
 export type V2RepositoryContract = {
   createCommandCompilation: (input: Omit<V2ExecutionContractRecord, 'id' | 'createdAt' | 'updatedAt'>) => Promise<V2ExecutionContractRecord>;
+  getCommandCompilationById: (input: { id: string; userId: string }) => Promise<V2ExecutionContractRecord | null>;
+  createRetrievalQuery: (input: Omit<V2RetrievalQueryRecord, 'id' | 'createdAt'>) => Promise<V2RetrievalQueryRecord>;
+  createRetrievalEvidenceItems: (
+    input: Array<Omit<V2RetrievalEvidenceItemRecord, 'id' | 'createdAt'>>
+  ) => Promise<V2RetrievalEvidenceItemRecord[]>;
+  createRetrievalScore: (input: Omit<V2RetrievalScoreRecord, 'id' | 'createdAt'>) => Promise<V2RetrievalScoreRecord>;
   listCapabilityModules: () => Promise<V2CapabilityModuleRecord[]>;
   saveTaskViewSchema: (input: Omit<V2TaskViewSchemaRecord, 'id' | 'createdAt'>) => Promise<V2TaskViewSchemaRecord>;
 };

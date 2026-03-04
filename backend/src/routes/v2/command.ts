@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import { compileCommand } from '../../command/compiler';
 import { sendError, sendSuccess } from '../../lib/http';
-import { createMemoryV2Repository } from '../../store/memory/v2-repositories';
+import { getSharedMemoryV2Repository } from '../../store/memory/v2-repositories';
 import { createPostgresV2Repository } from '../../store/postgres/v2-repositories';
 import type { V2RouteContext } from './types';
 
@@ -13,7 +13,7 @@ const CompileCommandSchema = z.object({
   mode_hint: z.string().min(1).max(120).optional()
 });
 
-const memoryV2Repo = createMemoryV2Repository();
+const memoryV2Repo = getSharedMemoryV2Repository();
 
 export async function registerV2CommandRoutes(app: FastifyInstance, ctx: V2RouteContext): Promise<void> {
   app.post('/api/v2/command/compile', async (request, reply) => {
@@ -59,4 +59,3 @@ export async function registerV2CommandRoutes(app: FastifyInstance, ctx: V2Route
     });
   });
 }
-
