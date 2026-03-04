@@ -62,6 +62,11 @@ export class CodeLoopEngineV2 {
       step,
       log
     });
+    this.pushEvent(run, 'code_loop.lineage.recorded', {
+      run_id: run.id,
+      step_id: record.id,
+      artifact_type: `${step}_log`
+    });
   }
 
   private setStatus(run: CodeLoopRunV2, status: CodeLoopStatusV2) {

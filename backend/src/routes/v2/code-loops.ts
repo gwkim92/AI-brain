@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
+import { createGitHubBranchAndPr } from '../../code-loop/adapters/github-pr';
 import { getSharedCodeLoopEngine } from '../../code-loop/engine';
+import { runLocalVerificationCommand } from '../../code-loop/runners/local-shell';
 import { sendError, sendSuccess } from '../../lib/http';
 import { getSharedMemoryV2Repository } from '../../store/memory/v2-repositories';
 import { createPostgresV2Repository } from '../../store/postgres/v2-repositories';
@@ -13,6 +15,7 @@ const CreateCodeLoopRunSchema = z.object({
   prompt: z.string().min(1).max(12000).optional(),
   changed_files: z.array(z.string().min(1).max(500)).max(200).default([]),
   policy_violations: z.array(z.string().min(1).max(240)).max(50).optional(),
+  verification_commands: z.array(z.string().min(1).max(240)).max(8).optional(),
   simulate: z
     .object({
       test_failures: z.number().int().min(0).max(5).optional()
@@ -59,12 +62,57 @@ export async function registerV2CodeLoopRoutes(app: FastifyInstance, ctx: V2Rout
       simulate: parsed.data.simulate
     });
 
+    const verification = parsed.data.verification_commands
+      ? await Promise.all(
+          parsed.data.verification_commands.map(async (command) => ({
+            command,
+            ...(await runLocalVerificationCommand({
+              command,
+              cwd: process.cwd(),
+              enabled: ctx.env.CODE_LOOP_LOCAL_EXEC_ENABLED
+            }))
+          }))
+        )
+      : [];
+
+    let pr:
+      | {
+          url: string;
+          number: number;
+          head: string;
+          base: string;
+        }
+      | null = null;
+    let prError: string | null = null;
+    if (run.status === 'completed' && ctx.env.GITHUB_TOKEN && ctx.env.GITHUB_OWNER && ctx.env.GITHUB_REPO) {
+      try {
+        pr = await createGitHubBranchAndPr(
+          {
+            token: ctx.env.GITHUB_TOKEN,
+            owner: ctx.env.GITHUB_OWNER,
+            repo: ctx.env.GITHUB_REPO,
+            baseBranch: 'main'
+          },
+          {
+            branchName: `jarvis/code-loop-${run.id.slice(0, 8)}`,
+            title: `[Jarvis] Code loop ${run.id.slice(0, 8)}`,
+            body: `Automated code-loop execution\n\nPrompt: ${run.prompt}`
+          }
+        );
+      } catch (error) {
+        prError = error instanceof Error ? error.message : String(error);
+      }
+    }
+
     return sendSuccess(reply, request, 200, {
       run_id: run.id,
       status: run.status,
       retry_count: run.retryCount,
       requires_approval: run.requiresApproval,
-      blocked_reasons: run.blockedReasons
+      blocked_reasons: run.blockedReasons,
+      verification,
+      pr,
+      pr_error: prError
     });
   });
 
