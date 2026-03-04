@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import { sendError, sendSuccess } from '../../lib/http';
+import { getSharedPolicyEngine } from '../../policy/engine';
 import { composeTeamPlan } from '../../team/composer';
 import { getSharedTeamRunEngine } from '../../team/run-engine';
 import { getSharedMemoryV2Repository } from '../../store/memory/v2-repositories';
@@ -24,6 +25,7 @@ const TeamRunParamsSchema = z.object({
 
 const memoryV2Repo = getSharedMemoryV2Repository();
 const teamRunEngine = getSharedTeamRunEngine();
+const policyEngine = getSharedPolicyEngine();
 
 export async function registerV2TeamRoutes(app: FastifyInstance, ctx: V2RouteContext): Promise<void> {
   app.post('/api/v2/teams/compose', async (request, reply) => {
@@ -73,6 +75,22 @@ export async function registerV2TeamRoutes(app: FastifyInstance, ctx: V2RouteCon
     });
     if (!contract) {
       return sendError(reply, request, 404, 'NOT_FOUND', 'execution contract not found');
+    }
+    const policy = policyEngine.evaluate({
+      action: 'team.run.start',
+      riskLevel: contract.riskLevel
+    });
+    if (policy.decision === 'deny') {
+      return sendError(reply, request, 403, 'FORBIDDEN', 'policy denied team run execution', {
+        matched_rule_ids: policy.matchedRuleIds,
+        reasons: policy.reasons
+      });
+    }
+    if (policy.decision === 'approval_required') {
+      return sendError(reply, request, 403, 'FORBIDDEN', 'policy requires approval before team run execution', {
+        matched_rule_ids: policy.matchedRuleIds,
+        reasons: policy.reasons
+      });
     }
 
     const run = await teamRunEngine.startRun({

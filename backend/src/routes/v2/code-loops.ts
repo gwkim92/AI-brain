@@ -5,6 +5,7 @@ import { createGitHubBranchAndPr } from '../../code-loop/adapters/github-pr';
 import { getSharedCodeLoopEngine } from '../../code-loop/engine';
 import { runLocalVerificationCommand } from '../../code-loop/runners/local-shell';
 import { sendError, sendSuccess } from '../../lib/http';
+import { getSharedPolicyEngine } from '../../policy/engine';
 import { getSharedMemoryV2Repository } from '../../store/memory/v2-repositories';
 import { createPostgresV2Repository } from '../../store/postgres/v2-repositories';
 import { applySseCorsHeaders } from '../types';
@@ -29,6 +30,7 @@ const RunIdParamsSchema = z.object({
 
 const memoryV2Repo = getSharedMemoryV2Repository();
 const codeLoopEngine = getSharedCodeLoopEngine();
+const policyEngine = getSharedPolicyEngine();
 
 export async function registerV2CodeLoopRoutes(app: FastifyInstance, ctx: V2RouteContext): Promise<void> {
   app.post('/api/v2/code-loops/runs', async (request, reply) => {
@@ -50,6 +52,22 @@ export async function registerV2CodeLoopRoutes(app: FastifyInstance, ctx: V2Rout
     });
     if (!contract) {
       return sendError(reply, request, 404, 'NOT_FOUND', 'execution contract not found');
+    }
+    const policy = policyEngine.evaluate({
+      action: 'code_loop.run.start',
+      riskLevel: contract.riskLevel
+    });
+    if (policy.decision === 'deny') {
+      return sendError(reply, request, 403, 'FORBIDDEN', 'policy denied code loop execution', {
+        matched_rule_ids: policy.matchedRuleIds,
+        reasons: policy.reasons
+      });
+    }
+    if (policy.decision === 'approval_required') {
+      return sendError(reply, request, 403, 'FORBIDDEN', 'policy requires approval before code loop execution', {
+        matched_rule_ids: policy.matchedRuleIds,
+        reasons: policy.reasons
+      });
     }
 
     const run = await codeLoopEngine.startRun({
