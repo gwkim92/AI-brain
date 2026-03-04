@@ -8,7 +8,13 @@ export type JarvisFeatureFlag =
   | "assistant.ui_soft_warn_render"
   | "assistant.optimistic_running_task"
   | "assistant.stage_timeline_v1"
-  | "session.restore_deterministic_v2";
+  | "session.restore_deterministic_v2"
+  | "v2.command_compiler"
+  | "v2.retrieval"
+  | "v2.team"
+  | "v2.code_loop"
+  | "v2.finance"
+  | "v2.schema_ui";
 
 const STORAGE_PREFIX = "jarvis.ff.";
 
@@ -21,6 +27,12 @@ const ENV_BY_FLAG: Record<JarvisFeatureFlag, string> = {
   "assistant.optimistic_running_task": "NEXT_PUBLIC_FF_ASSISTANT_OPTIMISTIC_RUNNING_TASK",
   "assistant.stage_timeline_v1": "NEXT_PUBLIC_FF_ASSISTANT_STAGE_TIMELINE_V1",
   "session.restore_deterministic_v2": "NEXT_PUBLIC_FF_SESSION_RESTORE_DETERMINISTIC_V2",
+  "v2.command_compiler": "NEXT_PUBLIC_FF_V2_COMMAND_COMPILER",
+  "v2.retrieval": "NEXT_PUBLIC_FF_V2_RETRIEVAL",
+  "v2.team": "NEXT_PUBLIC_FF_V2_TEAM",
+  "v2.code_loop": "NEXT_PUBLIC_FF_V2_CODE_LOOP",
+  "v2.finance": "NEXT_PUBLIC_FF_V2_FINANCE",
+  "v2.schema_ui": "NEXT_PUBLIC_FF_V2_SCHEMA_UI",
 };
 
 function parseBoolean(value: string | null | undefined): boolean | null {

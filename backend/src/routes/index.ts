@@ -45,6 +45,7 @@ import { reportRoutes } from './reports';
 import { radarRoutes } from './radar';
 import { upgradeRoutes } from './upgrades';
 import { integrationRoutes } from './integrations';
+import { registerV2Routes } from './v2';
 
 export async function registerRoutes(
   app: FastifyInstance,
@@ -330,7 +331,11 @@ export async function registerRoutes(
   // Auth hook
   app.addHook('onRequest', async (request, reply) => {
     const requestPath = request.url.split('?')[0] ?? request.url;
-    if (!requestPath.startsWith('/api/v1/')) return;
+    const isV1ApiPath = requestPath.startsWith('/api/v1/');
+    const isV2ApiPath = requestPath.startsWith('/api/v2/');
+
+    if (!isV1ApiPath && !isV2ApiPath) return;
+
     if (
       requestPath === '/api/v1/auth/config' ||
       requestPath === '/api/v1/auth/signup' ||
@@ -339,6 +344,7 @@ export async function registerRoutes(
     ) {
       return;
     }
+    if (requestPath === '/api/v2/health') return;
     if (requestPath === '/api/v1/integrations/openai/webhook' || requestPath === '/api/v1/integrations/telegram/webhook') return;
     const authError = await ensureApiAuth(request, reply);
     if (authError) return authError;
@@ -369,4 +375,5 @@ export async function registerRoutes(
   await radarRoutes(app, ctx);
   await upgradeRoutes(app, ctx);
   await integrationRoutes(app, ctx);
+  await registerV2Routes(app, ctx);
 }
