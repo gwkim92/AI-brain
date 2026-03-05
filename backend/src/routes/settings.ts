@@ -15,6 +15,7 @@ export async function settingsRoutes(app: FastifyInstance, ctx: RouteContext) {
     const availabilityByProvider = new Map(scopedAvailability.map((item) => [item.provider, item] as const));
     const oauthWorker = getProviderTokenRefreshWorkerStatus();
     const aiTraceWorker = getAiTraceCleanupWorkerStatus();
+    const notificationRuntime = ctx.notificationService?.getRuntimeStatus() ?? null;
 
     return sendSuccess(reply, request, 200, {
       generated_at: new Date().toISOString(),
@@ -38,7 +39,10 @@ export async function settingsRoutes(app: FastifyInstance, ctx: RouteContext) {
         failures: item.failures,
         avg_latency_ms: item.avgLatencyMs,
         success_rate_pct: item.successRatePct,
-        last_attempt_at: item.lastAttemptAt
+        last_attempt_at: item.lastAttemptAt,
+        cooldown_until: item.cooldownUntil,
+        cooldown_reason: item.cooldownReason,
+        health_failure_count: item.failureCount
       })),
       policies: {
         high_risk_requires_approval: true,
@@ -56,7 +60,8 @@ export async function settingsRoutes(app: FastifyInstance, ctx: RouteContext) {
       ai_trace_worker: {
         ...aiTraceWorker,
         history: aiTraceWorker.history.slice(0, 5)
-      }
+      },
+      notification_runtime: notificationRuntime
     });
   });
 }

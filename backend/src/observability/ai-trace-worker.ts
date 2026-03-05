@@ -1,5 +1,6 @@
 import type { AppEnv } from '../config/env';
 import type { JarvisStore } from '../store/types';
+import { startWorkerSupervisor } from '../workers/supervisor';
 
 type LoggerLike = {
   info: (obj: Record<string, unknown>, msg?: string) => void;
@@ -10,7 +11,7 @@ type LoggerLike = {
 export type AiTraceCleanupRun = {
   startedAt: string;
   finishedAt: string;
-  status: 'ok' | 'error';
+  status: 'ok' | 'error' | 'timeout';
   tracesDeleted: number;
   recommendationsDeleted: number;
   durationMs: number;
@@ -57,6 +58,10 @@ export function startAiTraceCleanupWorker(input: {
 }): AiTraceCleanupWorkerHandle {
   const enabled = input.env.MODEL_CONTROL_ENABLED && input.env.AI_TRACE_LOGGING_ENABLED;
   runtimeState.enabled = enabled;
+  runtimeState.inflight = false;
+  runtimeState.lastRun = null;
+  runtimeState.history = [];
+
   if (!enabled) {
     return {
       stop: () => undefined,
@@ -65,18 +70,15 @@ export function startAiTraceCleanupWorker(input: {
   }
 
   const logger = input.logger;
-  let inflight = false;
-  let closed = false;
   const pollMs = 10 * 60 * 1000;
+  const runTimeoutMs = Math.max(30_000, Math.min(180_000, Math.trunc(pollMs / 2)));
 
-  const tick = async () => {
-    if (closed || inflight) {
-      return;
-    }
-    inflight = true;
-    runtimeState.inflight = true;
-    const startedAt = new Date();
-    try {
+  const supervisor = startWorkerSupervisor<AiTraceCleanupRun>({
+    enabled,
+    pollMs,
+    timeoutMs: runTimeoutMs,
+    historyLimit: 20,
+    runOnce: async (startedAt) => {
       const [tracesDeleted, recommendationsDeleted] = await Promise.all([
         input.store.cleanupExpiredAiInvocationTraces({
           retentionDays: input.env.AI_TRACE_RETENTION_DAYS
@@ -86,7 +88,7 @@ export function startAiTraceCleanupWorker(input: {
         })
       ]);
       const finishedAt = new Date();
-      const run: AiTraceCleanupRun = {
+      return {
         startedAt: startedAt.toISOString(),
         finishedAt: finishedAt.toISOString(),
         status: 'ok',
@@ -94,36 +96,36 @@ export function startAiTraceCleanupWorker(input: {
         recommendationsDeleted,
         durationMs: finishedAt.getTime() - startedAt.getTime()
       };
-      pushRun(run);
-      logger?.info({ ai_trace_cleanup: run }, 'ai trace cleanup worker completed');
-    } catch (error) {
-      const finishedAt = new Date();
-      const run: AiTraceCleanupRun = {
+    },
+    onRunError: ({ startedAt, finishedAt, status, error }) => {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
         startedAt: startedAt.toISOString(),
         finishedAt: finishedAt.toISOString(),
-        status: 'error',
+        status,
         tracesDeleted: 0,
         recommendationsDeleted: 0,
         durationMs: finishedAt.getTime() - startedAt.getTime(),
-        error: error instanceof Error ? error.message : String(error)
+        error: message
       };
+    },
+    onAfterRun: (run) => {
       pushRun(run);
-      logger?.error({ ai_trace_cleanup: run, err: error }, 'ai trace cleanup worker failed');
-    } finally {
-      inflight = false;
-      runtimeState.inflight = false;
+      if (run.status === 'ok') {
+        logger?.info({ ai_trace_cleanup: run }, 'ai trace cleanup worker completed');
+      } else {
+        logger?.error({ ai_trace_cleanup: run }, 'ai trace cleanup worker failed');
+      }
+    },
+    onStatusChange: (status) => {
+      runtimeState.enabled = status.enabled;
+      runtimeState.inflight = status.inflight;
     }
-  };
-
-  const timer = setInterval(() => {
-    void tick();
-  }, pollMs);
-  void tick();
+  });
 
   return {
     stop: () => {
-      closed = true;
-      clearInterval(timer);
+      supervisor.stop();
       runtimeState.enabled = false;
       runtimeState.inflight = false;
     },

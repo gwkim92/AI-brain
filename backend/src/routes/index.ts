@@ -215,7 +215,10 @@ export async function registerRoutes(
 
   const resolveRequestTraceId = (request: FastifyRequest): string | undefined => {
     const traceHeader = request.headers['x-trace-id'];
-    return typeof traceHeader === 'string' ? traceHeader : undefined;
+    if (typeof traceHeader === 'string' && traceHeader.trim().length > 0) {
+      return traceHeader.trim().slice(0, 200);
+    }
+    return request.id;
   };
 
   const resolveRequiredIdempotencyKey = (request: FastifyRequest): string | null => {
@@ -352,6 +355,11 @@ export async function registerRoutes(
 
   // Auth hook
   app.addHook('onRequest', async (request, reply) => {
+    const traceId = resolveRequestTraceId(request);
+    if (traceId) {
+      reply.header('x-trace-id', traceId);
+    }
+
     const requestPath = request.url.split('?')[0] ?? request.url;
     if (!requestPath.startsWith('/api/v1/')) return;
     if (

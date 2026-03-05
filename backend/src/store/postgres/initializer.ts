@@ -212,6 +212,20 @@ export async function initializePostgresStore({
     )
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS provider_routing_health (
+      provider TEXT PRIMARY KEY,
+      cooldown_until TIMESTAMPTZ,
+      reason_code TEXT,
+      failure_count INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (provider IN ('openai', 'gemini', 'anthropic', 'local'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_provider_routing_health_cooldown_until
+    ON provider_routing_health(cooldown_until ASC)
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS model_registry (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       provider TEXT NOT NULL,

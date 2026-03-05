@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { ProviderRouter } from '../router';
+import { ProviderHttpError } from '../retry';
 import type {
   LlmProvider,
   ProviderAvailability,
@@ -15,6 +16,7 @@ type StubProviderConfig = {
   outputText?: string;
   model?: string;
   throwMessage?: string;
+  throwError?: Error;
   onGenerate?: (request: ProviderGenerateRequest) => void;
 };
 
@@ -40,6 +42,9 @@ function createStubProvider(name: ProviderName, config: StubProviderConfig = {})
       }
       if (config.throwMessage) {
         throw new Error(config.throwMessage);
+      }
+      if (config.throwError) {
+        throw config.throwError;
       }
 
       return {
@@ -329,5 +334,107 @@ describe('ProviderRouter', () => {
 
     const result = await router.generate({ prompt: 'test', taskType: 'chat' });
     expect(result.selection?.reason).toContain('source=fallback');
+  });
+
+  it('skips provider while cooldown is active', async () => {
+    const calls: ProviderName[] = [];
+    const router = createDeterministicRouter({
+      openai: createStubProvider('openai', {
+        onGenerate: () => calls.push('openai'),
+        outputText: 'openai should be skipped'
+      }),
+      gemini: createStubProvider('gemini', {
+        enabled: false,
+        reason: 'missing_api_key'
+      }),
+      anthropic: createStubProvider('anthropic', {
+        onGenerate: () => calls.push('anthropic'),
+        outputText: 'anthropic fallback'
+      }),
+      local: createStubProvider('local', {
+        enabled: false,
+        reason: 'disabled'
+      })
+    });
+
+    router.loadHealthStates([
+      {
+        provider: 'openai',
+        cooldownUntil: new Date(Date.now() + 60_000).toISOString(),
+        reasonCode: 'rate_limited',
+        failureCount: 2
+      }
+    ]);
+
+    const result = await router.generate({
+      prompt: 'cooldown active',
+      taskType: 'chat'
+    });
+
+    expect(result.result.provider).toBe('anthropic');
+    expect(result.attempts[0]).toMatchObject({
+      provider: 'openai',
+      status: 'skipped'
+    });
+    expect(result.attempts[0]?.error).toContain('provider_cooldown_active');
+    expect(calls).toEqual(['anthropic']);
+  });
+
+  it('records cooldown from retryable provider HTTP errors and applies it to next routing', async () => {
+    const calls: ProviderName[] = [];
+    const router = createDeterministicRouter({
+      openai: createStubProvider('openai', {
+        onGenerate: () => calls.push('openai'),
+        throwError: new ProviderHttpError({
+          status: 429,
+          provider: 'openai',
+          retryAfterMs: 5000,
+          reasonCode: 'rate_limited',
+          message: 'openai rate limited'
+        })
+      }),
+      gemini: createStubProvider('gemini', {
+        enabled: false,
+        reason: 'missing_api_key'
+      }),
+      anthropic: createStubProvider('anthropic', {
+        onGenerate: () => calls.push('anthropic'),
+        outputText: 'anthropic success'
+      }),
+      local: createStubProvider('local', {
+        enabled: false,
+        reason: 'disabled'
+      })
+    });
+
+    const first = await router.generate({
+      prompt: 'first',
+      taskType: 'chat',
+      provider: 'openai',
+      strictProvider: false
+    });
+    expect(first.attempts[0]).toMatchObject({
+      provider: 'openai',
+      status: 'failed'
+    });
+    expect(first.result.provider).toBe('anthropic');
+
+    const second = await router.generate({
+      prompt: 'second',
+      taskType: 'chat',
+      provider: 'openai',
+      strictProvider: false
+    });
+    expect(second.attempts[0]).toMatchObject({
+      provider: 'openai',
+      status: 'skipped'
+    });
+    expect(second.attempts[0]?.error).toContain('provider_cooldown_active');
+
+    const health = router.listProviderHealthStates().find((item) => item.provider === 'openai');
+    expect(health?.cooldownUntil).toBeTruthy();
+    expect(health?.reasonCode).toBe('rate_limited');
+    expect(health?.failureCount).toBeGreaterThan(0);
+    expect(calls).toEqual(['openai', 'anthropic', 'anthropic']);
   });
 });

@@ -88,6 +88,32 @@ describe('API routes', () => {
     await app.close();
   });
 
+  it('returns x-trace-id header and preserves provided trace ids', async () => {
+    const { app } = await buildServer();
+
+    const generated = await app.inject({
+      method: 'GET',
+      url: '/api/v1/settings/overview'
+    });
+    expect(generated.statusCode).toBe(200);
+    const generatedTrace = generated.headers['x-trace-id'];
+    expect(typeof generatedTrace).toBe('string');
+    expect((generatedTrace as string).length).toBeGreaterThan(0);
+
+    const customTrace = 'trace-custom-0001';
+    const forwarded = await app.inject({
+      method: 'GET',
+      url: '/api/v1/settings/overview',
+      headers: {
+        'x-trace-id': customTrace
+      }
+    });
+    expect(forwarded.statusCode).toBe(200);
+    expect(forwarded.headers['x-trace-id']).toBe(customTrace);
+
+    await app.close();
+  });
+
   it('replays task create when idempotency-key is reused by same user', async () => {
     const { app } = await buildServer();
     const userId = '11111111-1111-4111-8111-111111111111';

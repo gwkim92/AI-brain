@@ -13,6 +13,7 @@ import type {
 } from './types';
 import { getPolicyScoresForTask } from './task-model-policy';
 import { redactSecretsInText } from '../lib/redaction';
+import { ProviderHttpError } from './retry';
 
 export type ProviderRouterRequest = ProviderGenerateRequest & {
   provider?: ProviderName | 'auto';
@@ -66,6 +67,13 @@ export type ProviderRuntimeStats = {
   lastAttemptAtMs: number | null;
 };
 
+export type ProviderHealthState = {
+  cooldownUntilMs: number | null;
+  reasonCode: string | null;
+  failureCount: number;
+  updatedAtMs: number | null;
+};
+
 export function toProviderCredentialUsage(
   credential: ProviderResolvedCredential | undefined
 ): ProviderCredentialUsage {
@@ -79,6 +87,7 @@ export function toProviderCredentialUsage(
 
 export class ProviderRouter {
   private readonly providerStats: Record<ProviderName, ProviderRuntimeStats>;
+  private readonly providerHealth: Record<ProviderName, ProviderHealthState>;
   private readonly emaAlpha = 0.3;
   private explorationRate = 0.05;
   private usePolicies = false;
@@ -89,6 +98,12 @@ export class ProviderRouter {
       gemini: { attempts: 0, successes: 0, failures: 0, avgLatencyMs: 0, successEma: 0.5, latencyEma: 0, lastAttemptAtMs: null },
       anthropic: { attempts: 0, successes: 0, failures: 0, avgLatencyMs: 0, successEma: 0.5, latencyEma: 0, lastAttemptAtMs: null },
       local: { attempts: 0, successes: 0, failures: 0, avgLatencyMs: 0, successEma: 0.5, latencyEma: 0, lastAttemptAtMs: null }
+    };
+    this.providerHealth = {
+      openai: { cooldownUntilMs: null, reasonCode: null, failureCount: 0, updatedAtMs: null },
+      gemini: { cooldownUntilMs: null, reasonCode: null, failureCount: 0, updatedAtMs: null },
+      anthropic: { cooldownUntilMs: null, reasonCode: null, failureCount: 0, updatedAtMs: null },
+      local: { cooldownUntilMs: null, reasonCode: null, failureCount: 0, updatedAtMs: null }
     };
   }
 
@@ -110,6 +125,15 @@ export class ProviderRouter {
 
   getRuntimeStats(): Record<ProviderName, ProviderRuntimeStats> {
     return { ...this.providerStats };
+  }
+
+  getProviderHealth(): Record<ProviderName, ProviderHealthState> {
+    return {
+      openai: { ...this.providerHealth.openai },
+      gemini: { ...this.providerHealth.gemini },
+      anthropic: { ...this.providerHealth.anthropic },
+      local: { ...this.providerHealth.local }
+    };
   }
 
   loadRuntimeStats(entries: Array<{
@@ -138,6 +162,50 @@ export class ProviderRouter {
     }
   }
 
+  loadHealthStates(entries: Array<{
+    provider: string;
+    cooldownUntil: string | null;
+    reasonCode?: string | null;
+    failureCount?: number;
+  }>): void {
+    const now = Date.now();
+    for (const entry of entries) {
+      const name = entry.provider as ProviderName;
+      if (!this.providerHealth[name]) {
+        continue;
+      }
+      const cooldownUntilMs =
+        typeof entry.cooldownUntil === 'string' && entry.cooldownUntil.trim().length > 0
+          ? Date.parse(entry.cooldownUntil)
+          : NaN;
+      this.providerHealth[name] = {
+        cooldownUntilMs: Number.isFinite(cooldownUntilMs) && cooldownUntilMs > now ? cooldownUntilMs : null,
+        reasonCode: entry.reasonCode?.trim() || null,
+        failureCount: Number.isFinite(entry.failureCount) ? Math.max(0, Math.trunc(entry.failureCount ?? 0)) : 0,
+        updatedAtMs: now
+      };
+    }
+  }
+
+  listProviderHealthStates(): Array<{
+    provider: ProviderName;
+    cooldownUntil: string | null;
+    reasonCode: string | null;
+    failureCount: number;
+    updatedAt: string | null;
+  }> {
+    return this.orderedProviderNames().map((provider) => {
+      const state = this.providerHealth[provider];
+      return {
+        provider,
+        cooldownUntil: state.cooldownUntilMs ? new Date(state.cooldownUntilMs).toISOString() : null,
+        reasonCode: state.reasonCode,
+        failureCount: state.failureCount,
+        updatedAt: state.updatedAtMs ? new Date(state.updatedAtMs).toISOString() : null
+      };
+    });
+  }
+
   listRuntimeStats(): Array<{
     provider: ProviderName;
     enabled: boolean;
@@ -149,10 +217,14 @@ export class ProviderRouter {
     avgLatencyMs: number;
     successRatePct: number;
     lastAttemptAt: string | null;
+    cooldownUntil: string | null;
+    cooldownReason: string | null;
+    failureCount: number;
   }> {
     return this.orderedProviderNames().map((providerName) => {
       const availability = this.providers[providerName].availability();
       const runtime = this.providerStats[providerName];
+      const health = this.providerHealth[providerName];
       const successRatePct =
         runtime.attempts > 0 ? Number(((runtime.successes / runtime.attempts) * 100).toFixed(1)) : 0;
 
@@ -166,7 +238,10 @@ export class ProviderRouter {
         failures: runtime.failures,
         avgLatencyMs: Number(runtime.avgLatencyMs.toFixed(3)),
         successRatePct,
-        lastAttemptAt: runtime.lastAttemptAtMs ? new Date(runtime.lastAttemptAtMs).toISOString() : null
+        lastAttemptAt: runtime.lastAttemptAtMs ? new Date(runtime.lastAttemptAtMs).toISOString() : null,
+        cooldownUntil: health.cooldownUntilMs ? new Date(health.cooldownUntilMs).toISOString() : null,
+        cooldownReason: health.reasonCode,
+        failureCount: health.failureCount
       };
     });
   }
@@ -191,6 +266,16 @@ export class ProviderRouter {
 
       const provider = this.providers[providerName];
       const availability = this.resolveAvailability(providerName, request.credentialsByProvider);
+      const cooldownState = this.providerHealth[providerName];
+      if (this.isCooldownActive(cooldownState)) {
+        attempts.push({
+          provider: providerName,
+          status: 'skipped',
+          error: `provider_cooldown_active:${cooldownState.reasonCode ?? 'cooldown'}`,
+          credential: attemptCredential
+        });
+        continue;
+      }
 
       if (!availability.enabled) {
         attempts.push({
@@ -217,6 +302,7 @@ export class ProviderRouter {
         };
         const latencyMs = Date.now() - startedAt;
         this.recordProviderAttempt(providerName, 'success', Date.now() - startedAt);
+        this.markProviderHealthy(providerName);
         attempts.push({
           provider: providerName,
           status: 'success',
@@ -242,6 +328,7 @@ export class ProviderRouter {
         const latencyMs = Date.now() - startedAt;
         const message = error instanceof Error ? error.message : String(error);
         this.recordProviderAttempt(providerName, 'failed', Date.now() - startedAt);
+        this.recordProviderFailure(providerName, error);
         attempts.push({
           provider: providerName,
           status: 'failed',
@@ -503,6 +590,77 @@ export class ProviderRouter {
 
   private orderedProviderNames(): ProviderName[] {
     return ['openai', 'gemini', 'anthropic', 'local'];
+  }
+
+  private isCooldownActive(state: ProviderHealthState): boolean {
+    if (!state.cooldownUntilMs) {
+      return false;
+    }
+    return state.cooldownUntilMs > Date.now();
+  }
+
+  private markProviderHealthy(provider: ProviderName): void {
+    const current = this.providerHealth[provider];
+    this.providerHealth[provider] = {
+      ...current,
+      cooldownUntilMs: null,
+      reasonCode: null,
+      failureCount: 0,
+      updatedAtMs: Date.now()
+    };
+  }
+
+  private resolveCooldownFromError(error: unknown): { cooldownMs: number | null; reasonCode: string | null } {
+    if (error instanceof ProviderHttpError) {
+      const reason = error.reasonCode ?? (error.status === 429 ? 'rate_limited' : 'http_error');
+      if (typeof error.retryAfterMs === 'number' && Number.isFinite(error.retryAfterMs)) {
+        const clamped = Math.max(1000, Math.min(120_000, Math.trunc(error.retryAfterMs)));
+        return {
+          cooldownMs: clamped,
+          reasonCode: reason
+        };
+      }
+      if (error.status === 429 || reason === 'rate_limited' || reason === 'quota_exceeded') {
+        return { cooldownMs: 15_000, reasonCode: reason };
+      }
+      if (error.status === 503 || reason === 'temporary_unavailable') {
+        return { cooldownMs: 8_000, reasonCode: reason };
+      }
+      if (error.status === 504 || reason === 'timeout') {
+        return { cooldownMs: 6_000, reasonCode: reason };
+      }
+      if (error.status >= 500) {
+        return { cooldownMs: 5_000, reasonCode: reason };
+      }
+      return { cooldownMs: null, reasonCode: reason };
+    }
+
+    const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+    if (/rate.?limit|quota|resource_exhausted/u.test(message)) {
+      return { cooldownMs: 15_000, reasonCode: 'rate_limited' };
+    }
+    if (/timeout|timed out|econnreset|eai_again|socket/u.test(message)) {
+      return { cooldownMs: 6_000, reasonCode: 'timeout' };
+    }
+    if (/temporar|503|5xx|upstream/u.test(message)) {
+      return { cooldownMs: 8_000, reasonCode: 'temporary_unavailable' };
+    }
+    return { cooldownMs: null, reasonCode: null };
+  }
+
+  private recordProviderFailure(provider: ProviderName, error: unknown): void {
+    const current = this.providerHealth[provider];
+    const nowMs = Date.now();
+    const cooldown = this.resolveCooldownFromError(error);
+    this.providerHealth[provider] = {
+      cooldownUntilMs:
+        typeof cooldown.cooldownMs === 'number' && cooldown.cooldownMs > 0
+          ? nowMs + cooldown.cooldownMs
+          : current.cooldownUntilMs,
+      reasonCode: cooldown.reasonCode ?? current.reasonCode,
+      failureCount: Math.max(0, current.failureCount) + 1,
+      updatedAtMs: nowMs
+    };
   }
 
   private resolveAvailability(

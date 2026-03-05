@@ -12,6 +12,7 @@ import { loadEnv } from './config/env';
 import { startTelegramDeliveryWorker } from './integrations/telegram/delivery-worker';
 import { sendError } from './lib/http';
 import { createProviderRouter } from './providers';
+import { createProviderHealthFlushInterval, loadProviderRoutingHealth } from './providers/health-persistence';
 import { startOauthCallbackBridge } from './providers/oauth-callback-bridge';
 import { syncModelRegistry, createRegistryRefreshInterval } from './providers/model-registry';
 import { loadProviderStats } from './providers/stats-persistence';
@@ -159,6 +160,10 @@ export async function buildServer() {
       if (stats.length > 0) {
         providerRouter.loadRuntimeStats(stats);
       }
+      const health = await loadProviderRoutingHealth(pool);
+      if (health.length > 0) {
+        providerRouter.loadHealthStates(health);
+      }
       await syncModelRegistry(pool, env);
       await seedDefaultPolicies(pool, env);
       await loadPoliciesIntoCache(pool);
@@ -184,8 +189,10 @@ export async function buildServer() {
 
   if (pool) {
     const registryRefresh = createRegistryRefreshInterval(pool, env, env.MODEL_REGISTRY_REFRESH_MS);
+    const providerHealthFlush = createProviderHealthFlushInterval(pool, () => providerRouter.listProviderHealthStates());
     app.addHook('onClose', async () => {
       registryRefresh.stop();
+      providerHealthFlush.stop();
     });
   }
 

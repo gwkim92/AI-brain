@@ -1,7 +1,6 @@
-import { setTimeout as sleep } from 'node:timers/promises';
-
 import type { AppEnv } from '../config/env';
 import type { JarvisStore } from '../store/types';
+import { startWorkerSupervisor } from '../workers/supervisor';
 
 import { resolveEffectiveProviderCredentials } from './credentials-resolver';
 
@@ -56,15 +55,6 @@ function pushRun(run: ProviderTokenRefreshRun): void {
   runtimeState.history = [run, ...runtimeState.history].slice(0, 30);
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  return Promise.race([
-    promise,
-    sleep(timeoutMs).then(() => {
-      throw new Error('provider token refresh worker timeout');
-    })
-  ]);
-}
-
 export function startProviderTokenRefreshWorker(input: {
   store: JarvisStore;
   env: AppEnv;
@@ -75,6 +65,9 @@ export function startProviderTokenRefreshWorker(input: {
   const enabled = input.env.PROVIDER_USER_CREDENTIALS_ENABLED
     && input.env.PROVIDER_TOKEN_REFRESH_WORKER_ENABLED;
   runtimeState.enabled = enabled;
+  runtimeState.inflight = false;
+  runtimeState.lastRun = null;
+  runtimeState.history = [];
 
   if (!enabled) {
     return {
@@ -83,107 +76,89 @@ export function startProviderTokenRefreshWorker(input: {
     };
   }
 
-  let closed = false;
-  let inflight = false;
   const pollMs = Math.max(1000, input.env.PROVIDER_TOKEN_REFRESH_WORKER_POLL_MS);
   const batchSize = Math.max(1, input.env.PROVIDER_TOKEN_REFRESH_WORKER_BATCH);
   const runTimeoutMs = Math.max(10_000, Math.min(120_000, pollMs * 3));
 
-  const tick = async () => {
-    if (closed || inflight) {
-      return;
-    }
+  const supervisor = startWorkerSupervisor<ProviderTokenRefreshRun>({
+    enabled,
+    pollMs,
+    timeoutMs: runTimeoutMs,
+    historyLimit: 30,
+    runOnce: async (startedAt) => {
+      const counters = {
+        refreshed: 0,
+        failed: 0
+      };
+      const rows = await input.store.listActiveUserProviderCredentials({
+        limit: batchSize
+      });
 
-    inflight = true;
-    runtimeState.inflight = true;
-    const startedAt = new Date();
-
-    const counters = {
-      refreshed: 0,
-      failed: 0
-    };
-
-    try {
-      const runPromise = (async () => {
-        const rows = await input.store.listActiveUserProviderCredentials({
-          limit: batchSize
-        });
-
-        const userIds = Array.from(new Set(rows.map((row) => row.userId)));
-        for (const userId of userIds) {
-          await resolveEffectiveProviderCredentials({
-            store: input.store,
-            env: input.env,
-            userId,
-            updatedBy: userId,
-            onAuthEvent: (event) => {
-              if (event.stage === 'refresh_complete') {
-                counters.refreshed += 1;
-              }
-              if (event.stage === 'refresh_failed') {
-                counters.failed += 1;
-              }
+      const userIds = Array.from(new Set(rows.map((row) => row.userId)));
+      for (const userId of userIds) {
+        await resolveEffectiveProviderCredentials({
+          store: input.store,
+          env: input.env,
+          userId,
+          updatedBy: userId,
+          onAuthEvent: (event) => {
+            if (event.stage === 'refresh_complete') {
+              counters.refreshed += 1;
             }
-          });
-        }
+            if (event.stage === 'refresh_failed') {
+              counters.failed += 1;
+            }
+          }
+        });
+      }
 
-        return {
-          scannedUsers: userIds.length,
-          scannedCredentials: rows.length
-        };
-      })();
-
-      const { scannedUsers, scannedCredentials } = await withTimeout(runPromise, runTimeoutMs);
       const finishedAt = new Date();
-      const run: ProviderTokenRefreshRun = {
+      return {
         startedAt: startedAt.toISOString(),
         finishedAt: finishedAt.toISOString(),
         status: 'ok',
-        scannedUsers,
-        scannedCredentials,
+        scannedUsers: userIds.length,
+        scannedCredentials: rows.length,
         refreshed: counters.refreshed,
         failed: counters.failed,
         durationMs: finishedAt.getTime() - startedAt.getTime()
       };
-      pushRun(run);
-      logger?.info({
-        oauth_refresh: run
-      }, 'provider oauth refresh worker run complete');
-    } catch (error) {
-      const finishedAt = new Date();
+    },
+    onRunError: ({ startedAt, finishedAt, status, error }) => {
       const message = error instanceof Error ? error.message : String(error);
-      const isTimeout = /timeout/u.test(message);
-      const run: ProviderTokenRefreshRun = {
+      return {
         startedAt: startedAt.toISOString(),
         finishedAt: finishedAt.toISOString(),
-        status: isTimeout ? 'timeout' : 'error',
+        status,
         scannedUsers: 0,
         scannedCredentials: 0,
-        refreshed: counters.refreshed,
-        failed: counters.failed,
+        refreshed: 0,
+        failed: 0,
         durationMs: finishedAt.getTime() - startedAt.getTime(),
         error: message
       };
+    },
+    onAfterRun: (run) => {
       pushRun(run);
-      logger?.error({
-        oauth_refresh: run,
-        err: error
-      }, 'provider oauth refresh worker run failed');
-    } finally {
-      inflight = false;
-      runtimeState.inflight = false;
+      if (run.status === 'ok') {
+        logger?.info({
+          oauth_refresh: run
+        }, 'provider oauth refresh worker run complete');
+      } else {
+        logger?.error({
+          oauth_refresh: run
+        }, 'provider oauth refresh worker run failed');
+      }
+    },
+    onStatusChange: (status) => {
+      runtimeState.enabled = status.enabled;
+      runtimeState.inflight = status.inflight;
     }
-  };
-
-  const timer = setInterval(() => {
-    void tick();
-  }, pollMs);
-  void tick();
+  });
 
   return {
     stop: () => {
-      closed = true;
-      clearInterval(timer);
+      supervisor.stop();
       runtimeState.enabled = false;
       runtimeState.inflight = false;
     },
