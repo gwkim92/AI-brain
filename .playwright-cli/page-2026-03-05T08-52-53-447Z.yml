@@ -1,0 +1,262 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e35]:
+      - img [ref=e36]
+      - textbox "Ask JARVIS anything..." [ref=e38]
+      - button "Toggle runtime debug events" [ref=e39]: TRACE OFF
+      - button "EXEC" [disabled] [ref=e40]
+    - generic [ref=e41]:
+      - generic [ref=e42]:
+        - generic [ref=e47]:
+          - paragraph [ref=e48]: JARVIS
+          - paragraph [ref=e49]: Workspace Navigator
+        - button "Collapse sidebar" [ref=e50]:
+          - img [ref=e51]
+      - navigation [ref=e53]:
+        - paragraph [ref=e54]: Workspaces
+        - button "Inbox" [ref=e57]:
+          - img [ref=e59]
+          - generic [ref=e63]: Home
+        - generic [ref=e65]:
+          - button "Mission Control" [ref=e66]:
+            - img [ref=e68]
+            - generic [ref=e73]: Composite Mission
+          - button "Open Mission full stack" [ref=e74]:
+            - img [ref=e75]
+        - generic [ref=e81]:
+          - button "Code" [ref=e82]:
+            - img [ref=e84]
+            - generic [ref=e89]: Code Studio
+          - button "Open Code full stack" [ref=e90]:
+            - img [ref=e91]
+        - generic [ref=e97]:
+          - button "Research" [ref=e98]:
+            - img [ref=e100]
+            - generic [ref=e104]: Research Studio
+          - button "Open Research full stack" [ref=e105]:
+            - img [ref=e106]
+        - generic [ref=e112]:
+          - button "Intelligence" [ref=e113]:
+            - img [ref=e115]
+            - generic [ref=e118]: Finance and News
+          - button "Open Intelligence full stack" [ref=e119]:
+            - img [ref=e120]
+        - paragraph [ref=e125]: Control Plane
+        - button "Approvals" [ref=e128]:
+          - img [ref=e130]
+          - generic [ref=e134]: Approval Center
+        - button "Memory" [ref=e138]:
+          - img [ref=e140]
+          - generic [ref=e149]: Personal Memory
+        - button "Settings" [ref=e152]:
+          - img [ref=e154]
+          - generic [ref=e158]: System Settings
+        - button "Model Control" [ref=e161]:
+          - img [ref=e163]
+          - generic [ref=e165]: Model Control
+        - button "Logout" [ref=e168]:
+          - img [ref=e170]
+          - generic [ref=e174]: Logout
+      - generic [ref=e178]: System Online
+    - generic [ref=e179]:
+      - main [ref=e180]:
+        - generic [ref=e182]: VISUAL CORE OKFULL 3D ACTIVEENG:GPGPU SW:1
+        - generic:
+          - generic:
+            - generic:
+              - generic [ref=e486]:
+                - generic [ref=e487]:
+                  - generic [ref=e488]:
+                    - img [ref=e489]
+                    - heading "AI ASSISTANT" [level=3] [ref=e496]
+                  - button "Close AI ASSISTANT" [ref=e497]:
+                    - img [ref=e498]
+                - main [ref=e502]:
+                  - generic [ref=e504]:
+                    - generic [ref=e505]:
+                      - heading "ASSISTANT" [level=2] [ref=e506]:
+                        - img [ref=e507]
+                        - text: ASSISTANT
+                      - generic [ref=e510]:
+                        - generic [ref=e511]:
+                          - img [ref=e512]
+                          - text: ASSISTANT MODE
+                        - button "DEBUG OFF" [ref=e524]
+                    - generic [ref=e525]:
+                      - generic [ref=e526]:
+                        - generic [ref=e527]: User Mode
+                        - generic [ref=e528]: grounded answers enabled for dynamic factual prompts
+                      - generic [ref=e530]:
+                        - generic [ref=e531]:
+                          - generic [ref=e532]: AI EXECUTION STAGES
+                          - generic [ref=e533]:
+                            - generic [ref=e534]: LIVE
+                            - generic [ref=e536]: model control trace test user managed
+                        - generic [ref=e537]:
+                          - generic [ref=e538]:
+                            - generic [ref=e539]: Accepted
+                            - generic [ref=e540]: "#1"
+                          - generic [ref=e541]:
+                            - generic [ref=e542]: Policy
+                            - generic [ref=e543]: "#2"
+                          - generic [ref=e544]:
+                            - generic [ref=e545]: Generation
+                            - generic [ref=e546]: "#3"
+                        - generic [ref=e548]:
+                          - generic [ref=e549]:
+                            - img [ref=e550]
+                            - text: Generation
+                          - generic [ref=e552]: 64% · 1s
+                        - generic [ref=e555]:
+                          - generic [ref=e556]:
+                            - generic [ref=e557]:
+                              - img [ref=e558]
+                              - text: REASONING SUMMARY
+                            - generic [ref=e560]: RUNNING
+                          - paragraph [ref=e561]: "현재 단계: Generation"
+                          - list [ref=e562]:
+                            - listitem [ref=e563]: "- 정책 판정: static · grounded optional"
+                            - listitem [ref=e564]: "- 품질 게이트: pending"
+                    - generic [ref=e567]:
+                      - generic [ref=e568]:
+                        - img [ref=e570]
+                        - generic [ref=e573]: JARVIS
+                      - generic [ref=e575]: Connected to backend. Ask anything and I will route this to available providers.
+                    - generic [ref=e577]:
+                      - textbox "Message JARVIS..." [ref=e578]
+                      - button "Send Message" [disabled] [ref=e579]:
+                        - img [ref=e580]
+                - img [ref=e584]
+              - generic [ref=e586]:
+                - generic [ref=e587]:
+                  - generic [ref=e588]:
+                    - img [ref=e589]
+                    - heading "TASK MANAGER" [level=3] [ref=e596]
+                  - button "Close TASK MANAGER" [ref=e597]:
+                    - img [ref=e598]
+                - main [ref=e602]:
+                  - heading "TASK MANAGER" [level=2] [ref=e604]:
+                    - img [ref=e605]
+                    - text: TASK MANAGER
+                  - generic [ref=e608]:
+                    - generic [ref=e609]:
+                      - img [ref=e610]
+                      - textbox [ref=e613]:
+                        - /placeholder: Search tasks...
+                    - generic [ref=e614]:
+                      - combobox [ref=e615]:
+                        - option "ALL" [selected]
+                        - option "QUEUED"
+                        - option "RUNNING"
+                        - option "BLOCKED"
+                        - option "RETRYING"
+                        - option "DONE"
+                        - option "FAILED"
+                        - option "CANCELLED"
+                      - button "Refresh tasks" [ref=e616]:
+                        - img [ref=e617]
+                  - generic [ref=e622]:
+                    - generic [ref=e623]:
+                      - generic [ref=e624]: ID
+                      - generic [ref=e625]: Title
+                      - generic [ref=e626]: Mode
+                      - generic [ref=e627]: State
+                    - link "5af661b1 model control trace test user managed code running just now" [ref=e629] [cursor=pointer]:
+                      - /url: /tasks/5af661b1-492b-4154-889f-d08332375d9e
+                      - generic [ref=e630]: 5af661b1
+                      - generic [ref=e631]: model control trace test user managed
+                      - generic [ref=e632]: code
+                      - generic [ref=e634]: running
+                      - generic [ref=e638]: just now
+                - img [ref=e640]
+              - generic [ref=e642]:
+                - generic [ref=e643]:
+                  - generic [ref=e644]:
+                    - img [ref=e645]
+                    - heading "WORKBENCH" [level=3] [ref=e652]
+                  - button "Close WORKBENCH" [ref=e653]:
+                    - img [ref=e654]
+                - main [ref=e658]:
+                  - generic [ref=e659]:
+                    - heading "CODE & COMPUTE WORKBENCH" [level=1] [ref=e660]:
+                      - img [ref=e661]
+                      - text: CODE & COMPUTE WORKBENCH
+                    - paragraph [ref=e663]: DEDICATED EXECUTION RUN API
+                  - generic [ref=e664]:
+                    - button "CODE" [ref=e665]:
+                      - img [ref=e666]
+                      - text: CODE
+                    - button "COMPUTE" [ref=e668]:
+                      - img [ref=e669]
+                      - text: COMPUTE
+                  - generic [ref=e672]:
+                    - paragraph [ref=e673]: Prompt
+                    - textbox "Paste code task request..." [ref=e674]
+                    - generic [ref=e675]:
+                      - combobox [ref=e676]:
+                        - option "AUTO" [selected]
+                        - option "OPENAI (gpt-4.1-mini)" [disabled]
+                        - option "GEMINI (gemini-2.5-pro)" [disabled]
+                        - option "ANTHROPIC (claude-3-7-sonnet-latest)" [disabled]
+                        - option "LOCAL (qwen2.5:7b)"
+                      - combobox "model override (optional)" [ref=e677]
+                      - generic [ref=e678]:
+                        - checkbox "strict provider" [disabled] [ref=e679]
+                        - text: strict provider
+                    - generic [ref=e680]:
+                      - button "RUN" [disabled] [ref=e681]
+                      - generic [ref=e682]: "Provider: -"
+                      - generic [ref=e683]: "Credential: pending"
+                      - generic [ref=e684]: "Task: -"
+                      - generic [ref=e685]: "Run: -"
+                    - paragraph [ref=e686]: "Requested route: auto/default · strict=off"
+                  - generic [ref=e688]:
+                    - generic [ref=e689]:
+                      - generic [ref=e690]:
+                        - img [ref=e691]
+                        - text: "Database Access: Task sandbox policy"
+                      - generic [ref=e695]:
+                        - img [ref=e696]
+                        - text: "Network: Provider router policy"
+                    - generic [ref=e698]:
+                      - generic [ref=e699]:
+                        - generic [ref=e701]:
+                          - img [ref=e702]
+                          - generic [ref=e705]: typescript SANDBOX
+                        - code [ref=e708]: // Enter a code task prompt and press RUN
+                        - generic [ref=e710]: No execution yet.
+                      - generic [ref=e711]:
+                        - generic [ref=e713]:
+                          - img [ref=e714]
+                          - generic [ref=e717]: json SANDBOX
+                        - code [ref=e720]: "{ \"mode\": \"code\", \"provider_model\": \"-\", \"task_id\": \"-\", \"run_id\": \"-\" }"
+                        - generic [ref=e722]: No execution yet.
+                - img [ref=e724]
+          - region "Context Dock" [ref=e228]:
+            - generic [ref=e230]:
+              - button "Dock Assistant" [ref=e726]:
+                - generic [ref=e727]: Assistant
+                - img [ref=e728]
+              - button "Dock Tasks" [ref=e734]:
+                - generic [ref=e735]: Tasks
+                - img [ref=e736]
+                - img [ref=e740]
+              - button "Dock Workbench" [ref=e743]:
+                - generic [ref=e744]: Workbench
+                - img [ref=e745]
+                - img [ref=e749]
+              - generic [ref=e239]:
+                - button "Tile widgets" [ref=e240]:
+                  - img [ref=e241]
+                  - text: TILE
+                - button "Close all widgets" [ref=e246]:
+                  - img [ref=e247]
+                  - text: CLEAR
+                - button "Reset layout" [ref=e251]:
+                  - img [ref=e252]
+                  - text: RESET
+      - button "Toggle panel (Ctrl+.)" [ref=e255]:
+        - img [ref=e256]
+  - button "Open Next.js Dev Tools" [ref=e21] [cursor=pointer]:
+    - img [ref=e22]
+  - alert [ref=e25]

@@ -763,7 +763,7 @@ describe('API routes', () => {
         client_context_id: 'ctx-recency-fallback-no-provider-001',
         source: 'inbox_quick_command',
         intent: 'general',
-        prompt: '오늘 트럼프 주요 발언 정리해줘',
+        prompt: '오늘 트럼프 주요 발언 뉴스 정리해줘',
         widget_plan: ['assistant', 'tasks'],
         task_id: taskId
       }
@@ -941,7 +941,7 @@ describe('API routes', () => {
         client_context_id: 'ctx-recency-fallback-001',
         source: 'inbox_quick_command',
         intent: 'general',
-        prompt: '오늘 트럼프 주요 발언 정리해줘',
+        prompt: '오늘 트럼프 주요 발언 뉴스 정리해줘',
         widget_plan: ['assistant', 'tasks'],
         task_id: taskId
       }
@@ -1023,7 +1023,7 @@ describe('API routes', () => {
     expect(policyResolved?.data.grounding_policy).toBe('dynamic_factual');
     expect(policyResolved?.data.retrieval_fallback_enabled).toBe(true);
     expect(runCompleted?.data.quality_guard_triggered).toBe(false);
-    expect(runCompleted?.data.quality_gate_softened).toBe(true);
+    expect(runCompleted?.data.quality_gate_softened).toBe(false);
 
     const settledTask = await waitFor(
       async () =>
@@ -1140,7 +1140,7 @@ describe('API routes', () => {
       method: 'POST',
       url: '/api/v1/ai/respond',
       payload: {
-        prompt: '오늘 트럼프 주요 발언 정리해줘',
+        prompt: '오늘 트럼프 주요 발언 뉴스 정리해줘',
         provider: 'auto',
         task_type: 'chat'
       }
@@ -1246,7 +1246,7 @@ describe('API routes', () => {
       method: 'POST',
       url: '/api/v1/ai/respond',
       payload: {
-        prompt: '오늘 트럼프 주요 발언 정리해줘',
+        prompt: '오늘 트럼프 주요 발언 뉴스 정리해줘',
         provider: 'auto',
         task_type: 'chat'
       }
@@ -2267,6 +2267,261 @@ describe('API routes', () => {
     expect(successBody.data.model_count).toBeGreaterThan(0);
     expect(successBody.data.sampled_models).toContain('gpt-5');
     expect(fetchMock).toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('supports user-scoped provider credentials with user->workspace->env resolution', async () => {
+    process.env.OPENAI_API_KEY = 'env-openai-key';
+    process.env.LOCAL_LLM_ENABLED = 'false';
+
+    const { app } = await buildServer();
+    const userA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const userB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+    const before = await app.inject({
+      method: 'GET',
+      url: '/api/v1/providers/credentials/openai',
+      headers: {
+        'x-user-id': userA
+      }
+    });
+    expect(before.statusCode).toBe(200);
+    const beforeBody = before.json() as {
+      data: {
+        source: string;
+        selected_credential_mode: string | null;
+      };
+    };
+    expect(beforeBody.data.source).toBe('env');
+    expect(beforeBody.data.selected_credential_mode).toBe('api_key');
+
+    const upsert = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/providers/credentials/openai',
+      headers: {
+        'x-user-id': userA
+      },
+      payload: {
+        api_key: 'user-openai-key-123'
+      }
+    });
+    expect(upsert.statusCode).toBe(200);
+    const upsertBody = upsert.json() as {
+      data: {
+        source: string;
+        has_user_api_key: boolean;
+      };
+    };
+    expect(upsertBody.data.source).toBe('user');
+    expect(upsertBody.data.has_user_api_key).toBe(true);
+
+    const scopedOtherUser = await app.inject({
+      method: 'GET',
+      url: '/api/v1/providers/credentials/openai',
+      headers: {
+        'x-user-id': userB
+      }
+    });
+    expect(scopedOtherUser.statusCode).toBe(200);
+    const scopedOtherUserBody = scopedOtherUser.json() as {
+      data: {
+        source: string;
+      };
+    };
+    expect(scopedOtherUserBody.data.source).toBe('env');
+
+    const deleted = await app.inject({
+      method: 'DELETE',
+      url: '/api/v1/providers/credentials/openai',
+      headers: {
+        'x-user-id': userA
+      }
+    });
+    expect(deleted.statusCode).toBe(200);
+    const deletedBody = deleted.json() as {
+      data: {
+        deleted: boolean;
+        source: string;
+      };
+    };
+    expect(deletedBody.data.deleted).toBe(true);
+    expect(deletedBody.data.source).toBe('env');
+
+    await app.close();
+  });
+
+  it('supports oauth start/complete with single-use state for gemini', async () => {
+    process.env.PROVIDER_USER_CREDENTIALS_ENABLED = 'true';
+    process.env.PROVIDER_OAUTH_GEMINI_ENABLED = 'true';
+    process.env.GEMINI_OAUTH_CLIENT_ID = 'gemini-oauth-client-id';
+    process.env.GEMINI_OAUTH_CLIENT_SECRET = 'gemini-oauth-client-secret';
+    process.env.GEMINI_OAUTH_REDIRECT_URI = 'http://localhost:3000/oauth/callback';
+    process.env.GEMINI_OAUTH_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
+    process.env.GEMINI_OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+    process.env.GEMINI_OAUTH_SCOPES = 'https://www.googleapis.com/auth/generative-language';
+
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          access_token: 'oauth-access-token',
+          refresh_token: 'oauth-refresh-token',
+          expires_in: 3600,
+          token_type: 'Bearer',
+          scope: 'https://www.googleapis.com/auth/generative-language'
+        }),
+        {
+          status: 200,
+          headers: {
+            'content-type': 'application/json'
+          }
+        }
+      )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app } = await buildServer();
+    const userId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+
+    const start = await app.inject({
+      method: 'POST',
+      url: '/api/v1/providers/credentials/gemini/auth/start',
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(start.statusCode).toBe(200);
+    const startBody = start.json() as {
+      data: {
+        state: string;
+        auth_url: string;
+      };
+    };
+    expect(startBody.data.state.length).toBeGreaterThan(10);
+    expect(startBody.data.auth_url).toContain('code_challenge=');
+
+    const complete = await app.inject({
+      method: 'POST',
+      url: '/api/v1/providers/credentials/gemini/auth/complete',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        state: startBody.data.state,
+        code: 'oauth-code-123'
+      }
+    });
+    expect(complete.statusCode).toBe(200);
+    const completeBody = complete.json() as {
+      data: {
+        provider: string;
+        source: string;
+        selected_credential_mode: string | null;
+        has_user_oauth_token: boolean;
+      };
+    };
+    expect(completeBody.data.provider).toBe('gemini');
+    expect(completeBody.data.source).toBe('user');
+    expect(completeBody.data.selected_credential_mode).toBe('oauth_official');
+    expect(completeBody.data.has_user_oauth_token).toBe(true);
+
+    const replay = await app.inject({
+      method: 'POST',
+      url: '/api/v1/providers/credentials/gemini/auth/complete',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        state: startBody.data.state,
+        code: 'oauth-code-123'
+      }
+    });
+    expect(replay.statusCode).toBe(400);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await app.close();
+  });
+
+  it('includes codex allowlist models in user catalog when openai oauth is connected', async () => {
+    process.env.PROVIDER_USER_CREDENTIALS_ENABLED = 'true';
+    process.env.PROVIDER_OAUTH_OPENAI_ENABLED = 'true';
+    process.env.OPENAI_OAUTH_CLIENT_ID = 'openai-oauth-client-id';
+    process.env.OPENAI_OAUTH_CLIENT_SECRET = 'openai-oauth-client-secret';
+    process.env.OPENAI_OAUTH_REDIRECT_URI = 'http://localhost:3000/oauth/callback';
+    process.env.OPENAI_OAUTH_AUTH_URL = 'https://auth.openai.com/oauth/authorize';
+    process.env.OPENAI_OAUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token';
+    process.env.OPENAI_OAUTH_SCOPES = 'openid profile email offline_access';
+    process.env.OPENAI_CODEX_MODEL_ALLOWLIST = 'gpt-5,gpt-5-mini,gpt-5-nano';
+    process.env.OPENAI_MODEL = 'gpt-4.1-mini';
+
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          access_token: 'openai-oauth-access-token',
+          refresh_token: 'openai-oauth-refresh-token',
+          expires_in: 3600,
+          token_type: 'Bearer',
+          scope: 'openid profile email offline_access'
+        }),
+        {
+          status: 200,
+          headers: {
+            'content-type': 'application/json'
+          }
+        }
+      )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app } = await buildServer();
+    const userId = 'f9f9f9f9-f9f9-49f9-89f9-f9f9f9f9f9f9';
+
+    const start = await app.inject({
+      method: 'POST',
+      url: '/api/v1/providers/credentials/openai/auth/start',
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(start.statusCode).toBe(200);
+    const startBody = start.json() as {
+      data: {
+        state: string;
+      };
+    };
+
+    const complete = await app.inject({
+      method: 'POST',
+      url: '/api/v1/providers/credentials/openai/auth/complete',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        state: startBody.data.state,
+        code: 'openai-oauth-code-123'
+      }
+    });
+    expect(complete.statusCode).toBe(200);
+
+    const catalog = await app.inject({
+      method: 'GET',
+      url: '/api/v1/providers/models?scope=user',
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(catalog.statusCode).toBe(200);
+    const catalogBody = catalog.json() as {
+      data: {
+        providers: Array<{ provider: string; models: string[]; recommended_model?: string }>;
+      };
+    };
+    const openaiCatalog = catalogBody.data.providers.find((row) => row.provider === 'openai');
+    expect(openaiCatalog).toBeTruthy();
+    expect(openaiCatalog?.models).toContain('gpt-5');
+    expect(openaiCatalog?.models).toContain('gpt-5-mini');
+    expect(openaiCatalog?.models).toContain('gpt-5-nano');
+    expect(openaiCatalog?.recommended_model).toBe('gpt-5');
 
     await app.close();
   });

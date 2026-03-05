@@ -5,8 +5,11 @@ import { CodeExecutionPanel } from "@/components/ui/CodeExecutionPanel";
 import { ComputeResultPanel } from "@/components/ui/ComputeResultPanel";
 import { Terminal, Database, ShieldAlert, Cpu, Loader2 } from "lucide-react";
 
-import { startExecutionRun, streamExecutionRunEvents } from "@/lib/api/endpoints";
+import { listProviderModels, listProviders, startExecutionRun, streamExecutionRunEvents } from "@/lib/api/endpoints";
 import { ApiRequestError } from "@/lib/api/client";
+import type { ProviderAvailability, ProviderModelCatalogEntry } from "@/lib/api/types";
+
+type ProviderSelection = "auto" | "openai" | "gemini" | "anthropic" | "local";
 
 function truncate(value: string, max = 220): string {
   if (value.length <= max) return value;
@@ -21,10 +24,43 @@ export function WorkbenchModule() {
   const [output, setOutput] = useState<string>("No execution yet.");
   const [executionTimeMs, setExecutionTimeMs] = useState<number | undefined>(undefined);
   const [providerModel, setProviderModel] = useState<string>("-");
+  const [credentialSummary, setCredentialSummary] = useState<string>("pending");
   const [taskId, setTaskId] = useState<string>("-");
   const [runId, setRunId] = useState<string>("-");
   const [error, setError] = useState<string | null>(null);
   const [idempotentReplay, setIdempotentReplay] = useState(false);
+  const [providers, setProviders] = useState<ProviderAvailability[]>([]);
+  const [providerModelCatalog, setProviderModelCatalog] = useState<ProviderModelCatalogEntry[]>([]);
+  const [selectedProvider, setSelectedProvider] = useState<ProviderSelection>("auto");
+  const [strictProvider, setStrictProvider] = useState(false);
+  const [modelOverride, setModelOverride] = useState("");
+
+  const formatCredentialSummary = (credential: {
+    source: string;
+    selected_credential_mode: string | null;
+    credential_priority: string;
+  } | null | undefined): string => {
+    if (!credential || !credential.selected_credential_mode) {
+      return "none";
+    }
+    return `${credential.selected_credential_mode} (${credential.source}) · ${credential.credential_priority}`;
+  };
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const [providerData, modelData] = await Promise.all([
+          listProviders(),
+          listProviderModels({ scope: "user" }).catch(() => ({ providers: [] })),
+        ]);
+        setProviders(providerData.providers ?? []);
+        setProviderModelCatalog(modelData.providers ?? []);
+      } catch {
+        setProviders([]);
+        setProviderModelCatalog([]);
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -39,6 +75,23 @@ export function WorkbenchModule() {
     if (status === "running") return 70;
     return 60;
   }, [status]);
+  const providerOptions = useMemo(
+    () => [
+      { provider: "auto" as const, enabled: true, label: "AUTO" },
+      ...providers.map((item) => ({
+        provider: item.provider,
+        enabled: item.enabled,
+        label: `${item.provider.toUpperCase()}${item.model ? ` (${item.model})` : ""}`,
+      })),
+    ],
+    [providers]
+  );
+  const selectedProviderModels = useMemo(() => {
+    if (selectedProvider === "auto") {
+      return [];
+    }
+    return providerModelCatalog.find((row) => row.provider === selectedProvider)?.models ?? [];
+  }, [providerModelCatalog, selectedProvider]);
 
   const runExecution = async () => {
     const trimmed = prompt.trim();
@@ -47,20 +100,31 @@ export function WorkbenchModule() {
     setStatus("running");
     setError(null);
     setIdempotentReplay(false);
+    setCredentialSummary("pending");
 
     try {
       const mode = activeTab === "code" ? "code" : "compute";
-      const run = await startExecutionRun({
+      const payload: Parameters<typeof startExecutionRun>[0] = {
         mode,
         prompt: trimmed,
-        provider: "auto",
         create_task: true,
-      });
+      };
+      if (selectedProvider !== "auto") {
+        payload.provider = selectedProvider;
+        payload.strict_provider = strictProvider;
+      }
+      const model = modelOverride.trim();
+      if (model.length > 0) {
+        payload.model = model;
+      }
+
+      const run = await startExecutionRun(payload);
       setIdempotentReplay(run.idempotent_replay === true);
 
       setRunId(run.id);
       setTaskId(run.task_id ?? "-");
       setProviderModel(`${run.provider ?? "pending"}/${run.model}`);
+      setCredentialSummary(formatCredentialSummary(run.selected_credential));
       setOutput(run.output || "Execution run created. Waiting for completion stream...");
       setExecutionTimeMs(run.duration_ms > 0 ? run.duration_ms : undefined);
       if (run.status === "completed") {
@@ -75,12 +139,27 @@ export function WorkbenchModule() {
       streamRef.current = streamExecutionRunEvents(run.id, {
         onUpdated: (payload) => {
           if (!payload || typeof payload !== "object" || !("data" in payload)) return;
-          const body = payload as { data?: { output?: string; status?: string; provider?: string | null; model?: string } };
+          const body = payload as {
+            data?: {
+              output?: string;
+              status?: string;
+              provider?: string | null;
+              model?: string;
+              selected_credential?: {
+                source: string;
+                selected_credential_mode: string | null;
+                credential_priority: string;
+              } | null;
+            };
+          };
           if (body.data?.output) {
             setOutput(body.data.output);
           }
           if (body.data?.provider || body.data?.model) {
             setProviderModel(`${body.data?.provider ?? "pending"}/${body.data?.model ?? "pending"}`);
+          }
+          if ("selected_credential" in (body.data ?? {})) {
+            setCredentialSummary(formatCredentialSummary(body.data?.selected_credential ?? null));
           }
           if (body.data?.status === "running" || body.data?.status === "queued") {
             setStatus("running");
@@ -88,7 +167,20 @@ export function WorkbenchModule() {
         },
         onCompleted: (payload) => {
           if (!payload || typeof payload !== "object" || !("data" in payload)) return;
-          const body = payload as { data?: { output?: string; duration_ms?: number; provider?: string; model?: string; task_id?: string | null } };
+          const body = payload as {
+            data?: {
+              output?: string;
+              duration_ms?: number;
+              provider?: string;
+              model?: string;
+              task_id?: string | null;
+              selected_credential?: {
+                source: string;
+                selected_credential_mode: string | null;
+                credential_priority: string;
+              } | null;
+            };
+          };
           setOutput(body.data?.output ?? run.output);
           setExecutionTimeMs(body.data?.duration_ms ?? run.duration_ms);
           if (body.data?.provider && body.data?.model) {
@@ -97,15 +189,28 @@ export function WorkbenchModule() {
           if (body.data?.task_id) {
             setTaskId(body.data.task_id);
           }
+          setCredentialSummary(formatCredentialSummary(body.data?.selected_credential ?? run.selected_credential));
           setStatus("success");
         },
         onFailed: (payload) => {
           if (!payload || typeof payload !== "object" || !("data" in payload)) return;
-          const body = payload as { data?: { output?: string; provider?: string | null; model?: string } };
+          const body = payload as {
+            data?: {
+              output?: string;
+              provider?: string | null;
+              model?: string;
+              selected_credential?: {
+                source: string;
+                selected_credential_mode: string | null;
+                credential_priority: string;
+              } | null;
+            };
+          };
           setOutput(body.data?.output ?? "execution failed");
           if (body.data?.provider || body.data?.model) {
             setProviderModel(`${body.data?.provider ?? "pending"}/${body.data?.model ?? "pending"}`);
           }
+          setCredentialSummary(formatCredentialSummary(body.data?.selected_credential ?? null));
           setStatus("error");
         },
         onClose: () => {
@@ -124,6 +229,7 @@ export function WorkbenchModule() {
       setStatus("error");
       setExecutionTimeMs(undefined);
       setIdempotentReplay(false);
+      setCredentialSummary("none");
     }
   };
 
@@ -167,6 +273,42 @@ export function WorkbenchModule() {
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
         />
+        <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-[180px_minmax(0,1fr)_auto]">
+          <select
+            value={selectedProvider}
+            onChange={(event) => setSelectedProvider(event.target.value as ProviderSelection)}
+            className="h-9 rounded border border-white/15 bg-black/50 px-2 text-xs text-white/90"
+          >
+            {providerOptions.map((option) => (
+              <option key={`workbench-provider-${option.provider}`} value={option.provider} disabled={!option.enabled}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <input
+            list="workbench-model-catalog"
+            type="text"
+            value={modelOverride}
+            onChange={(event) => setModelOverride(event.target.value)}
+            placeholder="model override (optional)"
+            className="h-9 rounded border border-white/15 bg-black/50 px-3 text-xs text-white/90"
+          />
+          <datalist id="workbench-model-catalog">
+            {selectedProviderModels.map((modelName) => (
+              <option key={`workbench-model-${modelName}`} value={modelName} />
+            ))}
+          </datalist>
+          <label className="inline-flex items-center gap-1 text-[11px] text-white/70">
+            <input
+              type="checkbox"
+              checked={strictProvider}
+              onChange={(event) => setStrictProvider(event.target.checked)}
+              disabled={selectedProvider === "auto"}
+              className="accent-cyan-400"
+            />
+            strict provider
+          </label>
+        </div>
         <div className="mt-3 flex items-center gap-3">
           <button
             className="bg-cyan-500/20 text-cyan-400 border border-cyan-500/50 px-5 py-2 rounded-md font-mono font-bold text-xs hover:bg-cyan-500/30 transition-all shadow-[0_0_15px_rgba(0,255,255,0.2)] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
@@ -177,9 +319,13 @@ export function WorkbenchModule() {
             RUN
           </button>
           <span className="text-xs font-mono text-white/40">Provider: {providerModel}</span>
+          <span className="text-xs font-mono text-cyan-300/80">Credential: {credentialSummary}</span>
           <span className="text-xs font-mono text-white/40">Task: {taskId === "-" ? "-" : taskId.slice(0, 8)}</span>
           <span className="text-xs font-mono text-white/40">Run: {runId === "-" ? "-" : runId.slice(0, 8)}</span>
         </div>
+        <p className="mt-2 text-xs font-mono text-white/50">
+          Requested route: {selectedProvider}/{modelOverride.trim() || "default"} · strict={selectedProvider === "auto" ? "off" : strictProvider ? "on" : "off"}
+        </p>
         {error && <p className="mt-2 text-xs font-mono text-red-400">{error}</p>}
         {idempotentReplay && <p className="mt-2 text-xs font-mono text-amber-300">Idempotent replay: existing run was reused.</p>}
       </div>

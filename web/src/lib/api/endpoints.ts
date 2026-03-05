@@ -38,10 +38,20 @@ import type {
   MissionUpdateRequest,
   ProposalDecisionRequest,
   ProviderModelCatalogEntry,
+  ProviderName,
   ProviderAvailability,
   ProviderConnectionTestResult,
   ProviderCredentialMutationResult,
   ProviderCredentialRecord,
+  ProviderCredentialSelectionMode,
+  UserProviderCredentialRecord,
+  UserProviderConnectionTestResult,
+  ProviderOauthStartResult,
+  ModelControlFeatureKey,
+  UserModelSelectionPreference,
+  ModelRecommendationRun,
+  AiInvocationTraceRecord,
+  AiInvocationMetrics,
   RadarDecision,
   RadarIngestRequest,
   RadarItemRecord,
@@ -106,8 +116,8 @@ export async function listProviders(): Promise<{ providers: ProviderAvailability
   return apiRequest<{ providers: ProviderAvailability[] }>("/api/v1/providers", { method: "GET" });
 }
 
-export async function listProviderModels(): Promise<{ providers: ProviderModelCatalogEntry[] }> {
-  return apiRequest<{ providers: ProviderModelCatalogEntry[] }>("/api/v1/providers/models", { method: "GET" });
+export async function listProviderModels(query: { scope?: "user" | "workspace" } = {}): Promise<{ providers: ProviderModelCatalogEntry[] }> {
+  return apiRequest<{ providers: ProviderModelCatalogEntry[] }>("/api/v1/providers/models", { method: "GET", query });
 }
 
 export async function getSettingsOverview(): Promise<SettingsOverviewData> {
@@ -221,6 +231,146 @@ export async function testAdminProviderConnection(
 ): Promise<ProviderConnectionTestResult> {
   return apiRequest<ProviderConnectionTestResult>(`/api/v1/admin/providers/credentials/${provider}/test`, {
     method: "POST",
+  });
+}
+
+export async function listUserProviderCredentials(): Promise<{ providers: UserProviderCredentialRecord[] }> {
+  return apiRequest<{ providers: UserProviderCredentialRecord[] }>("/api/v1/providers/credentials", { method: "GET" });
+}
+
+export async function getUserProviderCredential(provider: ProviderName): Promise<UserProviderCredentialRecord> {
+  return apiRequest<UserProviderCredentialRecord>(`/api/v1/providers/credentials/${provider}`, { method: "GET" });
+}
+
+export async function upsertUserProviderCredential(
+  provider: ProviderName,
+  payload: {
+    api_key?: string;
+    credential_priority?: "api_key_first" | "auth_first";
+    selected_credential_mode?: ProviderCredentialSelectionMode;
+    is_active?: boolean;
+  }
+): Promise<UserProviderCredentialRecord> {
+  return apiRequest<UserProviderCredentialRecord>(`/api/v1/providers/credentials/${provider}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteUserProviderCredential(provider: ProviderName): Promise<UserProviderCredentialRecord> {
+  return apiRequest<UserProviderCredentialRecord>(`/api/v1/providers/credentials/${provider}`, {
+    method: "DELETE",
+  });
+}
+
+export async function testUserProviderCredential(provider: ProviderName): Promise<UserProviderConnectionTestResult> {
+  return apiRequest<UserProviderConnectionTestResult>(`/api/v1/providers/credentials/${provider}/test`, {
+    method: "POST",
+  });
+}
+
+export async function startUserProviderOauth(
+  provider: Extract<ProviderName, "openai" | "gemini">,
+  payload: Record<string, never> = {}
+): Promise<ProviderOauthStartResult> {
+  return apiRequest<ProviderOauthStartResult>(`/api/v1/providers/credentials/${provider}/auth/start`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function completeUserProviderOauth(
+  provider: Extract<ProviderName, "openai" | "gemini">,
+  payload: {
+    state: string;
+    code: string;
+  }
+): Promise<UserProviderCredentialRecord> {
+  return apiRequest<UserProviderCredentialRecord>(`/api/v1/providers/credentials/${provider}/auth/complete`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getModelControlPreferences(): Promise<{ preferences: UserModelSelectionPreference[] }> {
+  return apiRequest<{ preferences: UserModelSelectionPreference[] }>("/api/v1/model-control/preferences", {
+    method: "GET",
+  });
+}
+
+export async function upsertModelControlPreference(
+  feature: ModelControlFeatureKey,
+  payload: {
+    provider: ProviderName | "auto";
+    model?: string;
+    strict_provider?: boolean;
+    selection_mode?: "auto" | "manual";
+  }
+): Promise<UserModelSelectionPreference> {
+  return apiRequest<UserModelSelectionPreference>(`/api/v1/model-control/preferences/${feature}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function createModelRecommendation(payload: {
+  feature_key: ModelControlFeatureKey;
+  prompt: string;
+  task_type?: string;
+}): Promise<ModelRecommendationRun> {
+  return apiRequest<ModelRecommendationRun>("/api/v1/model-control/recommendations", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listModelRecommendations(query: {
+  feature_key?: ModelControlFeatureKey;
+  limit?: number;
+} = {}): Promise<{ recommendations: ModelRecommendationRun[] }> {
+  return apiRequest<{ recommendations: ModelRecommendationRun[] }>("/api/v1/model-control/recommendations", {
+    method: "GET",
+    query,
+  });
+}
+
+export async function applyModelRecommendation(recommendationId: string): Promise<{
+  recommendation: ModelRecommendationRun;
+  preference: UserModelSelectionPreference;
+}> {
+  return apiRequest<{ recommendation: ModelRecommendationRun; preference: UserModelSelectionPreference }>(
+    `/api/v1/model-control/recommendations/${recommendationId}/apply`,
+    {
+      method: "POST",
+    }
+  );
+}
+
+export async function listModelControlTraces(query: {
+  feature_key?: ModelControlFeatureKey | "diagnostic";
+  success?: boolean;
+  limit?: number;
+} = {}): Promise<{ traces: AiInvocationTraceRecord[] }> {
+  const normalizedQuery: Record<string, string | number> = {};
+  if (query.feature_key) {
+    normalizedQuery.feature_key = query.feature_key;
+  }
+  if (typeof query.success === "boolean") {
+    normalizedQuery.success = query.success ? "true" : "false";
+  }
+  if (typeof query.limit === "number") {
+    normalizedQuery.limit = query.limit;
+  }
+  return apiRequest<{ traces: AiInvocationTraceRecord[] }>("/api/v1/model-control/traces", {
+    method: "GET",
+    query: normalizedQuery,
+  });
+}
+
+export async function getModelControlMetrics(query: { since?: string } = {}): Promise<AiInvocationMetrics> {
+  return apiRequest<AiInvocationMetrics>("/api/v1/model-control/metrics", {
+    method: "GET",
+    query,
   });
 }
 

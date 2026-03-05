@@ -1,4 +1,6 @@
-import { pathToFileURL } from 'node:url';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
@@ -10,10 +12,13 @@ import { loadEnv } from './config/env';
 import { startTelegramDeliveryWorker } from './integrations/telegram/delivery-worker';
 import { sendError } from './lib/http';
 import { createProviderRouter } from './providers';
+import { startOauthCallbackBridge } from './providers/oauth-callback-bridge';
 import { syncModelRegistry, createRegistryRefreshInterval } from './providers/model-registry';
 import { loadProviderStats } from './providers/stats-persistence';
 import { seedDefaultPolicies, loadPoliciesIntoCache } from './providers/task-model-policy';
+import { startProviderTokenRefreshWorker } from './providers/token-refresh-worker';
 import { createNotificationService } from './notifications/proactive';
+import { startAiTraceCleanupWorker } from './observability/ai-trace-worker';
 import { registerRoutes } from './routes';
 import { createStore } from './store';
 import type { JarvisStore } from './store/types';
@@ -22,12 +27,25 @@ type RawBodyFastifyRequest = {
   rawBody?: string;
 };
 
-if (typeof process.loadEnvFile === 'function') {
+function tryLoadEnvFile(filePath: string): void {
+  if (typeof process.loadEnvFile !== 'function') {
+    return;
+  }
+  if (!existsSync(filePath)) {
+    return;
+  }
   try {
-    process.loadEnvFile();
+    process.loadEnvFile(filePath);
   } catch {
     // Optional local .env file may be absent in some environments.
   }
+}
+
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+const backendRoot = path.resolve(moduleDir, '..');
+tryLoadEnvFile(path.join(backendRoot, '.env'));
+if (process.cwd() !== backendRoot) {
+  tryLoadEnvFile(path.join(process.cwd(), '.env'));
 }
 
 async function ensureBootstrapAdmin(store: JarvisStore, env: ReturnType<typeof loadEnv>): Promise<void> {
@@ -51,8 +69,32 @@ export async function buildServer() {
   await ensureBootstrapAdmin(store, env);
   const providerRouter = createProviderRouter(env);
 
+  const loggerConfig = env.NODE_ENV === 'development'
+    ? {
+        level: 'info',
+        redact: {
+          paths: [
+            'req.headers.authorization',
+            'req.headers.cookie',
+            '*.authorization',
+            '*.api_key',
+            '*.apiKey',
+            '*.token',
+            '*.access_token',
+            '*.refresh_token',
+            '*.encrypted_payload',
+            '*.encryptedApiKey',
+            '*.encryptedPayload',
+            '*.secret',
+            '*.client_secret'
+          ],
+          censor: '[REDACTED]'
+        }
+      }
+    : false;
+
   const app = Fastify({
-    logger: env.NODE_ENV === 'development'
+    logger: loggerConfig
   });
 
   app.addContentTypeParser('application/json', { parseAs: 'string' }, (request, body, done) => {
@@ -130,6 +172,16 @@ export async function buildServer() {
   const notificationService = createNotificationService();
   await registerRoutes(app, store, env, providerRouter, notificationService);
 
+  const oauthCallbackBridge = await startOauthCallbackBridge({
+    env,
+    logger: app.log
+  });
+  if (oauthCallbackBridge) {
+    app.addHook('onClose', async () => {
+      await oauthCallbackBridge.stop();
+    });
+  }
+
   if (pool) {
     const registryRefresh = createRegistryRefreshInterval(pool, env, env.MODEL_REGISTRY_REFRESH_MS);
     app.addHook('onClose', async () => {
@@ -146,6 +198,24 @@ export async function buildServer() {
   });
   app.addHook('onClose', async () => {
     telegramDeliveryWorker.stop();
+  });
+
+  const providerTokenRefreshWorker = startProviderTokenRefreshWorker({
+    store,
+    env,
+    logger: app.log
+  });
+  app.addHook('onClose', async () => {
+    providerTokenRefreshWorker.stop();
+  });
+
+  const aiTraceCleanupWorker = startAiTraceCleanupWorker({
+    store,
+    env,
+    logger: app.log
+  });
+  app.addHook('onClose', async () => {
+    aiTraceCleanupWorker.stop();
   });
 
   return {

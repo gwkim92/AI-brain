@@ -7,6 +7,7 @@ import { decryptSecretValue } from '../auth/secrets';
 import type { AppEnv } from '../config/env';
 import { createTelegramCallbackReplayGuard } from '../integrations/telegram/commands';
 import { sendError } from '../lib/http';
+import { resolveEffectiveProviderCredentials } from '../providers/credentials-resolver';
 import type { ProviderRouter } from '../providers/router';
 import type { NotificationService } from '../notifications/proactive';
 import type {
@@ -30,6 +31,7 @@ import { notificationRoutes } from './notifications';
 import { mcpRoutes } from './mcp';
 import { authRoutes } from './auth';
 import { providerRoutes } from './providers';
+import { modelControlRoutes } from './model-control';
 import { settingsRoutes } from './settings';
 import { dashboardRoutes } from './dashboard';
 import { adminCredentialRoutes } from './admin-credentials';
@@ -231,6 +233,26 @@ export async function registerRoutes(
     return { userId, idempotencyKey, traceId };
   };
 
+  const resolveRequestProviderCredentials = async (request: FastifyRequest) => {
+    const userId = resolveRequestUserId(request);
+    return resolveEffectiveProviderCredentials({
+      store,
+      env,
+      userId,
+      updatedBy: userId,
+      onAuthEvent: (event) => {
+        request.log.info(
+          {
+            provider: event.provider,
+            stage: event.stage,
+            reason: event.reason
+          },
+          'provider auth lifecycle'
+        );
+      }
+    });
+  };
+
   const buildDashboardOverviewData = async (
     request: FastifyRequest,
     input: { task_limit: number; pending_approval_limit: number; running_task_limit: number; task_scope?: 'mine' | 'all' }
@@ -323,6 +345,7 @@ export async function registerRoutes(
     getEnvProviderApiKey,
     loadRuntimeProviderApiKeys,
     applyStoredProviderKeys,
+    resolveRequestProviderCredentials,
     buildDashboardOverviewData,
     buildDashboardOverviewSignature,
   };
@@ -354,6 +377,7 @@ export async function registerRoutes(
   await mcpRoutes(app, ctx);
   await authRoutes(app, ctx);
   await providerRoutes(app, ctx);
+  await modelControlRoutes(app, ctx);
   await settingsRoutes(app, ctx);
   await dashboardRoutes(app, ctx);
   await adminCredentialRoutes(app, ctx);

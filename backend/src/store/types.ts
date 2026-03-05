@@ -218,6 +218,159 @@ export type ProviderCredentialRecord = {
   updatedAt: string;
 };
 
+export type ProviderCredentialPriority = 'api_key_first' | 'auth_first';
+export type ProviderCredentialMode = 'auto' | 'api_key' | 'oauth_official';
+export type ResolvedProviderCredentialMode = Exclude<ProviderCredentialMode, 'auto'>;
+
+export type UserProviderCredentialRecord = {
+  userId: string;
+  provider: ProviderCredentialProvider;
+  encryptedPayload: string;
+  isActive: boolean;
+  updatedBy: string | null;
+  updatedAt: string;
+};
+
+export type ProviderOauthStateRecord = {
+  state: string;
+  userId: string;
+  provider: ProviderCredentialProvider;
+  encryptedContext: string;
+  expiresAt: string;
+  consumedAt: string | null;
+  createdAt: string;
+};
+
+export type ModelControlFeatureKey =
+  | 'global_default'
+  | 'assistant_chat'
+  | 'assistant_context_run'
+  | 'council_run'
+  | 'execution_code'
+  | 'execution_compute'
+  | 'mission_plan_generation'
+  | 'mission_execute_step';
+
+export type UserModelSelectionPreferenceRecord = {
+  userId: string;
+  featureKey: ModelControlFeatureKey;
+  provider: LlmProviderName | 'auto';
+  modelId: string | null;
+  strictProvider: boolean;
+  selectionMode: 'auto' | 'manual';
+  updatedAt: string;
+  updatedBy: string | null;
+};
+
+export type CreateOrUpdateUserModelSelectionPreferenceInput = {
+  userId: string;
+  featureKey: ModelControlFeatureKey;
+  provider: LlmProviderName | 'auto';
+  modelId?: string | null;
+  strictProvider?: boolean;
+  selectionMode?: 'auto' | 'manual';
+  updatedBy?: string | null;
+};
+
+export type ModelRecommendationRunRecord = {
+  id: string;
+  userId: string;
+  featureKey: ModelControlFeatureKey;
+  promptHash: string;
+  promptExcerptRedacted: string;
+  recommendedProvider: LlmProviderName;
+  recommendedModelId: string;
+  rationaleText: string;
+  evidenceJson: Record<string, unknown>;
+  recommenderProvider: 'openai';
+  appliedAt: string | null;
+  createdAt: string;
+};
+
+export type CreateModelRecommendationRunInput = {
+  userId: string;
+  featureKey: ModelControlFeatureKey;
+  promptHash: string;
+  promptExcerptRedacted: string;
+  recommendedProvider: LlmProviderName;
+  recommendedModelId: string;
+  rationaleText: string;
+  evidenceJson: Record<string, unknown>;
+  recommenderProvider?: 'openai';
+};
+
+export type AiInvocationTraceRecord = {
+  id: string;
+  userId: string;
+  featureKey: ModelControlFeatureKey | 'diagnostic';
+  taskType: string;
+  requestProvider: LlmProviderName | 'auto';
+  requestModel: string | null;
+  resolvedProvider: LlmProviderName | null;
+  resolvedModel: string | null;
+  credentialMode: ResolvedProviderCredentialMode | null;
+  credentialSource: 'user' | 'workspace' | 'env' | 'none';
+  attemptsJson: Array<Record<string, unknown>>;
+  usedFallback: boolean;
+  success: boolean;
+  errorCode: string | null;
+  errorMessageRedacted: string | null;
+  latencyMs: number;
+  traceId: string | null;
+  contextRefsJson: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type CreateAiInvocationTraceInput = {
+  userId: string;
+  featureKey: ModelControlFeatureKey | 'diagnostic';
+  taskType: string;
+  requestProvider: LlmProviderName | 'auto';
+  requestModel?: string | null;
+  traceId?: string | null;
+  contextRefsJson?: Record<string, unknown>;
+};
+
+export type CompleteAiInvocationTraceInput = {
+  id: string;
+  resolvedProvider?: LlmProviderName | null;
+  resolvedModel?: string | null;
+  credentialMode?: ResolvedProviderCredentialMode | null;
+  credentialSource?: 'user' | 'workspace' | 'env' | 'none';
+  attemptsJson?: Array<Record<string, unknown>>;
+  usedFallback?: boolean;
+  success: boolean;
+  errorCode?: string | null;
+  errorMessageRedacted?: string | null;
+  latencyMs: number;
+};
+
+export type AiInvocationTraceListFilters = {
+  userId: string;
+  limit: number;
+  featureKey?: ModelControlFeatureKey | 'diagnostic';
+  success?: boolean;
+};
+
+export type AiInvocationMetrics = {
+  windowStart: string;
+  windowEnd: string;
+  total: number;
+  successCount: number;
+  failureCount: number;
+  successRate: number;
+  p50LatencyMs: number;
+  p95LatencyMs: number;
+  providerDistribution: Array<{
+    provider: LlmProviderName;
+    count: number;
+  }>;
+  credentialSourceDistribution: Array<{
+    source: 'user' | 'workspace' | 'env' | 'none';
+    count: number;
+  }>;
+};
+
 export type AuthUserRecord = {
   id: string;
   email: string;
@@ -326,6 +479,12 @@ export type ProviderAttemptRecord = {
   status: 'success' | 'failed' | 'skipped';
   latencyMs?: number;
   error?: string;
+  credential?: {
+    source: 'user' | 'workspace' | 'env' | 'none';
+    selectedCredentialMode: 'api_key' | 'oauth_official' | null;
+    credentialPriority: 'api_key_first' | 'auth_first';
+    authAccessTokenExpiresAt: string | null;
+  };
 };
 
 export type CouncilRole = 'planner' | 'researcher' | 'critic' | 'risk' | 'synthesizer';
@@ -525,6 +684,81 @@ export type JarvisStore = {
     updatedBy?: string | null;
   }) => Promise<ProviderCredentialRecord>;
   deleteProviderCredential: (provider: ProviderCredentialProvider) => Promise<boolean>;
+  listUserProviderCredentials: (input: {
+    userId: string;
+    includeInactive?: boolean;
+  }) => Promise<UserProviderCredentialRecord[]>;
+  getUserProviderCredential: (input: {
+    userId: string;
+    provider: ProviderCredentialProvider;
+    includeInactive?: boolean;
+  }) => Promise<UserProviderCredentialRecord | null>;
+  upsertUserProviderCredential: (input: {
+    userId: string;
+    provider: ProviderCredentialProvider;
+    encryptedPayload: string;
+    isActive?: boolean;
+    updatedBy?: string | null;
+  }) => Promise<UserProviderCredentialRecord>;
+  deleteUserProviderCredential: (input: {
+    userId: string;
+    provider: ProviderCredentialProvider;
+  }) => Promise<boolean>;
+  listActiveUserProviderCredentials: (input: {
+    provider?: ProviderCredentialProvider;
+    limit: number;
+  }) => Promise<UserProviderCredentialRecord[]>;
+  createProviderOauthState: (input: {
+    state: string;
+    userId: string;
+    provider: ProviderCredentialProvider;
+    encryptedContext: string;
+    expiresAt: string;
+  }) => Promise<ProviderOauthStateRecord>;
+  consumeProviderOauthState: (input: {
+    state: string;
+    provider: ProviderCredentialProvider;
+  }) => Promise<ProviderOauthStateRecord | null>;
+  cleanupExpiredProviderOauthStates: (input?: { nowIso?: string; limit?: number }) => Promise<number>;
+  listUserModelSelectionPreferences: (input: {
+    userId: string;
+  }) => Promise<UserModelSelectionPreferenceRecord[]>;
+  getUserModelSelectionPreference: (input: {
+    userId: string;
+    featureKey: ModelControlFeatureKey;
+  }) => Promise<UserModelSelectionPreferenceRecord | null>;
+  upsertUserModelSelectionPreference: (input: CreateOrUpdateUserModelSelectionPreferenceInput) => Promise<UserModelSelectionPreferenceRecord>;
+  deleteUserModelSelectionPreference: (input: {
+    userId: string;
+    featureKey: ModelControlFeatureKey;
+  }) => Promise<boolean>;
+  createModelRecommendationRun: (input: CreateModelRecommendationRunInput) => Promise<ModelRecommendationRunRecord>;
+  listModelRecommendationRuns: (input: {
+    userId: string;
+    limit: number;
+    featureKey?: ModelControlFeatureKey;
+  }) => Promise<ModelRecommendationRunRecord[]>;
+  markModelRecommendationApplied: (input: {
+    recommendationId: string;
+    userId: string;
+  }) => Promise<ModelRecommendationRunRecord | null>;
+  cleanupExpiredModelRecommendationRuns: (input?: {
+    nowIso?: string;
+    retentionDays?: number;
+    limit?: number;
+  }) => Promise<number>;
+  createAiInvocationTrace: (input: CreateAiInvocationTraceInput) => Promise<AiInvocationTraceRecord>;
+  completeAiInvocationTrace: (input: CompleteAiInvocationTraceInput) => Promise<AiInvocationTraceRecord | null>;
+  listAiInvocationTraces: (input: AiInvocationTraceListFilters) => Promise<AiInvocationTraceRecord[]>;
+  getAiInvocationMetrics: (input: {
+    userId: string;
+    sinceIso?: string;
+  }) => Promise<AiInvocationMetrics>;
+  cleanupExpiredAiInvocationTraces: (input?: {
+    nowIso?: string;
+    retentionDays?: number;
+    limit?: number;
+  }) => Promise<number>;
 
   createMission: (input: CreateMissionInput) => Promise<MissionRecord>;
   listMissions: (input: { userId: string; status?: MissionStatus; limit: number }) => Promise<MissionRecord[]>;

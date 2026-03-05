@@ -135,6 +135,73 @@ export type ProviderCredentialRow = {
   updated_at: Date;
 };
 
+export type UserProviderCredentialRow = {
+  user_id: string;
+  provider: 'openai' | 'gemini' | 'anthropic' | 'local';
+  encrypted_payload: string;
+  is_active: boolean;
+  updated_by: string | null;
+  updated_at: Date;
+};
+
+export type ProviderOauthStateRow = {
+  state: string;
+  user_id: string;
+  provider: 'openai' | 'gemini' | 'anthropic' | 'local';
+  encrypted_context: string;
+  expires_at: Date;
+  consumed_at: Date | null;
+  created_at: Date;
+};
+
+export type UserModelSelectionPreferenceRow = {
+  user_id: string;
+  feature_key: string;
+  provider: 'openai' | 'gemini' | 'anthropic' | 'local' | 'auto';
+  model_id: string | null;
+  strict_provider: boolean;
+  selection_mode: 'auto' | 'manual';
+  updated_by: string | null;
+  updated_at: Date;
+};
+
+export type ModelRecommendationRunRow = {
+  id: string;
+  user_id: string;
+  feature_key: string;
+  prompt_hash: string;
+  prompt_excerpt_redacted: string;
+  recommended_provider: 'openai' | 'gemini' | 'anthropic' | 'local';
+  recommended_model_id: string;
+  rationale_text: string;
+  evidence_json: Record<string, unknown>;
+  recommender_provider: 'openai';
+  applied_at: Date | null;
+  created_at: Date;
+};
+
+export type AiInvocationTraceRow = {
+  id: string;
+  user_id: string;
+  feature_key: string;
+  task_type: string;
+  request_provider: 'openai' | 'gemini' | 'anthropic' | 'local' | 'auto';
+  request_model: string | null;
+  resolved_provider: 'openai' | 'gemini' | 'anthropic' | 'local' | null;
+  resolved_model: string | null;
+  credential_mode: 'api_key' | 'oauth_official' | null;
+  credential_source: 'user' | 'workspace' | 'env' | 'none';
+  attempts_json: unknown;
+  used_fallback: boolean;
+  success: boolean;
+  error_code: string | null;
+  error_message_redacted: string | null;
+  latency_ms: number;
+  trace_id: string | null;
+  context_refs_json: Record<string, unknown>;
+  created_at: Date;
+};
+
 export type MissionRow = {
   id: string;
   user_id: string;

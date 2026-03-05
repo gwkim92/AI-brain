@@ -5,10 +5,16 @@ import { Settings2, Shield, RadioTower, KeyRound, RefreshCw, Clock3, Database, R
 
 import { ApiRequestError } from "@/lib/api/client";
 import {
+  completeUserProviderOauth,
+  deleteUserProviderCredential,
   deleteAdminProviderCredential,
   getSettingsOverview,
   listAdminProviderCredentials,
+  listUserProviderCredentials,
+  startUserProviderOauth,
+  testUserProviderCredential,
   testAdminProviderConnection,
+  upsertUserProviderCredential,
   upsertAdminProviderCredential,
   getModelRegistry,
   getTaskModelPolicies,
@@ -19,6 +25,10 @@ import {
 import type {
   ProviderConnectionTestResult,
   ProviderCredentialRecord,
+  ProviderCredentialPriority,
+  ProviderCredentialSelectionMode,
+  UserProviderConnectionTestResult,
+  UserProviderCredentialRecord,
   ProviderName,
   SettingsOverviewData,
 } from "@/lib/api/types";
@@ -51,6 +61,37 @@ function toErrorMessage(err: unknown, fallback: string): string {
   return fallback;
 }
 
+function formatCredentialModeLabel(mode: UserProviderCredentialRecord["selected_credential_mode"]): string {
+  if (mode === "oauth_official") return "OAuth Official";
+  if (mode === "api_key") return "API Key";
+  return "Not Selected";
+}
+
+function formatSelectedUserCredentialModeLabel(mode: UserProviderCredentialRecord["selected_user_credential_mode"]): string {
+  if (mode === "auto") return "Auto";
+  if (mode === "oauth_official") return "OAuth Official";
+  if (mode === "api_key") return "API Key";
+  return "Auto";
+}
+
+function formatCredentialPriorityLabel(priority: ProviderCredentialPriority): string {
+  return priority === "auth_first" ? "OAuth first" : "API key first";
+}
+
+function formatCredentialSourceLabel(source: UserProviderCredentialRecord["source"]): string {
+  if (source === "user") return "Personal";
+  if (source === "workspace") return "Workspace";
+  if (source === "env") return "Env";
+  return "None";
+}
+
+function credentialSourceClass(source: UserProviderCredentialRecord["source"]): string {
+  if (source === "user") return "text-cyan-200 border-cyan-400/40 bg-cyan-500/10";
+  if (source === "workspace") return "text-fuchsia-200 border-fuchsia-400/40 bg-fuchsia-500/10";
+  if (source === "env") return "text-amber-200 border-amber-400/40 bg-amber-500/10";
+  return "text-white/45 border-white/20 bg-white/5";
+}
+
 export function SettingsModule() {
   const role = useCurrentRole();
   const isAdmin = hasMinRole(role, "admin");
@@ -67,6 +108,24 @@ export function SettingsModule() {
   const [activeDeleteProvider, setActiveDeleteProvider] = useState<ProviderName | null>(null);
   const [activeTestProvider, setActiveTestProvider] = useState<ProviderName | null>(null);
   const [connectionTests, setConnectionTests] = useState<Partial<Record<ProviderName, ProviderConnectionTestResult>>>({});
+  const [userProviderCredentials, setUserProviderCredentials] = useState<UserProviderCredentialRecord[]>([]);
+  const [userCredentialLoading, setUserCredentialLoading] = useState(false);
+  const [userCredentialError, setUserCredentialError] = useState<string | null>(null);
+  const [userCredentialNotice, setUserCredentialNotice] = useState<string | null>(null);
+  const [userCredentialDrafts, setUserCredentialDrafts] = useState<Partial<Record<ProviderName, string>>>({});
+  const [userCredentialModeDrafts, setUserCredentialModeDrafts] = useState<
+    Partial<Record<ProviderName, ProviderCredentialSelectionMode>>
+  >({});
+  const [userCredentialPriorityDrafts, setUserCredentialPriorityDrafts] = useState<
+    Partial<Record<ProviderName, ProviderCredentialPriority>>
+  >({});
+  const [activeUserSaveProvider, setActiveUserSaveProvider] = useState<ProviderName | null>(null);
+  const [activeUserDeleteProvider, setActiveUserDeleteProvider] = useState<ProviderName | null>(null);
+  const [activeUserTestProvider, setActiveUserTestProvider] = useState<ProviderName | null>(null);
+  const [activeUserModeProvider, setActiveUserModeProvider] = useState<ProviderName | null>(null);
+  const [activeUserPriorityProvider, setActiveUserPriorityProvider] = useState<ProviderName | null>(null);
+  const [activeOauthProvider, setActiveOauthProvider] = useState<Extract<ProviderName, "openai" | "gemini"> | null>(null);
+  const [userConnectionTests, setUserConnectionTests] = useState<Partial<Record<ProviderName, UserProviderConnectionTestResult>>>({});
   const [hudAutoFocusDefault, setHudAutoFocusDefault] = useState(true);
   const [hudHoldSecondsDraft, setHudHoldSecondsDraft] = useState("90");
   const [hudRuntimeNotice, setHudRuntimeNotice] = useState<string | null>(null);
@@ -90,6 +149,18 @@ export function SettingsModule() {
     } catch (err) {
       setError(toErrorMessage(err, "failed to load settings"));
       setSettingsOverview(null);
+    }
+
+    setUserCredentialLoading(true);
+    setUserCredentialError(null);
+    try {
+      const data = await listUserProviderCredentials();
+      setUserProviderCredentials(data.providers);
+    } catch (err) {
+      setUserProviderCredentials([]);
+      setUserCredentialError(toErrorMessage(err, "failed to load your provider credentials"));
+    } finally {
+      setUserCredentialLoading(false);
     }
 
     if (isAdmin) {
@@ -194,6 +265,26 @@ export function SettingsModule() {
     );
   }, [providerCredentials]);
 
+  const userProviderRows = useMemo(() => {
+    const map = new Map(userProviderCredentials.map((item) => [item.provider, item]));
+    return PROVIDER_ORDER.map(
+      (provider): UserProviderCredentialRecord =>
+        map.get(provider) ?? {
+          provider,
+          source: "none",
+          selected_credential_mode: null,
+          selected_user_credential_mode: "auto",
+          credential_priority: "api_key_first",
+          auth_access_token_expires_at: null,
+          has_user_credential: false,
+          has_user_api_key: false,
+          has_user_oauth_official: false,
+          has_user_oauth_token: false,
+          user_updated_at: null,
+        }
+    );
+  }, [userProviderCredentials]);
+
   const cards = useMemo(() => {
     const rows = (settingsOverview?.providers ?? []).map((provider) => ({
       name: `AI ${provider.provider.toUpperCase()}`,
@@ -204,7 +295,7 @@ export function SettingsModule() {
       latencyMs: provider.attempts > 0 ? Math.round(provider.avg_latency_ms) : 0,
       lastSync: provider.last_attempt_at ? new Date(provider.last_attempt_at).toLocaleTimeString() : "no attempts",
       description: provider.enabled
-        ? `model=${provider.model ?? "default"} · success=${provider.success_rate_pct}% (${provider.successes}/${provider.attempts})`
+        ? `model=${provider.model ?? "default"} · credential=${provider.selected_credential_mode ?? "none"}(${provider.credential_source ?? "none"}) · success=${provider.success_rate_pct}% (${provider.successes}/${provider.attempts})`
         : `Disabled${provider.reason ? ` (${provider.reason})` : ""}`,
     }));
 
@@ -340,6 +431,223 @@ export function SettingsModule() {
     }
   };
 
+  const onSaveUserProviderKey = async (provider: ProviderName) => {
+    const apiKey = userCredentialDrafts[provider]?.trim() ?? "";
+    if (apiKey.length < 8) {
+      setUserCredentialError("api key must be at least 8 chars");
+      return;
+    }
+
+    setUserCredentialError(null);
+    setUserCredentialNotice(null);
+    setActiveUserSaveProvider(provider);
+    try {
+      await upsertUserProviderCredential(provider, {
+        api_key: apiKey,
+      });
+      setUserCredentialDrafts((prev) => ({
+        ...prev,
+        [provider]: "",
+      }));
+      setUserCredentialNotice(`${provider.toUpperCase()} personal key saved`);
+      await refresh();
+    } catch (err) {
+      setUserCredentialError(toErrorMessage(err, `failed to save ${provider} personal key`));
+    } finally {
+      setActiveUserSaveProvider(null);
+    }
+  };
+
+  const onSaveUserCredentialMode = async (provider: ProviderName) => {
+    const nextMode = userCredentialModeDrafts[provider];
+    if (!nextMode) {
+      return;
+    }
+
+    setUserCredentialError(null);
+    setUserCredentialNotice(null);
+    setActiveUserModeProvider(provider);
+    try {
+      await upsertUserProviderCredential(provider, {
+        selected_credential_mode: nextMode,
+      });
+      setUserCredentialModeDrafts((prev) => ({
+        ...prev,
+        [provider]: nextMode,
+      }));
+      setUserCredentialNotice(
+        `${provider.toUpperCase()} mode updated: ${formatSelectedUserCredentialModeLabel(nextMode)}`
+      );
+      await refresh();
+    } catch (err) {
+      setUserCredentialError(toErrorMessage(err, `failed to update ${provider} credential mode`));
+    } finally {
+      setActiveUserModeProvider(null);
+    }
+  };
+
+  const onSaveUserCredentialPriority = async (provider: ProviderName) => {
+    const nextPriority = userCredentialPriorityDrafts[provider];
+    if (!nextPriority) {
+      return;
+    }
+
+    setUserCredentialError(null);
+    setUserCredentialNotice(null);
+    setActiveUserPriorityProvider(provider);
+    try {
+      await upsertUserProviderCredential(provider, {
+        credential_priority: nextPriority,
+      });
+      setUserCredentialPriorityDrafts((prev) => ({
+        ...prev,
+        [provider]: nextPriority,
+      }));
+      setUserCredentialNotice(
+        `${provider.toUpperCase()} priority updated: ${formatCredentialPriorityLabel(nextPriority)}`
+      );
+      await refresh();
+    } catch (err) {
+      setUserCredentialError(toErrorMessage(err, `failed to update ${provider} credential priority`));
+    } finally {
+      setActiveUserPriorityProvider(null);
+    }
+  };
+
+  const onDeleteUserProviderCredential = async (provider: ProviderName) => {
+    setUserCredentialError(null);
+    setUserCredentialNotice(null);
+    setActiveUserDeleteProvider(provider);
+    try {
+      await deleteUserProviderCredential(provider);
+      setUserConnectionTests((prev) => ({
+        ...prev,
+        [provider]: undefined,
+      }));
+      setUserCredentialPriorityDrafts((prev) => {
+        const next = { ...prev };
+        delete next[provider];
+        return next;
+      });
+      setUserCredentialModeDrafts((prev) => {
+        const next = { ...prev };
+        delete next[provider];
+        return next;
+      });
+      setUserCredentialNotice(`${provider.toUpperCase()} personal credential removed`);
+      await refresh();
+    } catch (err) {
+      setUserCredentialError(toErrorMessage(err, `failed to remove ${provider} personal credential`));
+    } finally {
+      setActiveUserDeleteProvider(null);
+    }
+  };
+
+  const onTestUserProviderConnection = async (provider: ProviderName) => {
+    setUserCredentialError(null);
+    setUserCredentialNotice(null);
+    setActiveUserTestProvider(provider);
+    try {
+      const result = await testUserProviderCredential(provider);
+      setUserConnectionTests((prev) => ({
+        ...prev,
+        [provider]: result,
+      }));
+      if (result.ok) {
+        setUserCredentialNotice(`${provider.toUpperCase()} personal credential test passed`);
+      } else {
+        setUserCredentialNotice(`${provider.toUpperCase()} personal credential test failed${result.reason ? `: ${result.reason}` : ""}`);
+      }
+      await refresh();
+    } catch (err) {
+      setUserCredentialError(toErrorMessage(err, `failed to test ${provider} personal credential`));
+    } finally {
+      setActiveUserTestProvider(null);
+    }
+  };
+
+  const onConnectUserProviderOauth = async (provider: Extract<ProviderName, "openai" | "gemini">) => {
+    setUserCredentialError(null);
+    setUserCredentialNotice(null);
+    setActiveOauthProvider(provider);
+
+    try {
+      const started = await startUserProviderOauth(provider);
+      const popup = window.open(
+        started.auth_url,
+        `jarvis-oauth-${provider}`,
+        "popup=yes,width=640,height=760"
+      );
+      if (!popup) {
+        throw new Error("oauth popup was blocked by the browser");
+      }
+      const allowedCallbackOrigins = new Set<string>([
+        window.location.origin,
+        ...(Array.isArray(started.callback_origins) ? started.callback_origins : []),
+      ]);
+
+      const callbackPayload = await new Promise<{ code: string; state: string }>((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          cleanup();
+          reject(new Error("oauth callback timed out"));
+        }, 180000);
+        const closeWatcher = window.setInterval(() => {
+          if (popup.closed) {
+            cleanup();
+            reject(new Error("oauth popup closed before completion"));
+          }
+        }, 400);
+
+        const cleanup = () => {
+          window.clearTimeout(timeout);
+          window.clearInterval(closeWatcher);
+          window.removeEventListener("message", onMessage);
+        };
+
+        const onMessage = (event: MessageEvent) => {
+          if (!allowedCallbackOrigins.has(event.origin)) {
+            return;
+          }
+          const payload = event.data as {
+            type?: string;
+            code?: string | null;
+            state?: string | null;
+            error?: string | null;
+          };
+          if (payload?.type !== "jarvis_oauth_callback") {
+            return;
+          }
+          if (payload.error) {
+            cleanup();
+            reject(new Error(payload.error));
+            return;
+          }
+          if (typeof payload.code !== "string" || typeof payload.state !== "string") {
+            cleanup();
+            reject(new Error("oauth callback is missing code/state"));
+            return;
+          }
+
+          cleanup();
+          resolve({
+            code: payload.code,
+            state: payload.state,
+          });
+        };
+
+        window.addEventListener("message", onMessage);
+      });
+
+      await completeUserProviderOauth(provider, callbackPayload);
+      setUserCredentialNotice(`${provider.toUpperCase()} OAuth connected`);
+      await refresh();
+    } catch (err) {
+      setUserCredentialError(toErrorMessage(err, `failed to connect ${provider} oauth`));
+    } finally {
+      setActiveOauthProvider(null);
+    }
+  };
+
   const onToggleHudAutoFocusDefault = () => {
     const next = !hudAutoFocusDefault;
     writeMissionAutoFocusEnabledPreference(next);
@@ -410,6 +718,10 @@ export function SettingsModule() {
         <h2 className="text-sm font-mono font-bold tracking-widest text-white flex items-center gap-2">
           <Settings2 size={14} /> SYSTEM SETTINGS
         </h2>
+        <p className="mt-1 text-xs text-white/60">
+          Provider connection and key management live here. Model routing/recommendation controls are in the sidebar
+          `Model Control` widget.
+        </p>
       </header>
 
       <AsyncState
@@ -439,6 +751,175 @@ export function SettingsModule() {
           {!loading && !error && cards.length === 0 && (
             <div className="text-sm font-mono text-white/40 border border-white/10 rounded p-4">No connector data.</div>
           )}
+        </div>
+      </section>
+
+      <section className="mb-4 rounded-xl border border-cyan-400/20 bg-gradient-to-br from-cyan-950/20 via-black/40 to-black/30 p-4">
+        <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-xs font-semibold tracking-wide text-cyan-100 flex items-center gap-2">
+              <KeyRound size={14} /> My Provider Credentials
+            </h3>
+            <p className="mt-1 text-xs text-white/65">
+              Explicitly select credential mode per provider (auto/api key/oauth). Priority is used only when mode is auto.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className="inline-flex items-center gap-1 h-8 px-3 rounded border border-white/20 text-xs text-white/80 hover:text-white hover:border-white/40"
+          >
+            <RefreshCw size={12} /> Refresh
+          </button>
+        </div>
+        <div className="space-y-3">
+          {userProviderRows.map((row) => {
+            const modeDraft = userCredentialModeDrafts[row.provider] ?? row.selected_user_credential_mode;
+            const modeDirty = modeDraft !== row.selected_user_credential_mode;
+            const priorityDraft = userCredentialPriorityDrafts[row.provider] ?? row.credential_priority;
+            const priorityDirty = priorityDraft !== row.credential_priority;
+            const effectiveMode = formatCredentialModeLabel(row.selected_credential_mode);
+            const canUseOauth = row.provider === "openai" || row.provider === "gemini";
+            return (
+              <div key={`user-${row.provider}`} className="rounded-lg border border-white/12 bg-black/35 p-3">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-semibold tracking-wide text-white">{row.provider.toUpperCase()}</p>
+                    <span className={`rounded-full border px-2 py-0.5 text-[11px] ${credentialSourceClass(row.source)}`}>
+                      {formatCredentialSourceLabel(row.source)}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-0.5 text-[11px] text-cyan-100">
+                      Active: {effectiveMode}
+                    </span>
+                    <span className="rounded-full border border-white/20 bg-white/5 px-2 py-0.5 text-[11px] text-white/70">
+                      Mode: {formatSelectedUserCredentialModeLabel(row.selected_user_credential_mode)}
+                    </span>
+                    <span className="rounded-full border border-white/20 bg-white/5 px-2 py-0.5 text-[11px] text-white/70">
+                      Priority: {formatCredentialPriorityLabel(row.credential_priority)}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr)_auto_auto]">
+                  <input
+                    type="password"
+                    placeholder={`${row.provider.toUpperCase()} personal API key`}
+                    value={userCredentialDrafts[row.provider] ?? ""}
+                    onChange={(event) =>
+                      setUserCredentialDrafts((prev) => ({
+                        ...prev,
+                        [row.provider]: event.target.value,
+                      }))
+                    }
+                    className="h-9 rounded border border-white/15 bg-black/50 px-3 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void onSaveUserProviderKey(row.provider)}
+                    disabled={(userCredentialDrafts[row.provider]?.trim().length ?? 0) < 8 || activeUserSaveProvider === row.provider}
+                    className="h-9 px-3 rounded border border-cyan-400/40 bg-cyan-500/15 text-cyan-200 text-xs font-semibold disabled:opacity-40"
+                  >
+                    {activeUserSaveProvider === row.provider ? "Saving..." : "Save API Key"}
+                  </button>
+                  {(row.provider === "openai" || row.provider === "gemini") && (
+                    <button
+                      type="button"
+                      onClick={() => void onConnectUserProviderOauth(row.provider as Extract<ProviderName, "openai" | "gemini">)}
+                      disabled={activeOauthProvider === (row.provider as Extract<ProviderName, "openai" | "gemini">)}
+                      className="h-9 px-3 rounded border border-fuchsia-400/35 bg-fuchsia-500/10 text-fuchsia-200 text-xs font-semibold disabled:opacity-40"
+                    >
+                      {activeOauthProvider === row.provider ? "Connecting..." : "Connect OAuth"}
+                    </button>
+                  )}
+                </div>
+
+                <div className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-[220px_auto_220px_auto_auto_auto]">
+                  <select
+                    value={modeDraft}
+                    onChange={(event) =>
+                      setUserCredentialModeDrafts((prev) => ({
+                        ...prev,
+                        [row.provider]: event.target.value as ProviderCredentialSelectionMode,
+                      }))
+                    }
+                    className="h-9 rounded border border-white/15 bg-black/50 px-2 text-sm text-white/85"
+                  >
+                    <option value="auto">Auto</option>
+                    <option value="api_key">API Key</option>
+                    {canUseOauth && <option value="oauth_official">OAuth Official</option>}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => void onSaveUserCredentialMode(row.provider)}
+                    disabled={!modeDirty || activeUserModeProvider === row.provider}
+                    className="h-9 px-3 rounded border border-white/25 bg-white/10 text-xs font-semibold text-white/85 disabled:opacity-40"
+                  >
+                    {activeUserModeProvider === row.provider ? "Applying..." : "Apply Mode"}
+                  </button>
+                  <select
+                    value={priorityDraft}
+                    onChange={(event) =>
+                      setUserCredentialPriorityDrafts((prev) => ({
+                        ...prev,
+                        [row.provider]: event.target.value as ProviderCredentialPriority,
+                      }))
+                    }
+                    className="h-9 rounded border border-white/15 bg-black/50 px-2 text-sm text-white/85"
+                  >
+                    <option value="auth_first">OAuth First</option>
+                    <option value="api_key_first">API Key First</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => void onSaveUserCredentialPriority(row.provider)}
+                    disabled={!priorityDirty || activeUserPriorityProvider === row.provider}
+                    className="h-9 px-3 rounded border border-white/25 bg-white/10 text-xs font-semibold text-white/85 disabled:opacity-40"
+                  >
+                    {activeUserPriorityProvider === row.provider ? "Applying..." : "Apply Priority"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void onTestUserProviderConnection(row.provider)}
+                    disabled={activeUserTestProvider === row.provider}
+                    className="h-9 px-3 rounded border border-emerald-400/35 bg-emerald-500/10 text-emerald-200 text-xs font-semibold disabled:opacity-40"
+                  >
+                    {activeUserTestProvider === row.provider ? "Testing..." : "Test"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void onDeleteUserProviderCredential(row.provider)}
+                    disabled={!row.has_user_credential || activeUserDeleteProvider === row.provider}
+                    className="h-9 px-3 rounded border border-white/25 bg-white/10 text-xs font-semibold text-white/80 disabled:opacity-40"
+                  >
+                    {activeUserDeleteProvider === row.provider ? "Removing..." : "Remove"}
+                  </button>
+                </div>
+
+                <div className="mt-2 text-xs text-white/60 space-y-1">
+                  <p>
+                    credential={row.has_user_credential ? "yes" : "no"} · api_key={row.has_user_api_key ? "yes" : "no"} · oauth={row.has_user_oauth_token ? "yes" : "no"}
+                    {row.user_updated_at ? ` · updated ${new Date(row.user_updated_at).toLocaleString()}` : ""}
+                  </p>
+                  {row.auth_access_token_expires_at && (
+                    <p>oauth expires at {new Date(row.auth_access_token_expires_at).toLocaleString()}</p>
+                  )}
+                  {userConnectionTests[row.provider] && (
+                    <p className={userConnectionTests[row.provider]?.ok ? "text-emerald-300" : "text-amber-300"}>
+                      test {userConnectionTests[row.provider]?.ok ? "ok" : "failed"} · {userConnectionTests[row.provider]?.latency_ms ?? 0}ms
+                      {userConnectionTests[row.provider]?.reason ? ` · ${userConnectionTests[row.provider]?.reason}` : ""}
+                    </p>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          {(userCredentialLoading || activeUserSaveProvider || activeUserDeleteProvider || activeUserTestProvider || activeOauthProvider || activeUserModeProvider || activeUserPriorityProvider) && (
+            <p className="text-xs text-white/60">Syncing personal provider credentials...</p>
+          )}
+          {userCredentialError && <p className="text-xs text-rose-300">{userCredentialError}</p>}
+          {userCredentialNotice && <p className="text-xs text-emerald-300">{userCredentialNotice}</p>}
         </div>
       </section>
 

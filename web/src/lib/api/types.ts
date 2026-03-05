@@ -22,7 +22,20 @@ export type ApiSuccessEnvelope<T> = {
 
 export type ProviderName = ApiSchemas["ProviderAvailability"]["provider"];
 export type ProviderAvailability = ApiSchemas["ProviderAvailability"];
-export type ProviderAttempt = ApiSchemas["ProviderAttempt"];
+export type RuntimeSelectedCredential = {
+  source: UserProviderCredentialSource;
+  selected_credential_mode: ProviderCredentialMode | null;
+  credential_priority: ProviderCredentialPriority;
+  auth_access_token_expires_at: string | null;
+};
+export type ProviderAttempt = ApiSchemas["ProviderAttempt"] & {
+  credential?: {
+    source: UserProviderCredentialSource;
+    selectedCredentialMode: ProviderCredentialMode | null;
+    credentialPriority: ProviderCredentialPriority;
+    authAccessTokenExpiresAt: string | null;
+  };
+};
 export type ProviderModelCatalogEntry = {
   provider: ProviderName;
   configured_model: string;
@@ -32,11 +45,29 @@ export type ProviderModelCatalogEntry = {
   error?: string;
 };
 export type ProviderCredentialSource = "stored" | "env" | "none";
+export type UserProviderCredentialSource = "user" | "workspace" | "env" | "none";
+export type ProviderCredentialMode = "api_key" | "oauth_official";
+export type ProviderCredentialSelectionMode = "auto" | ProviderCredentialMode;
+export type ProviderCredentialPriority = "api_key_first" | "auth_first";
 export type ProviderCredentialRecord = {
   provider: ProviderName;
   has_key: boolean;
   source: ProviderCredentialSource;
   updated_at: string | null;
+};
+export type UserProviderCredentialRecord = {
+  provider: ProviderName;
+  source: UserProviderCredentialSource;
+  selected_credential_mode: ProviderCredentialMode | null;
+  selected_user_credential_mode: ProviderCredentialSelectionMode;
+  credential_priority: ProviderCredentialPriority;
+  auth_access_token_expires_at: string | null;
+  has_user_credential: boolean;
+  has_user_api_key: boolean;
+  has_user_oauth_official: boolean;
+  has_user_oauth_token: boolean;
+  user_updated_at: string | null;
+  deleted?: boolean;
 };
 export type ProviderCredentialMutationResult = {
   provider: ProviderName;
@@ -44,6 +75,90 @@ export type ProviderCredentialMutationResult = {
   source: ProviderCredentialSource;
   updated_at?: string | null;
   deleted?: boolean;
+};
+export type UserProviderConnectionTestResult = {
+  provider: ProviderName;
+  ok: boolean;
+  source: UserProviderCredentialSource;
+  selected_credential_mode: ProviderCredentialMode | null;
+  credential_priority: ProviderCredentialPriority;
+  auth_access_token_expires_at: string | null;
+  latency_ms: number;
+  model?: string;
+  reason?: string;
+};
+export type ProviderOauthStartResult = {
+  provider: Extract<ProviderName, "openai" | "gemini">;
+  auth_url: string;
+  state: string;
+  expires_at: string;
+  callback_origins?: string[];
+};
+export type ModelControlFeatureKey =
+  | "global_default"
+  | "assistant_chat"
+  | "assistant_context_run"
+  | "council_run"
+  | "execution_code"
+  | "execution_compute"
+  | "mission_plan_generation"
+  | "mission_execute_step";
+export type UserModelSelectionPreference = {
+  userId: string;
+  featureKey: ModelControlFeatureKey;
+  provider: ProviderName | "auto";
+  modelId: string | null;
+  strictProvider: boolean;
+  selectionMode: "auto" | "manual";
+  updatedAt: string;
+  updatedBy: string | null;
+};
+export type ModelRecommendationRun = {
+  id: string;
+  userId: string;
+  featureKey: ModelControlFeatureKey;
+  promptHash: string;
+  promptExcerptRedacted: string;
+  recommendedProvider: ProviderName;
+  recommendedModelId: string;
+  rationaleText: string;
+  evidenceJson: Record<string, unknown>;
+  recommenderProvider: "openai";
+  appliedAt: string | null;
+  createdAt: string;
+};
+export type AiInvocationTraceRecord = {
+  id: string;
+  userId: string;
+  featureKey: ModelControlFeatureKey | "diagnostic";
+  taskType: string;
+  requestProvider: ProviderName | "auto";
+  requestModel: string | null;
+  resolvedProvider: ProviderName | null;
+  resolvedModel: string | null;
+  credentialMode: ProviderCredentialMode | null;
+  credentialSource: UserProviderCredentialSource;
+  attemptsJson: Array<Record<string, unknown>>;
+  usedFallback: boolean;
+  success: boolean;
+  errorCode: string | null;
+  errorMessageRedacted: string | null;
+  latencyMs: number;
+  traceId: string | null;
+  contextRefsJson: Record<string, unknown>;
+  createdAt: string;
+};
+export type AiInvocationMetrics = {
+  windowStart: string;
+  windowEnd: string;
+  total: number;
+  successCount: number;
+  failureCount: number;
+  successRate: number;
+  p50LatencyMs: number;
+  p95LatencyMs: number;
+  providerDistribution: Array<{ provider: ProviderName; count: number }>;
+  credentialSourceDistribution: Array<{ source: UserProviderCredentialSource; count: number }>;
 };
 export type ProviderConnectionTestResult = {
   provider: ProviderName;
@@ -93,6 +208,8 @@ export type GroundingStatus =
   | "served_with_limits";
 export type GroundingQualityCode = string;
 export type AiRespondData = ApiSchemas["AiRespondResult"] & {
+  attempts: ProviderAttempt[];
+  credential?: RuntimeSelectedCredential;
   selection?: {
     strategy: "auto_orchestrator" | "requested_provider";
     taskType: TaskMode;
@@ -172,6 +289,8 @@ export type CouncilConsensusStatus = Exclude<ApiSchemas["CouncilRun"]["consensus
 export type CouncilParticipantRecord = ApiSchemas["CouncilParticipant"];
 
 export type CouncilRunRecord = ApiSchemas["CouncilRun"] & {
+  selected_credential?: RuntimeSelectedCredential | null;
+  attempts: ProviderAttempt[];
   idempotent_replay?: boolean;
 };
 
@@ -186,6 +305,8 @@ export type CouncilRunRequest = OptionalByDefault<
 export type ExecutionRunMode = ApiSchemas["ExecutionRun"]["mode"];
 
 export type ExecutionRunRecord = ApiSchemas["ExecutionRun"] & {
+  selected_credential?: RuntimeSelectedCredential | null;
+  attempts: ProviderAttempt[];
   idempotent_replay?: boolean;
 };
 
@@ -328,6 +449,9 @@ export type SettingsOverviewData = {
     enabled: boolean;
     model: string | null;
     reason?: string;
+    credential_source?: UserProviderCredentialSource;
+    selected_credential_mode?: ProviderCredentialMode | null;
+    credential_priority?: ProviderCredentialPriority;
     attempts: number;
     successes: number;
     failures: number;

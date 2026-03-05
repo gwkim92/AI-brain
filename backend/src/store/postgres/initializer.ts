@@ -44,6 +44,161 @@ export async function initializePostgresStore({
     )
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_provider_credentials (
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      encrypted_payload TEXT NOT NULL,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (user_id, provider),
+      CHECK (provider IN ('openai', 'gemini', 'anthropic', 'local'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_user_provider_credentials_provider_active
+    ON user_provider_credentials(provider, is_active, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_user_provider_credentials_user_active
+    ON user_provider_credentials(user_id, is_active, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS provider_oauth_states (
+      state TEXT PRIMARY KEY,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      encrypted_context TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      consumed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (provider IN ('openai', 'gemini', 'anthropic', 'local'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_provider_oauth_states_expires_at
+    ON provider_oauth_states(expires_at ASC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_provider_oauth_states_user_provider
+    ON provider_oauth_states(user_id, provider, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_model_selection_preferences (
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      feature_key TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      model_id TEXT,
+      strict_provider BOOLEAN NOT NULL DEFAULT false,
+      selection_mode TEXT NOT NULL DEFAULT 'manual',
+      updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (user_id, feature_key),
+      CHECK (feature_key IN (
+        'global_default',
+        'assistant_chat',
+        'assistant_context_run',
+        'council_run',
+        'execution_code',
+        'execution_compute',
+        'mission_plan_generation',
+        'mission_execute_step'
+      )),
+      CHECK (provider IN ('openai', 'gemini', 'anthropic', 'local', 'auto')),
+      CHECK (selection_mode IN ('auto', 'manual'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_user_model_selection_preferences_user_updated_at
+    ON user_model_selection_preferences(user_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS model_recommendation_runs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      feature_key TEXT NOT NULL,
+      prompt_hash TEXT NOT NULL,
+      prompt_excerpt_redacted TEXT NOT NULL,
+      recommended_provider TEXT NOT NULL,
+      recommended_model_id TEXT NOT NULL,
+      rationale_text TEXT NOT NULL,
+      evidence_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      recommender_provider TEXT NOT NULL DEFAULT 'openai',
+      applied_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (feature_key IN (
+        'global_default',
+        'assistant_chat',
+        'assistant_context_run',
+        'council_run',
+        'execution_code',
+        'execution_compute',
+        'mission_plan_generation',
+        'mission_execute_step'
+      )),
+      CHECK (recommended_provider IN ('openai', 'gemini', 'anthropic', 'local')),
+      CHECK (recommender_provider IN ('openai'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_model_recommendation_runs_user_created_at
+    ON model_recommendation_runs(user_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_model_recommendation_runs_created_at
+    ON model_recommendation_runs(created_at ASC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ai_invocation_traces (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      feature_key TEXT NOT NULL,
+      task_type TEXT NOT NULL,
+      request_provider TEXT NOT NULL,
+      request_model TEXT,
+      resolved_provider TEXT,
+      resolved_model TEXT,
+      credential_mode TEXT,
+      credential_source TEXT NOT NULL DEFAULT 'none',
+      attempts_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      used_fallback BOOLEAN NOT NULL DEFAULT false,
+      success BOOLEAN NOT NULL DEFAULT false,
+      error_code TEXT,
+      error_message_redacted TEXT,
+      latency_ms INTEGER NOT NULL DEFAULT 0,
+      trace_id TEXT,
+      context_refs_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (feature_key IN (
+        'diagnostic',
+        'global_default',
+        'assistant_chat',
+        'assistant_context_run',
+        'council_run',
+        'execution_code',
+        'execution_compute',
+        'mission_plan_generation',
+        'mission_execute_step'
+      )),
+      CHECK (request_provider IN ('openai', 'gemini', 'anthropic', 'local', 'auto')),
+      CHECK (resolved_provider IS NULL OR resolved_provider IN ('openai', 'gemini', 'anthropic', 'local')),
+      CHECK (credential_mode IS NULL OR credential_mode IN ('api_key', 'oauth_official')),
+      CHECK (credential_source IN ('user', 'workspace', 'env', 'none'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ai_invocation_traces_user_created_at
+    ON ai_invocation_traces(user_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ai_invocation_traces_created_at
+    ON ai_invocation_traces(created_at ASC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ai_invocation_traces_user_feature_created_at
+    ON ai_invocation_traces(user_id, feature_key, created_at DESC)
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS provider_stats (
       provider TEXT NOT NULL,
       task_type TEXT NOT NULL,

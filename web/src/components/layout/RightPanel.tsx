@@ -23,6 +23,7 @@ import {
     JARVIS_RUNTIME_EVENT_STREAM,
     type JarvisRuntimeEventDetail,
 } from "@/lib/runtime-events";
+import { dispatchSessionRerun } from "@/lib/hud/session-rerun";
 const MAX_APPROVALS = 3;
 const MAX_RUNNING_TASKS = 4;
 const DASHBOARD_OVERVIEW_QUERY = {
@@ -260,6 +261,7 @@ export function RightPanel() {
         let stopped = false;
         let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
         let stream: { close: () => void } | null = null;
+        let reconnectDelayMs = 600;
 
         const clearReconnectTimer = () => {
             if (reconnectTimer !== null) {
@@ -280,16 +282,20 @@ export function RightPanel() {
                 void refreshOverviewSnapshot();
                 stream?.close();
                 stream = openStream();
-            }, 600);
+            }, reconnectDelayMs);
         };
 
         const openStream = () =>
             streamDashboardOverviewEvents(
                 DASHBOARD_EVENTS_QUERY,
                 {
+                    onOpen: () => {
+                        reconnectDelayMs = 600;
+                    },
                     onUpdated: (payload) => {
                         applyOverviewSnapshot(payload?.data);
                         setError(null);
+                        reconnectDelayMs = 600;
                     },
                     onClose: () => {
                         scheduleReconnect();
@@ -300,8 +306,14 @@ export function RightPanel() {
                         }
                         if (err instanceof ApiRequestError) {
                             setError(`${err.code}: ${err.message}`);
+                            if (err.status === 429) {
+                                reconnectDelayMs = Math.min(10_000, reconnectDelayMs * 2);
+                            } else {
+                                reconnectDelayMs = Math.min(4_000, Math.max(800, reconnectDelayMs));
+                            }
                         } else {
                             setError("dashboard stream disconnected");
+                            reconnectDelayMs = Math.min(4_000, Math.max(1000, reconnectDelayMs));
                         }
                         scheduleReconnect();
                     },
@@ -557,6 +569,11 @@ export function RightPanel() {
                                                         ACTIVE
                                                     </span>
                                                 )}
+                                                {session.stale && (
+                                                    <span className="text-[9px] font-mono font-bold tracking-wider text-amber-300">
+                                                        STALE
+                                                    </span>
+                                                )}
                                             </div>
                                             <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[9px] font-mono">
                                                 <span className="rounded border border-white/15 px-1.5 py-0.5 text-white/50">
@@ -568,6 +585,11 @@ export function RightPanel() {
                                                 <span className="rounded border border-white/15 px-1.5 py-0.5 text-white/45">
                                                     restore:{session.restoreMode}
                                                 </span>
+                                                {session.stale && (
+                                                    <span className="rounded border border-amber-400/30 bg-amber-500/10 px-1.5 py-0.5 text-amber-200">
+                                                        stale:{session.staleReason ?? "server_state_lost"}
+                                                    </span>
+                                                )}
                                             </div>
                                         </div>
                                     </div>
@@ -597,6 +619,25 @@ export function RightPanel() {
                                     >
                                         focus only
                                     </button>
+                                    {session.stale && (
+                                        <button
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                dispatchSessionRerun({
+                                                    sessionId: session.id,
+                                                    prompt: session.prompt,
+                                                    taskId: session.taskId,
+                                                    missionId: session.missionId,
+                                                });
+                                            }}
+                                            className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[9px] font-mono text-amber-200 hover:bg-amber-500/20"
+                                            data-testid={`session-rerun-${session.id}`}
+                                        >
+                                            re-run
+                                        </button>
+                                    )}
                                     <button
                                         type="button"
                                         onClick={(e) => {

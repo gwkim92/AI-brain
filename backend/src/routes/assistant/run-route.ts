@@ -4,7 +4,10 @@ import { runContextPipeline } from '../../context/pipeline';
 import { evaluateEvalGate } from '../../evals/gate';
 import { sendError, sendSuccess } from '../../lib/http';
 import { embedAndStore } from '../../memory/embed';
-import { extractProviderAttempts, maskErrorForApi } from '../../providers/router';
+import { withAiInvocationTrace } from '../../observability/ai-trace';
+import { resolveModelSelection } from '../../providers/model-selection';
+import { extractProviderAttempts, maskErrorForApi, toProviderCredentialUsage } from '../../providers/router';
+import type { ProviderName } from '../../providers/types';
 import { buildRetrievalSystemInstruction, retrieveWebEvidence } from '../../retrieval/adapter-router';
 import {
   buildGroundingSystemInstruction,
@@ -60,6 +63,7 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
     notificationService,
     resolveRequestUserId,
     resolveRequestTraceId,
+    resolveRequestProviderCredentials,
     assistantContextRunsInFlight
   } = ctx;
 
@@ -72,6 +76,18 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
     const contextId = (request.params as { contextId: string }).contextId;
     const userId = resolveRequestUserId(request);
     const traceId = resolveRequestTraceId(request);
+    const resolvedCredentials = await resolveRequestProviderCredentials(request);
+    const credentialsByProvider = resolvedCredentials.credentialsByProvider;
+    const modelSelection = await resolveModelSelection({
+      store,
+      userId,
+      featureKey: 'assistant_context_run',
+      override: {
+        provider: parsed.data.provider,
+        strictProvider: parsed.data.strict_provider,
+        model: parsed.data.model
+      }
+    });
     const context = await store.getAssistantContextById({
       userId,
       contextId
@@ -169,10 +185,10 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
       taskType
     });
     const languagePolicy = buildLanguageSystemInstruction(prepared.prompt);
-    const providerAvailability = providerRouter.listAvailability();
+    const providerAvailability = providerRouter.listAvailability(credentialsByProvider);
     const externalProviderEnabled = providerAvailability.some((item) => item.enabled && item.provider !== 'local');
     const localProviderEnabled = providerAvailability.some((item) => item.provider === 'local' && item.enabled);
-    const strictLocalOnly = parsed.data.provider === 'local' && parsed.data.strict_provider;
+    const strictLocalOnly = modelSelection.provider === 'local' && modelSelection.strictProvider;
     const shouldRunGroundedRetrieval = groundingDecision.requiresGrounding;
     const retrievalRewrittenQueries = shouldRunGroundedRetrieval
       ? generateQueryRewriteCandidates({
@@ -355,9 +371,9 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
       eventType: 'assistant.context.run.accepted',
       data: {
         task_type: taskType,
-        provider: parsed.data.provider,
-        strict_provider: parsed.data.strict_provider,
-        model: parsed.data.model ?? null,
+        provider: modelSelection.provider,
+        strict_provider: modelSelection.strictProvider,
+        model: modelSelection.model ?? null,
         force_rerun: parsed.data.force_rerun,
         client_run_nonce: clientRunNonce,
         grounding_policy: groundingDecision.policy,
@@ -371,9 +387,9 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
     });
     await appendStageEvent('accepted', {
       task_type: taskType,
-      provider: parsed.data.provider,
-      strict_provider: parsed.data.strict_provider,
-      model: parsed.data.model ?? null,
+      provider: modelSelection.provider,
+      strict_provider: modelSelection.strictProvider,
+      model: modelSelection.model ?? null,
       force_rerun: parsed.data.force_rerun,
       client_run_nonce: clientRunNonce
     });
@@ -451,9 +467,9 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
         });
         await appendStageEvent('generation_started', {
           task_type: taskType,
-          provider: parsed.data.provider,
-          strict_provider: parsed.data.strict_provider,
-          model: parsed.data.model ?? null,
+          provider: modelSelection.provider,
+          strict_provider: modelSelection.strictProvider,
+          model: modelSelection.model ?? null,
           rewritten_queries: rewrittenQueries
         }, {
           taskId: linkedTaskId
@@ -504,18 +520,49 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
             );
         const routed = useRetrievalOnlyFallback
           ? null
-          : await providerRouter.generate({
-              prompt: generationPrompt,
-              systemPrompt: generationSystemPrompt,
-              provider: parsed.data.provider,
-              strictProvider: parsed.data.strict_provider,
+          : await withAiInvocationTrace({
+              store,
+              env: ctx.env,
+              userId,
+              featureKey: 'assistant_context_run',
               taskType,
-              model: parsed.data.model,
-              temperature: groundingDecision.requiresGrounding ? strictFactualTemperature : parsed.data.temperature,
-              topP: groundingDecision.requiresGrounding ? 0.9 : undefined,
-              stop: groundingDecision.requiresGrounding ? ['<|im_start|>', '<|im_end|>', '<|endoftext|>'] : undefined,
-              maxOutputTokens: groundingDecision.requiresGrounding ? strictFactualMaxTokens : parsed.data.max_output_tokens,
-              excludeProviders: groundingDecision.requiresGrounding && !canUseLocalGroundedFallback ? ['local'] : undefined
+              requestProvider: modelSelection.provider,
+              requestModel: modelSelection.model,
+              traceId,
+              contextRefs: {
+                route: '/api/v1/assistant/contexts/:contextId/run',
+                context_id: prepared.id,
+                model_selection_source: modelSelection.source
+              },
+              run: () =>
+                providerRouter.generate({
+                  prompt: generationPrompt,
+                  systemPrompt: generationSystemPrompt,
+                  provider: modelSelection.provider,
+                  strictProvider: modelSelection.strictProvider,
+                  credentialsByProvider,
+                  traceId,
+                  onSpanEvent: (event) => {
+                    request.log.info(
+                      {
+                        trace_id: event.traceId,
+                        provider: event.provider,
+                        success: event.success,
+                        latency_ms: event.latencyMs,
+                        error: event.error,
+                        context_id: prepared.id
+                      },
+                      event.name
+                    );
+                  },
+                  taskType,
+                  model: modelSelection.model ?? undefined,
+                  temperature: groundingDecision.requiresGrounding ? strictFactualTemperature : parsed.data.temperature,
+                  topP: groundingDecision.requiresGrounding ? 0.9 : undefined,
+                  stop: groundingDecision.requiresGrounding ? ['<|im_start|>', '<|im_end|>', '<|endoftext|>'] : undefined,
+                  maxOutputTokens: groundingDecision.requiresGrounding ? strictFactualMaxTokens : parsed.data.max_output_tokens,
+                  excludeProviders: groundingDecision.requiresGrounding && !canUseLocalGroundedFallback ? ['local'] : undefined
+                })
             });
         const routedOutputText = routed?.result.outputText ?? '';
 
@@ -672,6 +719,8 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
           : [];
         const resolvedProvider = routed?.result.provider ?? 'local';
         const resolvedModel = routed?.result.model ?? 'retrieval-fallback-v1';
+        const resolvedCredential =
+          routed?.result.credential ?? toProviderCredentialUsage(credentialsByProvider[resolvedProvider as ProviderName]);
         const resolvedAttempts =
           routed?.attempts ?? [{ provider: 'local', status: 'skipped' as const, error: 'retrieval_only_fallback' }];
         const resolvedUsedFallback = routed?.usedFallback ?? true;
@@ -722,6 +771,12 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
               task_type: taskType,
               provider: resolvedProvider,
               model: resolvedModel,
+              credential: {
+                source: resolvedCredential.source,
+                selected_credential_mode: resolvedCredential.selectedCredentialMode,
+                credential_priority: resolvedCredential.credentialPriority,
+                auth_access_token_expires_at: resolvedCredential.authAccessTokenExpiresAt
+              },
               used_fallback: resolvedUsedFallback,
               selection_reason: resolvedSelectionReason,
               quality_guard_triggered: qualityGuardTriggered,
@@ -819,6 +874,9 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
               context_id: prepared.id,
               provider: resolvedProvider,
               model: resolvedModel,
+              credential_source: resolvedCredential.source,
+              selected_credential_mode: resolvedCredential.selectedCredentialMode,
+              credential_priority: resolvedCredential.credentialPriority,
               used_fallback: resolvedUsedFallback,
               quality_guard_triggered: qualityGuardTriggered
             }

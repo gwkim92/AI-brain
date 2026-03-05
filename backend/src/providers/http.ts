@@ -1,3 +1,5 @@
+import { buildProviderHttpError } from './retry';
+
 export function stripTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
 }
@@ -17,7 +19,11 @@ export function readTextSafely(value: unknown): string {
 
 export function ensureOk(response: Response, bodyText: string): void {
   if (!response.ok) {
-    const reason = bodyText.length > 0 ? bodyText.slice(0, 400) : response.statusText;
-    throw new Error(`provider http ${response.status}: ${reason}`);
+    throw buildProviderHttpError({
+      status: response.status,
+      statusText: response.statusText,
+      bodyText,
+      retryAfterHeader: response.headers.get('retry-after')
+    });
   }
 }

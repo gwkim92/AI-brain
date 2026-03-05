@@ -1,9 +1,13 @@
 import { runDag, type DagStep } from './dag-runner';
+import type { AppEnv } from '../config/env';
 import type { JarvisStore, MissionRecord, MissionStepRecord, MissionStepStatus } from '../store/types';
 import type { ProviderRouter } from '../providers/router';
-import type { RoutingTaskType } from '../providers/types';
+import type { ProviderCredentialsByProvider, RoutingTaskType } from '../providers/types';
 import { runContextPipeline } from '../context/pipeline';
 import { embedAndStore } from '../memory/embed';
+import { resolveModelSelection } from '../providers/model-selection';
+import { withAiInvocationTrace } from '../observability/ai-trace';
+import type { ModelSelectionOverrideInput } from '../providers/model-selection';
 
 export type MissionExecutionCallbacks = {
   onStepStarted?: (stepId: string) => void | Promise<void>;
@@ -73,8 +77,12 @@ async function executeStep(
   step: MissionStepRecord,
   dependencyResults: Record<string, unknown>,
   store: JarvisStore,
+  env: AppEnv,
   providerRouter: ProviderRouter,
-  userId: string
+  missionId: string,
+  userId: string,
+  modelSelectionOverride?: ModelSelectionOverrideInput,
+  credentialsByProvider?: ProviderCredentialsByProvider
 ): Promise<unknown> {
   const contextSummary = Object.entries(dependencyResults)
     .map(([id, result]) => `[Step ${id}]: ${typeof result === 'string' ? result : JSON.stringify(result)}`)
@@ -86,25 +94,52 @@ async function executeStep(
 
   const pattern = resolveStepPattern(step);
   const taskType = resolveTaskType(step);
+  const modelSelection = await resolveModelSelection({
+    store,
+    userId,
+    featureKey: 'mission_execute_step',
+    override: modelSelectionOverride
+  });
+
+  const runWithTrace = (prompt: string, systemPrompt: string | undefined, resolvedTaskType: RoutingTaskType) =>
+    withAiInvocationTrace({
+      store,
+      env,
+      userId,
+      featureKey: 'mission_execute_step',
+      taskType: resolvedTaskType,
+      requestProvider: modelSelection.provider,
+      requestModel: modelSelection.model,
+      traceId: missionId,
+      contextRefs: {
+        mission_id: missionId,
+        mission_step_id: step.id,
+        mission_step_type: step.type,
+        task_type: resolvedTaskType,
+        model_selection_source: modelSelection.source
+      },
+      run: () =>
+        providerRouter.generate({
+          prompt,
+          systemPrompt,
+          provider: modelSelection.provider,
+          strictProvider: modelSelection.strictProvider,
+          model: modelSelection.model ?? undefined,
+          credentialsByProvider,
+          taskType: resolvedTaskType
+        })
+    });
 
   switch (pattern) {
     case 'llm_generate': {
       const ctx = await runContextPipeline(store, { userId, prompt, taskType });
-      const result = await providerRouter.generate({
-        prompt: ctx.enrichedPrompt,
-        systemPrompt: ctx.systemPrompt || undefined,
-        taskType
-      });
+      const result = await runWithTrace(ctx.enrichedPrompt, ctx.systemPrompt || undefined, taskType);
       return result.result.outputText;
     }
 
     case 'council_debate': {
       const ctx = await runContextPipeline(store, { userId, prompt, taskType: 'council' });
-      const result = await providerRouter.generate({
-        prompt: ctx.enrichedPrompt,
-        systemPrompt: ctx.systemPrompt || undefined,
-        taskType: 'council'
-      });
+      const result = await runWithTrace(ctx.enrichedPrompt, ctx.systemPrompt || undefined, 'council');
       return result.result.outputText;
     }
 
@@ -115,23 +150,19 @@ async function executeStep(
     case 'tool_call': {
       const toolName = step.metadata?.tool_name as string | undefined;
       const ctx = await runContextPipeline(store, { userId, prompt, taskType: 'execute' });
-      const result = await providerRouter.generate({
-        prompt: toolName
+      const result = await runWithTrace(
+        toolName
           ? `Execute tool "${toolName}" with the following context:\n\n${ctx.enrichedPrompt}`
           : ctx.enrichedPrompt,
-        systemPrompt: ctx.systemPrompt || undefined,
-        taskType: 'execute'
-      });
+        ctx.systemPrompt || undefined,
+        'execute'
+      );
       return result.result.outputText;
     }
 
     case 'sub_mission': {
       const ctx = await runContextPipeline(store, { userId, prompt, taskType: 'execute' });
-      const result = await providerRouter.generate({
-        prompt: ctx.enrichedPrompt,
-        systemPrompt: ctx.systemPrompt || undefined,
-        taskType: 'execute'
-      });
+      const result = await runWithTrace(ctx.enrichedPrompt, ctx.systemPrompt || undefined, 'execute');
       return result.result.outputText;
     }
 
@@ -143,9 +174,14 @@ async function executeStep(
 export async function executeMission(
   mission: MissionRecord,
   store: JarvisStore,
+  env: AppEnv,
   providerRouter: ProviderRouter,
   userId: string,
-  callbacks?: MissionExecutionCallbacks
+  callbacks?: MissionExecutionCallbacks,
+  options?: {
+    modelSelectionOverride?: ModelSelectionOverrideInput;
+  },
+  credentialsByProvider?: ProviderCredentialsByProvider
 ): Promise<{ success: boolean; results: Record<string, unknown>; completedOrder: string[] }> {
   const steps = [...mission.steps].sort((a, b) => a.order - b.order);
 
@@ -169,7 +205,17 @@ export async function executeMission(
           return { status: 'approval_required', step_id: step.id };
         }
 
-        const result = await executeStep(step, ctx.dependencyResults, store, providerRouter, userId);
+        const result = await executeStep(
+          step,
+          ctx.dependencyResults,
+          store,
+          env,
+          providerRouter,
+          mission.id,
+          userId,
+          options?.modelSelectionOverride,
+          credentialsByProvider
+        );
         await updateStepStatus(store, mission, userId, step.id, 'done');
         await callbacks?.onStepCompleted?.(step.id, result);
 

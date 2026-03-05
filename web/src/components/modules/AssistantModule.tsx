@@ -52,8 +52,10 @@ import type {
     AssistantContextGroundingClaimRecord,
     AssistantContextGroundingSourceRecord,
     AssistantContextRecord,
+    ProviderAttempt,
     ProviderAvailability,
     ProviderModelCatalogEntry,
+    RuntimeSelectedCredential,
 } from "@/lib/api/types";
 import { subscribeMissionIntake, subscribeMissionIntakeTaskLink, type MissionIntakePayload } from "@/lib/hud/mission-intake";
 import { useHUD } from "@/components/providers/HUDProvider";
@@ -127,6 +129,7 @@ type RunRecord = {
     strictProvider: boolean;
     servedProvider?: string;
     servedModel?: string;
+    servedCredential?: string | null;
     usedFallback?: boolean;
     selectionStrategy?: string;
     selectionReason?: string;
@@ -257,6 +260,34 @@ function hashText(value: string): string {
         hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
     }
     return hash.toString(16);
+}
+
+function mapProviderAttemptStatus(status: "success" | "failed" | "skipped"): ToolCall["status"] {
+    if (status === "success") return "success";
+    if (status === "failed") return "error";
+    return "pending";
+}
+
+function formatSelectedCredentialLabel(credential?: RuntimeSelectedCredential | null): string | null {
+    if (!credential || !credential.selected_credential_mode) {
+        return null;
+    }
+    return `${credential.selected_credential_mode} (${credential.source})`;
+}
+
+function formatAttemptCredentialLabel(
+    credential:
+        | {
+              source: string;
+              selectedCredentialMode: string | null;
+              credentialPriority: string;
+          }
+        | undefined
+): string | null {
+    if (!credential?.selectedCredentialMode) {
+        return null;
+    }
+    return `${credential.selectedCredentialMode} (${credential.source}) · ${credential.credentialPriority}`;
 }
 
 function buildSystemMessage(): ChatMessage {
@@ -1269,29 +1300,36 @@ export function AssistantModule() {
 
     const buildRequestPayload = useCallback((prompt: string) => {
         const model = modelOverride.trim();
-        return {
+        const payload: {
+            prompt: string;
+            task_type: "chat";
+            provider?: ProviderSelection;
+            strict_provider?: boolean;
+            model?: string;
+        } = {
             prompt,
-            task_type: "chat" as const,
-            provider: selectedProvider,
-            strict_provider: strictProvider,
-            model: model.length > 0 ? model : undefined,
+            task_type: "chat",
         };
-    }, [modelOverride, selectedProvider, strictProvider]);
 
-    const mapAttemptStatus = (status: "success" | "failed" | "skipped"): ToolCall["status"] => {
-        if (status === "success") return "success";
-        if (status === "failed") return "error";
-        return "pending";
-    };
+        if (selectedProvider !== "auto") {
+            payload.provider = selectedProvider;
+            payload.strict_provider = strictProvider;
+        }
+        if (model.length > 0) {
+            payload.model = model;
+        }
+        return payload;
+    }, [modelOverride, selectedProvider, strictProvider]);
 
     const toRunTimeline = useCallback((result: AiRespondData, runIndex: number, runCount: number): ToolCall[] => {
         const runPrefix = runLabel(runIndex, runCount);
         const timelineIdPrefix = `${Date.now()}_${runIndex}`;
-        const calls: ToolCall[] = result.attempts.map((attempt, idx) => ({
+        const calls: ToolCall[] = (result.attempts as ProviderAttempt[]).map((attempt, idx) => ({
             id: `${timelineIdPrefix}_${attempt.provider}_${idx}`,
             name: `${runPrefix}:${attempt.provider}`,
-            status: mapAttemptStatus(attempt.status),
+            status: mapProviderAttemptStatus(attempt.status),
             durationMs: attempt.latencyMs,
+            args: formatAttemptCredentialLabel(attempt.credential) ?? undefined,
             resultExcerpt: attempt.error,
         }));
 
@@ -1320,14 +1358,18 @@ export function AssistantModule() {
             const onlyRun = successfulRuns[0];
             return {
                 content: onlyRun.output,
-                status: `${onlyRun.servedProvider}/${onlyRun.servedModel}${onlyRun.usedFallback ? " (fallback)" : ""}`,
+                status: `${onlyRun.servedProvider}/${onlyRun.servedModel}${onlyRun.usedFallback ? " (fallback)" : ""}${
+                    onlyRun.servedCredential ? ` · ${onlyRun.servedCredential}` : ""
+                }`,
             };
         }
 
         const runHeaders = successfulRuns
             .map(
                 (run) =>
-                    `[${run.label}] ${run.servedProvider ?? "unknown"}/${run.servedModel ?? "unknown"}${run.usedFallback ? " (fallback)" : ""}`
+                    `[${run.label}] ${run.servedProvider ?? "unknown"}/${run.servedModel ?? "unknown"}${
+                        run.usedFallback ? " (fallback)" : ""
+                    }${run.servedCredential ? ` · ${run.servedCredential}` : ""}`
             )
             .join("\n");
 
@@ -1545,12 +1587,14 @@ export function AssistantModule() {
                         })),
                       }
                     : undefined;
+                const resolvedCredential = formatSelectedCredentialLabel(result.credential);
                 const completedRun: RunRecord = {
                     ...pendingRuns[0],
                     status: "success",
                     output: result.output,
                     servedProvider: result.provider,
                     servedModel: result.model,
+                    servedCredential: resolvedCredential,
                     usedFallback: result.used_fallback,
                     selectionStrategy: result.selection?.strategy,
                     selectionReason: result.selection?.reason,
@@ -1564,7 +1608,9 @@ export function AssistantModule() {
                     {
                         role: "assistant",
                         content: result.output,
-                        status: `${result.provider}/${result.model}${result.used_fallback ? " (fallback)" : ""}`,
+                        status: `${result.provider}/${result.model}${result.used_fallback ? " (fallback)" : ""}${
+                            resolvedCredential ? ` · ${resolvedCredential}` : ""
+                        }`,
                         route: "manual",
                         promptRef: normalizedPrompt,
                         grounding: normalizedGrounding,
@@ -1603,12 +1649,14 @@ export function AssistantModule() {
                 const item = settled[runIndex];
                 if (item.status === "fulfilled") {
                     const { result } = item.value;
+                    const resolvedCredential = formatSelectedCredentialLabel(result.credential);
                     return {
                         ...pendingRun,
                         status: "success" as const,
                         output: result.output,
                         servedProvider: result.provider,
                         servedModel: result.model,
+                        servedCredential: resolvedCredential,
                         usedFallback: result.used_fallback,
                         selectionStrategy: result.selection?.strategy,
                         selectionReason: result.selection?.reason,
@@ -3113,6 +3161,11 @@ export function AssistantModule() {
                                             <div className="rounded border border-white/10 bg-black/40 p-2">
                                                 <p className="text-white/40 uppercase tracking-widest text-[9px] mb-1">Served Model</p>
                                                 <p>{activeRun.servedProvider ?? "pending"}/{activeRun.servedModel ?? "pending"}</p>
+                                                {activeRun.servedCredential && (
+                                                    <p className="text-cyan-300 mt-1">
+                                                        credential: {activeRun.servedCredential}
+                                                    </p>
+                                                )}
                                                 <p className="text-white/50 mt-1">
                                                     fallback: {activeRun.usedFallback ? "yes" : "no"}
                                                 </p>
@@ -3535,10 +3588,10 @@ function SystemMessage({
                                     </button>
                                 )}
                                 <Link
-                                    href="/settings"
+                                    href="/?widget=model_control&replace=1&focus=model_control"
                                     className="rounded border border-white/20 bg-black/40 px-2.5 py-1 text-[10px] font-mono tracking-widest text-white/70 hover:text-white"
                                 >
-                                    PROVIDERS 설정
+                                    MODEL CONTROL
                                 </Link>
                             </div>
                             {showBlockedRawOutput && (

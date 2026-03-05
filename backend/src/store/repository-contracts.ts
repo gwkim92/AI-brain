@@ -17,7 +17,28 @@ export const AUTH_REPOSITORY_METHOD_KEYS = [
   'revokeAuthSession',
   'listProviderCredentials',
   'upsertProviderCredential',
-  'deleteProviderCredential'
+  'deleteProviderCredential',
+  'listUserProviderCredentials',
+  'getUserProviderCredential',
+  'upsertUserProviderCredential',
+  'deleteUserProviderCredential',
+  'listActiveUserProviderCredentials',
+  'createProviderOauthState',
+  'consumeProviderOauthState',
+  'cleanupExpiredProviderOauthStates',
+  'listUserModelSelectionPreferences',
+  'getUserModelSelectionPreference',
+  'upsertUserModelSelectionPreference',
+  'deleteUserModelSelectionPreference',
+  'createModelRecommendationRun',
+  'listModelRecommendationRuns',
+  'markModelRecommendationApplied',
+  'cleanupExpiredModelRecommendationRuns',
+  'createAiInvocationTrace',
+  'completeAiInvocationTrace',
+  'listAiInvocationTraces',
+  'getAiInvocationMetrics',
+  'cleanupExpiredAiInvocationTraces'
 ] as const satisfies readonly (keyof JarvisStore)[];
 
 export const MISSION_REPOSITORY_METHOD_KEYS = [
@@ -123,6 +144,27 @@ export type AuthRepositoryContract = Pick<
   | 'listProviderCredentials'
   | 'upsertProviderCredential'
   | 'deleteProviderCredential'
+  | 'listUserProviderCredentials'
+  | 'getUserProviderCredential'
+  | 'upsertUserProviderCredential'
+  | 'deleteUserProviderCredential'
+  | 'listActiveUserProviderCredentials'
+  | 'createProviderOauthState'
+  | 'consumeProviderOauthState'
+  | 'cleanupExpiredProviderOauthStates'
+  | 'listUserModelSelectionPreferences'
+  | 'getUserModelSelectionPreference'
+  | 'upsertUserModelSelectionPreference'
+  | 'deleteUserModelSelectionPreference'
+  | 'createModelRecommendationRun'
+  | 'listModelRecommendationRuns'
+  | 'markModelRecommendationApplied'
+  | 'cleanupExpiredModelRecommendationRuns'
+  | 'createAiInvocationTrace'
+  | 'completeAiInvocationTrace'
+  | 'listAiInvocationTraces'
+  | 'getAiInvocationMetrics'
+  | 'cleanupExpiredAiInvocationTraces'
 >;
 
 export type MissionRepositoryContract = Pick<

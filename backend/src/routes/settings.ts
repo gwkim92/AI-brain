@@ -1,13 +1,20 @@
 import type { FastifyInstance } from 'fastify';
 import { sendSuccess } from '../lib/http';
+import { getAiTraceCleanupWorkerStatus } from '../observability/ai-trace-worker';
+import { getProviderTokenRefreshWorkerStatus } from '../providers/token-refresh-worker';
 import type { RouteContext } from './types';
 
 export async function settingsRoutes(app: FastifyInstance, ctx: RouteContext) {
-  const { store, env, providerRouter } = ctx;
+  const { store, env, providerRouter, resolveRequestProviderCredentials } = ctx;
 
   app.get('/api/v1/settings/overview', async (request, reply) => {
     const health = await store.health();
     const runtime = providerRouter.listRuntimeStats();
+    const resolvedCredentials = await resolveRequestProviderCredentials(request);
+    const scopedAvailability = providerRouter.listAvailability(resolvedCredentials.credentialsByProvider);
+    const availabilityByProvider = new Map(scopedAvailability.map((item) => [item.provider, item] as const));
+    const oauthWorker = getProviderTokenRefreshWorkerStatus();
+    const aiTraceWorker = getAiTraceCleanupWorkerStatus();
 
     return sendSuccess(reply, request, 200, {
       generated_at: new Date().toISOString(),
@@ -18,10 +25,14 @@ export async function settingsRoutes(app: FastifyInstance, ctx: RouteContext) {
         now: new Date().toISOString()
       },
       providers: runtime.map((item) => ({
+        ...(availabilityByProvider.get(item.provider) ?? {}),
         provider: item.provider,
-        enabled: item.enabled,
-        model: item.model,
-        reason: item.reason,
+        enabled: availabilityByProvider.get(item.provider)?.enabled ?? item.enabled,
+        model: availabilityByProvider.get(item.provider)?.model ?? item.model,
+        reason: availabilityByProvider.get(item.provider)?.reason ?? item.reason,
+        credential_source: resolvedCredentials.credentialsByProvider[item.provider]?.source ?? 'none',
+        selected_credential_mode: resolvedCredentials.credentialsByProvider[item.provider]?.selectedCredentialMode ?? null,
+        credential_priority: resolvedCredentials.credentialsByProvider[item.provider]?.credentialPriority ?? 'api_key_first',
         attempts: item.attempts,
         successes: item.successes,
         failures: item.failures,
@@ -37,6 +48,14 @@ export async function settingsRoutes(app: FastifyInstance, ctx: RouteContext) {
         auth_required: env.AUTH_REQUIRED,
         auth_allow_signup: env.AUTH_ALLOW_SIGNUP,
         auth_token_configured: Boolean(env.AUTH_TOKEN?.trim())
+      },
+      oauth_worker: {
+        ...oauthWorker,
+        history: oauthWorker.history.slice(0, 5)
+      },
+      ai_trace_worker: {
+        ...aiTraceWorker,
+        history: aiTraceWorker.history.slice(0, 5)
       }
     });
   });

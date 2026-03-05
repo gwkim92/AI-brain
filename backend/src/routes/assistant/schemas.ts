@@ -48,8 +48,8 @@ export const AssistantContextEventStreamQuerySchema = z.object({
 });
 
 export const AssistantContextRunSchema = z.object({
-  provider: z.enum(['auto', 'openai', 'gemini', 'anthropic', 'local']).default('auto'),
-  strict_provider: z.boolean().default(false),
+  provider: z.enum(['auto', 'openai', 'gemini', 'anthropic', 'local']).optional(),
+  strict_provider: z.boolean().optional(),
   task_type: z
     .enum(['chat', 'execute', 'council', 'code', 'compute', 'long_run', 'high_risk', 'radar_review', 'upgrade_execution'])
     .optional(),

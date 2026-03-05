@@ -27,6 +27,19 @@ describe('resolveGroundingPolicy', () => {
     expect(decision.signals.factual).toBe(true);
   });
 
+  it('does not force grounding for recency-only general productivity prompt', () => {
+    const decision = resolveGroundingPolicy({
+      prompt: '오늘 우선순위 높은 개발 작업 3가지를 정리해줘',
+      intent: 'general',
+      taskType: 'chat'
+    });
+
+    expect(decision.signals.recency).toBe(true);
+    expect(decision.signals.factual).toBe(false);
+    expect(decision.policy).toBe('static');
+    expect(decision.requiresGrounding).toBe(false);
+  });
+
   it('classifies high risk prompts as high_risk_factual policy', () => {
     const decision = resolveGroundingPolicy({
       prompt: 'legal advice for pending lawsuit with latest regulation updates',

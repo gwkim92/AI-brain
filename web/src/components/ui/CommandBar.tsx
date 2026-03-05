@@ -8,6 +8,7 @@ import {
   JARVIS_RUNTIME_DEBUG_CHANGED_EVENT,
   setRuntimeDebugEnabled,
 } from "@/lib/runtime-events";
+import { subscribeSessionRerun } from "@/lib/hud/session-rerun";
 
 export function CommandBar() {
   const { commandInput, setCommandInput, isSubmitting, error, execute } = useQuickCommand();
@@ -29,6 +30,16 @@ export function CommandBar() {
       window.removeEventListener("storage", sync);
     };
   }, [showDebugToggle]);
+
+  useEffect(() => {
+    return subscribeSessionRerun((payload) => {
+      if (!payload.prompt || payload.prompt.trim().length === 0) {
+        return;
+      }
+      setCommandInput(payload.prompt);
+      void execute(payload.prompt);
+    });
+  }, [execute, setCommandInput]);
 
   const handleExecute = useCallback(() => {
     void execute();

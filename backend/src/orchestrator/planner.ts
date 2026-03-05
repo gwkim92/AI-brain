@@ -1,5 +1,8 @@
 import type { ProviderRouter } from '../providers/router';
-import type { MissionStepPattern } from '../store/types';
+import type { ProviderCredentialsByProvider } from '../providers/types';
+import { withAiInvocationTrace } from '../observability/ai-trace';
+import type { AppEnv } from '../config/env';
+import type { JarvisStore, MissionStepPattern } from '../store/types';
 
 export type PlanStep = {
   id: string;
@@ -60,15 +63,48 @@ Respond with ONLY a valid JSON object in this exact format:
 
 export async function generatePlan(
   prompt: string,
-  providerRouter: ProviderRouter
+  providerRouter: ProviderRouter,
+  credentialsByProvider?: ProviderCredentialsByProvider,
+  options?: {
+    provider?: 'auto' | 'openai' | 'gemini' | 'anthropic' | 'local';
+    strictProvider?: boolean;
+    model?: string;
+    trace?: {
+      store: JarvisStore;
+      env: AppEnv;
+      userId: string;
+      traceId?: string;
+    };
+  }
 ): Promise<OrchestratorPlan> {
-  const result = await providerRouter.generate({
-    prompt: `Generate an execution plan for the following request:\n\n${prompt}`,
-    systemPrompt: PLAN_SYSTEM_PROMPT,
-    taskType: 'execute',
-    temperature: 0.3,
-    maxOutputTokens: 2000
-  });
+  const run = () =>
+    providerRouter.generate({
+      prompt: `Generate an execution plan for the following request:\n\n${prompt}`,
+      systemPrompt: PLAN_SYSTEM_PROMPT,
+      provider: options?.provider,
+      strictProvider: options?.strictProvider,
+      model: options?.model,
+      credentialsByProvider,
+      taskType: 'execute',
+      temperature: 0.3,
+      maxOutputTokens: 2000
+    });
+  const result = options?.trace
+    ? await withAiInvocationTrace({
+        store: options.trace.store,
+        env: options.trace.env,
+        userId: options.trace.userId,
+        featureKey: 'mission_plan_generation',
+        taskType: 'execute',
+        requestProvider: options.provider ?? 'auto',
+        requestModel: options.model ?? null,
+        traceId: options.trace.traceId,
+        contextRefs: {
+          route: '/api/v1/missions/generate-plan'
+        },
+        run
+      })
+    : await run();
 
   return parsePlanFromLLMOutput(result.result.outputText);
 }

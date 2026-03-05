@@ -2,13 +2,17 @@ import type {
   LlmProvider,
   ProviderAttempt,
   ProviderAvailability,
+  ProviderCredentialUsage,
+  ProviderCredentialsByProvider,
   ProviderName,
+  ProviderResolvedCredential,
   ProviderRouteResult,
   RoutingTaskType,
   ProviderGenerateRequest,
   ProviderGenerateResult
 } from './types';
 import { getPolicyScoresForTask } from './task-model-policy';
+import { redactSecretsInText } from '../lib/redaction';
 
 export type ProviderRouterRequest = ProviderGenerateRequest & {
   provider?: ProviderName | 'auto';
@@ -62,6 +66,17 @@ export type ProviderRuntimeStats = {
   lastAttemptAtMs: number | null;
 };
 
+export function toProviderCredentialUsage(
+  credential: ProviderResolvedCredential | undefined
+): ProviderCredentialUsage {
+  return {
+    source: credential?.source ?? 'none',
+    selectedCredentialMode: credential?.selectedCredentialMode ?? null,
+    credentialPriority: credential?.credentialPriority ?? 'api_key_first',
+    authAccessTokenExpiresAt: credential?.authAccessTokenExpiresAt ?? null
+  };
+}
+
 export class ProviderRouter {
   private readonly providerStats: Record<ProviderName, ProviderRuntimeStats>;
   private readonly emaAlpha = 0.3;
@@ -85,8 +100,8 @@ export class ProviderRouter {
     this.usePolicies = true;
   }
 
-  listAvailability(): ProviderAvailability[] {
-    return this.orderedProviderNames().map((name) => this.providers[name].availability());
+  listAvailability(credentialsByProvider?: ProviderCredentialsByProvider): ProviderAvailability[] {
+    return this.orderedProviderNames().map((name) => this.resolveAvailability(name, credentialsByProvider));
   }
 
   setProviderApiKey(provider: ProviderName, apiKey?: string): void {
@@ -163,51 +178,83 @@ export class ProviderRouter {
     const excludedProviders = new Set<ProviderName>(request.excludeProviders ?? []);
 
     for (const providerName of order) {
+      const attemptCredential = toProviderCredentialUsage(request.credentialsByProvider?.[providerName]);
       if (excludedProviders.has(providerName)) {
         attempts.push({
           provider: providerName,
           status: 'skipped',
-          error: 'excluded_by_request'
+          error: 'excluded_by_request',
+          credential: attemptCredential
         });
         continue;
       }
 
       const provider = this.providers[providerName];
-      const availability = provider.availability();
+      const availability = this.resolveAvailability(providerName, request.credentialsByProvider);
 
       if (!availability.enabled) {
         attempts.push({
           provider: providerName,
           status: 'skipped',
-          error: availability.reason ?? 'provider_disabled'
+          error: availability.reason ?? 'provider_disabled',
+          credential: attemptCredential
         });
         continue;
       }
 
       const startedAt = Date.now();
+      request.onSpanEvent?.({
+        name: 'provider.call.start',
+        provider: providerName,
+        traceId: request.traceId
+      });
 
       try {
         const result = await provider.generate(request);
+        const routedResult: ProviderGenerateResult = {
+          ...result,
+          credential: toProviderCredentialUsage(request.credentialsByProvider?.[providerName])
+        };
+        const latencyMs = Date.now() - startedAt;
         this.recordProviderAttempt(providerName, 'success', Date.now() - startedAt);
         attempts.push({
           provider: providerName,
           status: 'success',
-          latencyMs: Date.now() - startedAt
+          latencyMs,
+          credential: attemptCredential
+        });
+        request.onSpanEvent?.({
+          name: 'provider.call.complete',
+          provider: providerName,
+          traceId: request.traceId,
+          success: true,
+          latencyMs
         });
 
         return {
-          result,
+          result: routedResult,
           attempts,
           usedFallback: attempts.filter((item) => item.status === 'failed' || item.status === 'skipped').length > 0,
+          selectedCredential: routedResult.credential,
           selection: routePlan.selection
         };
       } catch (error) {
+        const latencyMs = Date.now() - startedAt;
         const message = error instanceof Error ? error.message : String(error);
         this.recordProviderAttempt(providerName, 'failed', Date.now() - startedAt);
         attempts.push({
           provider: providerName,
           status: 'failed',
-          latencyMs: Date.now() - startedAt,
+          latencyMs,
+          error: message,
+          credential: attemptCredential
+        });
+        request.onSpanEvent?.({
+          name: 'provider.call.complete',
+          provider: providerName,
+          traceId: request.traceId,
+          success: false,
+          latencyMs,
           error: message
         });
       }
@@ -298,7 +345,7 @@ export class ProviderRouter {
     const promptBoost = this.computePromptBoost(taskType, promptText);
 
     const scored = this.orderedProviderNames().map((providerName) => {
-      const availability = this.providers[providerName].availability();
+      const availability = this.resolveAvailability(providerName, request.credentialsByProvider);
       const runtime = this.providerStats[providerName];
 
       const domainFit = this.getDomainFit(taskType, providerName);
@@ -345,7 +392,7 @@ export class ProviderRouter {
     let order = scored.map((item) => item.provider);
 
     if (this.explorationRate > 0 && Math.random() < this.explorationRate) {
-      const available = order.filter((name) => this.providers[name].availability().enabled);
+      const available = order.filter((name) => this.resolveAvailability(name, request.credentialsByProvider).enabled);
       if (available.length > 1) {
         const randomIdx = Math.floor(Math.random() * available.length);
         const chosen = available[randomIdx]!;
@@ -457,15 +504,66 @@ export class ProviderRouter {
   private orderedProviderNames(): ProviderName[] {
     return ['openai', 'gemini', 'anthropic', 'local'];
   }
+
+  private resolveAvailability(
+    providerName: ProviderName,
+    credentialsByProvider?: ProviderCredentialsByProvider
+  ): ProviderAvailability {
+    const base = this.providers[providerName].availability();
+    const scoped = credentialsByProvider?.[providerName];
+    if (!scoped) {
+      return base;
+    }
+
+    if (scoped.source === 'none') {
+      return base;
+    }
+
+    if (scoped.selectedCredentialMode === 'api_key') {
+      const apiKey = scoped.apiKey?.trim();
+      if (apiKey && apiKey.length > 0) {
+        return {
+          ...base,
+          enabled: true,
+          reason: undefined
+        };
+      }
+
+      return {
+        ...base,
+        enabled: false,
+        reason: 'missing_api_key'
+      };
+    }
+
+    if (scoped.selectedCredentialMode === 'oauth_official') {
+      const accessToken = scoped.oauthAccessToken?.trim();
+      if (accessToken && accessToken.length > 0) {
+        return {
+          ...base,
+          enabled: true,
+          reason: undefined
+        };
+      }
+
+      return {
+        ...base,
+        enabled: false,
+        reason: 'missing_access_token'
+      };
+    }
+
+    return base;
+  }
 }
 
 export function maskErrorForApi(error: unknown): string {
   if (error instanceof ProviderRoutingError) {
-    return `${error.code}: ${error.message}`.slice(0, 500);
+    return redactSecretsInText(`${error.code}: ${error.message}`).slice(0, 500);
   }
 
   const message = error instanceof Error ? error.message : String(error);
-  return message.slice(0, 500);
+  return redactSecretsInText(message).slice(0, 500);
 }
 
 export function extractProviderAttempts(error: unknown): ProviderAttempt[] {
@@ -480,11 +578,13 @@ export function summarizeResult(result: ProviderGenerateResult): {
   model: string;
   output: string;
   usage?: ProviderGenerateResult['usage'];
+  credential?: ProviderGenerateResult['credential'];
 } {
   return {
     provider: result.provider,
     model: result.model,
     output: result.outputText,
-    usage: result.usage
+    usage: result.usage,
+    credential: result.credential
   };
 }

@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import { embedAndStore } from '../memory/embed';
+import { withAiInvocationTrace } from '../observability/ai-trace';
+import { resolveModelSelection } from '../providers/model-selection';
 import { extractProviderAttempts, maskErrorForApi } from '../providers/router';
 import type { CouncilRunRecord } from '../store/types';
 import { sendError, sendSuccess } from '../lib/http';
@@ -19,9 +21,9 @@ const CouncilRunCreateSchema = z.object({
   question: z.string().min(1).max(4000),
   system_prompt: z.string().optional(),
   max_rounds: z.coerce.number().int().min(1).max(4).default(2),
-  provider: z.enum(['auto', 'openai', 'gemini', 'anthropic', 'local']).default('auto'),
+  provider: z.enum(['auto', 'openai', 'gemini', 'anthropic', 'local']).optional(),
   exclude_providers: z.array(z.enum(['openai', 'gemini', 'anthropic', 'local'])).max(4).optional(),
-  strict_provider: z.boolean().default(false),
+  strict_provider: z.boolean().optional(),
   model: z.string().optional(),
   temperature: z.number().min(0).max(2).optional(),
   max_output_tokens: z.number().int().positive().max(32000).optional(),
@@ -33,8 +35,46 @@ const RunListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20)
 });
 
+type SelectedCredentialView = {
+  source: 'user' | 'workspace' | 'env' | 'none';
+  selected_credential_mode: 'api_key' | 'oauth_official' | null;
+  credential_priority: 'api_key_first' | 'auth_first';
+  auth_access_token_expires_at: string | null;
+} | null;
+
+function resolveSelectedCredentialForRun(run: CouncilRunRecord): SelectedCredentialView {
+  if (!run.provider) {
+    return null;
+  }
+  const match = [...run.attempts].reverse().find((attempt) => attempt.provider === run.provider && attempt.status === 'success');
+  const credential = match?.credential;
+  if (!credential) {
+    return null;
+  }
+  return {
+    source: credential.source,
+    selected_credential_mode: credential.selectedCredentialMode,
+    credential_priority: credential.credentialPriority,
+    auth_access_token_expires_at: credential.authAccessTokenExpiresAt
+  };
+}
+
+function withRunCredential(run: CouncilRunRecord): CouncilRunRecord & { selected_credential: SelectedCredentialView } {
+  return {
+    ...run,
+    selected_credential: resolveSelectedCredentialForRun(run)
+  };
+}
+
 export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Promise<void> {
-  const { store, providerRouter, resolveRequestUserId, resolveRequestTraceId, resolveRequiredIdempotencyKey } = ctx;
+  const {
+    store,
+    providerRouter,
+    resolveRequestUserId,
+    resolveRequestTraceId,
+    resolveRequiredIdempotencyKey,
+    resolveRequestProviderCredentials
+  } = ctx;
 
   app.post('/api/v1/councils/runs', async (request, reply) => {
     const parsed = CouncilRunCreateSchema.safeParse(request.body);
@@ -44,6 +84,18 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
 
     const userId = resolveRequestUserId(request);
     const traceId = resolveRequestTraceId(request);
+    const resolvedCredentials = await resolveRequestProviderCredentials(request);
+    const credentialsByProvider = resolvedCredentials.credentialsByProvider;
+    const modelSelection = await resolveModelSelection({
+      store,
+      userId,
+      featureKey: 'council_run',
+      override: {
+        provider: parsed.data.provider,
+        strictProvider: parsed.data.strict_provider,
+        model: parsed.data.model
+      }
+    });
     const idempotencyKey = resolveRequiredIdempotencyKey(request);
     if (!idempotencyKey) {
       return sendError(reply, request, 422, 'VALIDATION_ERROR', 'idempotency-key header is required (8-200 chars)');
@@ -55,7 +107,7 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
         idempotencyKey
       });
       if (existing) {
-        return sendSuccess(reply, request, 200, existing, { idempotent_replay: true });
+        return sendSuccess(reply, request, 200, withRunCredential(existing), { idempotent_replay: true });
       }
 
       const run = await store.createCouncilRun({
@@ -128,16 +180,47 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
               ? `${parsed.data.system_prompt}\n\nCouncil round ${round}/${maxRounds}.`
               : `Council round ${round}/${maxRounds}.`;
 
-            routed = await providerRouter.generate({
-              prompt: roundPrompt,
-              systemPrompt: roundSystemPrompt,
-              provider: parsed.data.provider,
-              excludeProviders: parsed.data.exclude_providers,
-              strictProvider: parsed.data.strict_provider,
+            routed = await withAiInvocationTrace({
+              store,
+              env: ctx.env,
+              userId,
+              featureKey: 'council_run',
               taskType: 'council',
-              model: parsed.data.model,
-              temperature: parsed.data.temperature,
-              maxOutputTokens: parsed.data.max_output_tokens
+              requestProvider: modelSelection.provider,
+              requestModel: modelSelection.model,
+              traceId,
+              contextRefs: {
+                route: '/api/v1/councils/runs',
+                run_id: run.id,
+                round,
+                model_selection_source: modelSelection.source
+              },
+              run: () =>
+                providerRouter.generate({
+                  prompt: roundPrompt,
+                  systemPrompt: roundSystemPrompt,
+                  provider: modelSelection.provider,
+                  credentialsByProvider,
+                  traceId,
+                  onSpanEvent: (event) => {
+                    request.log.info(
+                      {
+                        trace_id: event.traceId,
+                        provider: event.provider,
+                        success: event.success,
+                        latency_ms: event.latencyMs,
+                        error: event.error
+                      },
+                      event.name
+                    );
+                  },
+                  excludeProviders: parsed.data.exclude_providers,
+                  strictProvider: modelSelection.strictProvider,
+                  taskType: 'council',
+                  model: modelSelection.model ?? undefined,
+                  temperature: parsed.data.temperature,
+                  maxOutputTokens: parsed.data.max_output_tokens
+                })
             });
 
             allAttempts.push(...routed.attempts);
@@ -305,7 +388,7 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
       })();
 
       const latest = await store.getCouncilRunById(run.id);
-      return sendSuccess(reply, request, 202, latest ?? run, { accepted: true });
+      return sendSuccess(reply, request, 202, withRunCredential(latest ?? run), { accepted: true });
     } catch (error) {
       return sendError(reply, request, 503, 'INTERNAL_ERROR', 'council run failed', {
         reason: maskErrorForApi(error)
@@ -322,7 +405,7 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
     const runs = await store.listCouncilRuns(parsed.data.limit);
 
     return sendSuccess(reply, request, 200, {
-      runs
+      runs: runs.map((run) => withRunCredential(run))
     });
   });
 
@@ -334,7 +417,7 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
       return sendError(reply, request, 404, 'NOT_FOUND', 'council run not found');
     }
 
-    return sendSuccess(reply, request, 200, run);
+    return sendSuccess(reply, request, 200, withRunCredential(run));
   });
 
   app.get('/api/v1/councils/runs/:runId/events', async (request, reply) => {
@@ -375,7 +458,7 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
       emitEvent(eventName, {
         run_id: runId,
         timestamp: new Date().toISOString(),
-        data: row
+        data: withRunCredential(row)
       });
     };
 
@@ -396,6 +479,7 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
         max_rounds: maxRounds,
         provider: row.provider,
         model: row.model,
+        selected_credential: resolveSelectedCredentialForRun(row),
         attempt_count: row.attempts.length
       });
     };
@@ -418,6 +502,7 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
         summary: row.summary,
         provider: row.provider,
         model: row.model,
+        selected_credential: resolveSelectedCredentialForRun(row),
         used_fallback: row.used_fallback,
         attempt_count: row.attempts.length
       });

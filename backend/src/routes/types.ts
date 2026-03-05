@@ -5,6 +5,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { AppEnv } from '../config/env';
 import { sendError } from '../lib/http';
 import type { ProviderRouter } from '../providers/router';
+import type { ProviderCredentialResolution } from '../providers/credentials-resolver';
 import type { NotificationService } from '../notifications/proactive';
 import type {
   CouncilRole,
@@ -40,6 +41,7 @@ export type RouteContext = {
   getEnvProviderApiKey: (provider: ProviderCredentialProvider) => string | undefined;
   loadRuntimeProviderApiKeys: () => Promise<Partial<Record<ProviderCredentialProvider, string>>>;
   applyStoredProviderKeys: () => Promise<void>;
+  resolveRequestProviderCredentials: (request: FastifyRequest) => Promise<ProviderCredentialResolution>;
   buildDashboardOverviewData: (
     request: FastifyRequest,
     input: { task_limit: number; pending_approval_limit: number; running_task_limit: number; task_scope?: 'mine' | 'all' }

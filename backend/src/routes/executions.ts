@@ -1,7 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
+import { withAiInvocationTrace } from '../observability/ai-trace';
+import { resolveModelSelection } from '../providers/model-selection';
 import { extractProviderAttempts, maskErrorForApi } from '../providers/router';
+import type { ExecutionRunRecord } from '../store/types';
 import { sendError, sendSuccess } from '../lib/http';
 import type { RouteContext } from './types';
 import { applySseCorsHeaders, createSpanId, truncateText } from './types';
@@ -10,9 +13,9 @@ const ExecutionRunCreateSchema = z.object({
   mode: z.enum(['code', 'compute']),
   prompt: z.string().min(1).max(8000),
   system_prompt: z.string().optional(),
-  provider: z.enum(['auto', 'openai', 'gemini', 'anthropic', 'local']).default('auto'),
+  provider: z.enum(['auto', 'openai', 'gemini', 'anthropic', 'local']).optional(),
   exclude_providers: z.array(z.enum(['openai', 'gemini', 'anthropic', 'local'])).max(4).optional(),
-  strict_provider: z.boolean().default(false),
+  strict_provider: z.boolean().optional(),
   model: z.string().optional(),
   temperature: z.number().min(0).max(2).optional(),
   max_output_tokens: z.number().int().positive().max(32000).optional(),
@@ -24,8 +27,46 @@ const RunListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20)
 });
 
+type SelectedCredentialView = {
+  source: 'user' | 'workspace' | 'env' | 'none';
+  selected_credential_mode: 'api_key' | 'oauth_official' | null;
+  credential_priority: 'api_key_first' | 'auth_first';
+  auth_access_token_expires_at: string | null;
+} | null;
+
+function resolveSelectedCredentialForRun(run: ExecutionRunRecord): SelectedCredentialView {
+  if (!run.provider) {
+    return null;
+  }
+  const match = [...run.attempts].reverse().find((attempt) => attempt.provider === run.provider && attempt.status === 'success');
+  const credential = match?.credential;
+  if (!credential) {
+    return null;
+  }
+  return {
+    source: credential.source,
+    selected_credential_mode: credential.selectedCredentialMode,
+    credential_priority: credential.credentialPriority,
+    auth_access_token_expires_at: credential.authAccessTokenExpiresAt
+  };
+}
+
+function withRunCredential(run: ExecutionRunRecord): ExecutionRunRecord & { selected_credential: SelectedCredentialView } {
+  return {
+    ...run,
+    selected_credential: resolveSelectedCredentialForRun(run)
+  };
+}
+
 export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): Promise<void> {
-  const { store, providerRouter, resolveRequestUserId, resolveRequestTraceId, resolveRequiredIdempotencyKey } = ctx;
+  const {
+    store,
+    providerRouter,
+    resolveRequestUserId,
+    resolveRequestTraceId,
+    resolveRequiredIdempotencyKey,
+    resolveRequestProviderCredentials
+  } = ctx;
 
   app.post('/api/v1/executions/runs', async (request, reply) => {
     const parsed = ExecutionRunCreateSchema.safeParse(request.body);
@@ -35,6 +76,19 @@ export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): 
 
     const userId = resolveRequestUserId(request);
     const traceId = resolveRequestTraceId(request);
+    const resolvedCredentials = await resolveRequestProviderCredentials(request);
+    const credentialsByProvider = resolvedCredentials.credentialsByProvider;
+    const featureKey = parsed.data.mode === 'code' ? 'execution_code' : 'execution_compute';
+    const modelSelection = await resolveModelSelection({
+      store,
+      userId,
+      featureKey,
+      override: {
+        provider: parsed.data.provider,
+        strictProvider: parsed.data.strict_provider,
+        model: parsed.data.model
+      }
+    });
     const idempotencyKey = resolveRequiredIdempotencyKey(request);
     if (!idempotencyKey) {
       return sendError(reply, request, 422, 'VALIDATION_ERROR', 'idempotency-key header is required (8-200 chars)');
@@ -46,7 +100,7 @@ export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): 
         idempotencyKey
       });
       if (existing) {
-        return sendSuccess(reply, request, 200, existing, { idempotent_replay: true });
+        return sendSuccess(reply, request, 200, withRunCredential(existing), { idempotent_replay: true });
       }
 
       const run = await store.createExecutionRun({
@@ -105,16 +159,47 @@ export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): 
       void (async () => {
         const startedAt = Date.now();
         try {
-          const routed = await providerRouter.generate({
-            prompt: parsed.data.prompt,
-            systemPrompt: parsed.data.system_prompt,
-            provider: parsed.data.provider,
-            excludeProviders: parsed.data.exclude_providers,
-            strictProvider: parsed.data.strict_provider,
+          const routed = await withAiInvocationTrace({
+            store,
+            env: ctx.env,
+            userId,
+            featureKey,
             taskType: parsed.data.mode,
-            model: parsed.data.model,
-            temperature: parsed.data.temperature,
-            maxOutputTokens: parsed.data.max_output_tokens
+            requestProvider: modelSelection.provider,
+            requestModel: modelSelection.model,
+            traceId,
+            contextRefs: {
+              route: '/api/v1/executions/runs',
+              run_id: run.id,
+              mode: parsed.data.mode,
+              model_selection_source: modelSelection.source
+            },
+            run: () =>
+              providerRouter.generate({
+                prompt: parsed.data.prompt,
+                systemPrompt: parsed.data.system_prompt,
+                provider: modelSelection.provider,
+                credentialsByProvider,
+                traceId,
+                onSpanEvent: (event) => {
+                  request.log.info(
+                    {
+                      trace_id: event.traceId,
+                      provider: event.provider,
+                      success: event.success,
+                      latency_ms: event.latencyMs,
+                      error: event.error
+                    },
+                    event.name
+                  );
+                },
+                excludeProviders: parsed.data.exclude_providers,
+                strictProvider: modelSelection.strictProvider,
+                taskType: parsed.data.mode,
+                model: modelSelection.model ?? undefined,
+                temperature: parsed.data.temperature,
+                maxOutputTokens: parsed.data.max_output_tokens
+              })
           });
 
           await store.updateExecutionRun({
@@ -175,7 +260,7 @@ export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): 
       })();
 
       const latest = await store.getExecutionRunById(run.id);
-      return sendSuccess(reply, request, 202, latest ?? run, { accepted: true });
+      return sendSuccess(reply, request, 202, withRunCredential(latest ?? run), { accepted: true });
     } catch (error) {
       return sendError(reply, request, 503, 'INTERNAL_ERROR', 'execution run failed', {
         reason: maskErrorForApi(error)
@@ -192,7 +277,7 @@ export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): 
     const runs = await store.listExecutionRuns(parsed.data.limit);
 
     return sendSuccess(reply, request, 200, {
-      runs
+      runs: runs.map((run) => withRunCredential(run))
     });
   });
 
@@ -204,7 +289,7 @@ export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): 
       return sendError(reply, request, 404, 'NOT_FOUND', 'execution run not found');
     }
 
-    return sendSuccess(reply, request, 200, run);
+    return sendSuccess(reply, request, 200, withRunCredential(run));
   });
 
   app.get('/api/v1/executions/runs/:runId/events', async (request, reply) => {
@@ -238,7 +323,7 @@ export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): 
         `data: ${JSON.stringify({
           run_id: runId,
           timestamp: new Date().toISOString(),
-          data: row
+          data: withRunCredential(row)
         })}\n\n`
       );
     };

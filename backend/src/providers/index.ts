@@ -11,7 +11,8 @@ export function createProviderRouter(env: AppEnv): ProviderRouter {
     openai: new OpenAIProvider({
       apiKey: env.OPENAI_API_KEY,
       baseUrl: env.OPENAI_BASE_URL,
-      model: env.OPENAI_MODEL
+      model: env.OPENAI_MODEL,
+      gatewayUrl: env.OPENAI_OAUTH_GATEWAY_URL
     }),
     gemini: new GeminiProvider({
       apiKey: env.GEMINI_API_KEY,

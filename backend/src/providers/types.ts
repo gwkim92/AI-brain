@@ -1,4 +1,28 @@
 export type ProviderName = 'openai' | 'gemini' | 'anthropic' | 'local';
+export type ProviderCredentialSource = 'user' | 'workspace' | 'env' | 'none';
+export type ProviderCredentialMode = 'api_key' | 'oauth_official';
+export type ProviderCredentialPriority = 'api_key_first' | 'auth_first';
+export type ProviderCredentialUsage = {
+  source: ProviderCredentialSource;
+  selectedCredentialMode: ProviderCredentialMode | null;
+  credentialPriority: ProviderCredentialPriority;
+  authAccessTokenExpiresAt: string | null;
+};
+
+export type ProviderResolvedCredential = {
+  provider: ProviderName;
+  source: ProviderCredentialSource;
+  selectedCredentialMode: ProviderCredentialMode | null;
+  credentialPriority: ProviderCredentialPriority;
+  apiKey?: string;
+  oauthAccessToken?: string;
+  oauthRefreshToken?: string;
+  oauthScope?: string;
+  oauthTokenType?: string;
+  authAccessTokenExpiresAt?: string | null;
+};
+
+export type ProviderCredentialsByProvider = Partial<Record<ProviderName, ProviderResolvedCredential>>;
 
 export type RoutingTaskType =
   | 'chat'
@@ -21,6 +45,16 @@ export type ProviderGenerateRequest = {
   maxOutputTokens?: number;
   taskType?: RoutingTaskType;
   excludeProviders?: ProviderName[];
+  credentialsByProvider?: ProviderCredentialsByProvider;
+  traceId?: string;
+  onSpanEvent?: (event: {
+    name: 'provider.call.start' | 'provider.call.complete';
+    provider: ProviderName;
+    traceId?: string;
+    success?: boolean;
+    latencyMs?: number;
+    error?: string;
+  }) => void;
 };
 
 export type ProviderGenerateResult = {
@@ -31,6 +65,7 @@ export type ProviderGenerateResult = {
     inputTokens?: number;
     outputTokens?: number;
   };
+  credential?: ProviderCredentialUsage;
   raw?: unknown;
 };
 
@@ -46,12 +81,14 @@ export type ProviderAttempt = {
   status: 'success' | 'failed' | 'skipped';
   latencyMs?: number;
   error?: string;
+  credential?: ProviderCredentialUsage;
 };
 
 export type ProviderRouteResult = {
   result: ProviderGenerateResult;
   attempts: ProviderAttempt[];
   usedFallback: boolean;
+  selectedCredential?: ProviderCredentialUsage;
   selection?: {
     strategy: 'auto_orchestrator' | 'requested_provider';
     taskType: RoutingTaskType;

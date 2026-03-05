@@ -42,6 +42,7 @@ const WIDGET_LABELS: Record<string, string> = {
   approvals: "Approvals",
   memory: "Memory",
   settings: "Settings",
+  model_control: "Model Control",
 };
 
 function widgetLabel(id: string): string {

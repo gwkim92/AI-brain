@@ -11,6 +11,10 @@ import {
 import type { RouteContext } from '../types';
 import { createSpanId } from '../types';
 
+const RUNNING_CONTEXT_STALE_TIMEOUT_MS = 3 * 60 * 1000;
+const STALE_CONTEXT_REASON_CODE = 'SERVER_RUN_STATE_LOST';
+const STALE_CONTEXT_OUTPUT = 'Server state was lost for this run. Re-run this session.';
+
 export function registerAssistantContextCrudRoutes(app: FastifyInstance, ctx: RouteContext): void {
   const { store, resolveRequestUserId, resolveRequestTraceId } = ctx;
 
@@ -72,8 +76,68 @@ export function registerAssistantContextCrudRoutes(app: FastifyInstance, ctx: Ro
       limit: parsed.data.limit
     });
 
+    const nowMs = Date.now();
+    const normalizedContexts: typeof contexts = [];
+    for (const context of contexts) {
+      if (context.status !== 'running') {
+        normalizedContexts.push(context);
+        continue;
+      }
+
+      const updatedAtMs = Date.parse(context.updatedAt);
+      if (Number.isNaN(updatedAtMs) || nowMs - updatedAtMs < RUNNING_CONTEXT_STALE_TIMEOUT_MS) {
+        normalizedContexts.push(context);
+        continue;
+      }
+
+      const failed = await store.updateAssistantContext({
+        userId,
+        contextId: context.id,
+        status: 'failed',
+        output: STALE_CONTEXT_OUTPUT,
+        error: STALE_CONTEXT_REASON_CODE
+      });
+      if (!failed) {
+        normalizedContexts.push(context);
+        continue;
+      }
+
+      await store.appendAssistantContextEvent({
+        userId,
+        contextId: failed.id,
+        eventType: 'assistant.context.run.failed',
+        data: {
+          reason: STALE_CONTEXT_REASON_CODE,
+          source: 'stale_timeout_reaper',
+          transition_from: 'running',
+          transition_to: 'failed',
+          transition_valid: true
+        },
+        traceId: resolveRequestTraceId(request),
+        spanId: createSpanId()
+      });
+
+      if (failed.taskId) {
+        await store.setTaskStatus({
+          taskId: failed.taskId,
+          status: 'failed',
+          eventType: 'task.failed',
+          traceId: resolveRequestTraceId(request),
+          spanId: createSpanId(),
+          data: {
+            source: 'assistant_context_stale_timeout',
+            context_id: failed.id,
+            error_code: STALE_CONTEXT_REASON_CODE,
+            error: STALE_CONTEXT_OUTPUT
+          }
+        });
+      }
+
+      normalizedContexts.push(failed);
+    }
+
     return sendSuccess(reply, request, 200, {
-      contexts
+      contexts: normalizedContexts
     });
   });
 

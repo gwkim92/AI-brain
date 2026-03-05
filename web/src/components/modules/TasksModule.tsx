@@ -9,6 +9,7 @@ import { listTasks, streamDashboardOverviewEvents } from "@/lib/api/endpoints";
 import type { TaskRecord, TaskStatus } from "@/lib/api/types";
 import { AsyncState } from "@/components/ui/AsyncState";
 import { TaskStatusBadge } from "@/components/ui/TaskStatusBadge";
+import { useHUD } from "@/components/providers/HUDProvider";
 
 function formatRelativeTime(isoDate: string): string {
   const target = new Date(isoDate).getTime();
@@ -24,6 +25,7 @@ function formatRelativeTime(isoDate: string): string {
 const PAGE_SIZE = 20;
 
 export function TasksModule() {
+  const { sessions } = useHUD();
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -31,6 +33,18 @@ export function TasksModule() {
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<TaskStatus | "all">("all");
   const [hasMore, setHasMore] = useState(true);
+
+  const staleSessionByTaskId = useMemo(() => {
+    const map = new Map<string, boolean>();
+    for (const session of sessions) {
+      if (!session.stale || !session.taskId) {
+        continue;
+      }
+      map.set(session.taskId, true);
+    }
+    return map;
+  }, [sessions]);
+  const staleCount = useMemo(() => sessions.filter((session) => session.stale).length, [sessions]);
 
   const refresh = async () => {
     setLoading(true);
@@ -102,6 +116,11 @@ export function TasksModule() {
       <header className="mb-4 border-l-2 border-cyan-500 pl-3">
         <h2 className="text-sm font-mono font-bold tracking-widest text-cyan-400 flex items-center gap-2">
           <ListTodo size={14} /> TASK MANAGER
+          {staleCount > 0 && (
+            <span className="rounded border border-amber-400/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] text-amber-200">
+              stale:{staleCount}
+            </span>
+          )}
         </h2>
       </header>
 
@@ -162,7 +181,9 @@ export function TasksModule() {
 
           {!loading &&
             !error &&
-            filtered.map((task) => (
+            filtered.map((task) => {
+              const isStale = staleSessionByTaskId.get(task.id) === true;
+              return (
               <Link
                 key={task.id}
                 href={`/tasks/${task.id}`}
@@ -173,12 +194,18 @@ export function TasksModule() {
                 <div className="col-span-2 font-mono text-[10px] text-white/40 uppercase">{task.mode}</div>
                 <div className="col-span-3 flex justify-end">
                   <TaskStatusBadge status={task.status} />
+                  {isStale && (
+                    <span className="ml-2 rounded border border-amber-400/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-mono text-amber-200">
+                      STALE
+                    </span>
+                  )}
                 </div>
                 <div className="col-span-12 text-right font-mono text-[10px] text-white/35">
                   {formatRelativeTime(task.updatedAt)}
                 </div>
               </Link>
-            ))}
+              );
+            })}
 
           {!loading && !error && hasMore && filtered.length > 0 && (
             <button

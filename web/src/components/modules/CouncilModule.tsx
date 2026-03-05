@@ -5,10 +5,16 @@ import { AgentArgumentCard } from "@/components/ui/AgentArgumentCard";
 import { CouncilConsensusPanel } from "@/components/ui/CouncilConsensusPanel";
 import { Network, AlertCircle, Loader2 } from "lucide-react";
 
-import { startCouncilRun, streamCouncilRunEvents } from "@/lib/api/endpoints";
+import { listProviderModels, listProviders, startCouncilRun, streamCouncilRunEvents } from "@/lib/api/endpoints";
 import { ApiRequestError } from "@/lib/api/client";
 import type { AgentRole } from "@/components/ui/AgentArgumentCard";
-import type { CouncilConsensusStatus, CouncilRole, ProviderAttempt } from "@/lib/api/types";
+import type {
+  CouncilConsensusStatus,
+  CouncilRole,
+  ProviderAttempt,
+  ProviderAvailability,
+  ProviderModelCatalogEntry,
+} from "@/lib/api/types";
 
 type ConsensusStatus = "Consensus Reached" | "Contradiction Detected" | "Escalated to Human";
 
@@ -28,6 +34,8 @@ const ROLE_MAP: Record<CouncilRole, AgentRole> = {
   risk: "Risk",
   synthesizer: "Synthesizer",
 };
+
+type ProviderSelection = "auto" | "openai" | "gemini" | "anthropic" | "local";
 
 const CONSENSUS_MAP: Record<CouncilConsensusStatus, ConsensusStatus> = {
   consensus_reached: "Consensus Reached",
@@ -96,6 +104,12 @@ export function CouncilModule() {
   const [idempotentReplay, setIdempotentReplay] = useState(false);
   const [providerAttempts, setProviderAttempts] = useState<ProviderAttempt[]>([]);
   const [lastExcludedProviders, setLastExcludedProviders] = useState<ProviderAttempt["provider"][]>([]);
+  const [selectedCredentialSummary, setSelectedCredentialSummary] = useState<string>("pending");
+  const [providers, setProviders] = useState<ProviderAvailability[]>([]);
+  const [providerModelCatalog, setProviderModelCatalog] = useState<ProviderModelCatalogEntry[]>([]);
+  const [selectedProvider, setSelectedProvider] = useState<ProviderSelection>("auto");
+  const [strictProvider, setStrictProvider] = useState(false);
+  const [modelOverride, setModelOverride] = useState("");
 
   const hasResult = useMemo(() => rounds > 0, [rounds]);
   const providerFailures = useMemo(
@@ -107,6 +121,39 @@ export function CouncilModule() {
     [providerFailures]
   );
   const canRetryExcludingFailures = useMemo(() => retryExcludedProviders.length > 0 && retryExcludedProviders.length < 4, [retryExcludedProviders]);
+  const providerOptions = useMemo(
+    () => [
+      { provider: "auto" as const, enabled: true, label: "AUTO" },
+      ...providers.map((item) => ({
+        provider: item.provider,
+        enabled: item.enabled,
+        label: `${item.provider.toUpperCase()}${item.model ? ` (${item.model})` : ""}`,
+      })),
+    ],
+    [providers]
+  );
+  const selectedProviderModels = useMemo(() => {
+    if (selectedProvider === "auto") {
+      return [];
+    }
+    return providerModelCatalog.find((row) => row.provider === selectedProvider)?.models ?? [];
+  }, [providerModelCatalog, selectedProvider]);
+
+  React.useEffect(() => {
+    void (async () => {
+      try {
+        const [providerData, modelData] = await Promise.all([
+          listProviders(),
+          listProviderModels({ scope: "user" }).catch(() => ({ providers: [] })),
+        ]);
+        setProviders(providerData.providers ?? []);
+        setProviderModelCatalog(modelData.providers ?? []);
+      } catch {
+        setProviders([]);
+        setProviderModelCatalog([]);
+      }
+    })();
+  }, []);
 
   React.useEffect(() => {
     return () => {
@@ -120,6 +167,11 @@ export function CouncilModule() {
     status: "queued" | "running" | "completed" | "failed";
     consensus_status: CouncilConsensusStatus | null;
     attempts: ProviderAttempt[];
+    selected_credential?: {
+      source: string;
+      selected_credential_mode: string | null;
+      credential_priority: string;
+    } | null;
     task_id: string | null;
     participants: Array<{
       role: CouncilRole;
@@ -129,6 +181,10 @@ export function CouncilModule() {
       latency_ms?: number;
     }>;
   }) => {
+    const credentialSummary = result.selected_credential?.selected_credential_mode
+      ? `${result.selected_credential.selected_credential_mode} (${result.selected_credential.source}) · ${result.selected_credential.credential_priority}`
+      : "none";
+
     if (result.status === "queued" || result.status === "running") {
       const progress = parseRoundProgress(result.summary);
       setCards(
@@ -144,6 +200,7 @@ export function CouncilModule() {
       setSummary(result.summary || "Council run is in progress.");
       setLastTaskId(result.task_id);
       setProviderAttempts(result.attempts);
+      setSelectedCredentialSummary(credentialSummary);
       return;
     }
 
@@ -183,6 +240,7 @@ export function CouncilModule() {
     setSummary(result.summary);
     setLastTaskId(result.task_id);
     setProviderAttempts(result.attempts);
+    setSelectedCredentialSummary(credentialSummary);
   };
 
   const runCouncil = async (
@@ -199,14 +257,24 @@ export function CouncilModule() {
     setIdempotentReplay(false);
     setProviderAttempts([]);
     setLastExcludedProviders(options?.excludeProviders ?? []);
+    setSelectedCredentialSummary("pending");
 
     try {
-      const result = await startCouncilRun({
+      const payload: Parameters<typeof startCouncilRun>[0] = {
         question: prompt,
-        provider: "auto",
         exclude_providers: options?.excludeProviders,
         create_task: createTask,
-      });
+      };
+      if (selectedProvider !== "auto") {
+        payload.provider = selectedProvider;
+        payload.strict_provider = strictProvider;
+      }
+      const model = modelOverride.trim();
+      if (model.length > 0) {
+        payload.model = model;
+      }
+
+      const result = await startCouncilRun(payload);
       setIdempotentReplay(result.idempotent_replay === true);
 
       applyCouncilResult(result);
@@ -291,6 +359,7 @@ export function CouncilModule() {
       setLastTaskId(null);
       setIdempotentReplay(false);
       setProviderAttempts([]);
+      setSelectedCredentialSummary("none");
     } finally {
       if (streamRef.current === null) {
         setRunning(false);
@@ -315,6 +384,42 @@ export function CouncilModule() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
+          <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-[180px_minmax(0,1fr)_auto]">
+            <select
+              value={selectedProvider}
+              onChange={(event) => setSelectedProvider(event.target.value as ProviderSelection)}
+              className="h-9 rounded border border-white/15 bg-black/50 px-2 text-xs text-white/90"
+            >
+              {providerOptions.map((option) => (
+                <option key={`council-provider-${option.provider}`} value={option.provider} disabled={!option.enabled}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <input
+              list="council-model-catalog"
+              type="text"
+              value={modelOverride}
+              onChange={(event) => setModelOverride(event.target.value)}
+              placeholder="model override (optional)"
+              className="h-9 rounded border border-white/15 bg-black/50 px-3 text-xs text-white/90"
+            />
+            <datalist id="council-model-catalog">
+              {selectedProviderModels.map((modelName) => (
+                <option key={`council-model-${modelName}`} value={modelName} />
+              ))}
+            </datalist>
+            <label className="inline-flex items-center gap-1 text-[11px] text-white/70">
+              <input
+                type="checkbox"
+                checked={strictProvider}
+                onChange={(event) => setStrictProvider(event.target.checked)}
+                disabled={selectedProvider === "auto"}
+                className="accent-cyan-400"
+              />
+              strict provider
+            </label>
+          </div>
           <div className="mt-3 flex gap-3">
             <button
               onClick={() => void runCouncil(false)}
@@ -334,6 +439,10 @@ export function CouncilModule() {
           </div>
           {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
           {lastTaskId && <p className="mt-2 text-xs text-cyan-300">Task queued: {lastTaskId.slice(0, 8)}</p>}
+          <p className="mt-2 text-xs text-white/60">
+            Requested route: {selectedProvider}/{modelOverride.trim() || "default"} · strict={selectedProvider === "auto" ? "off" : strictProvider ? "on" : "off"}
+          </p>
+          <p className="mt-2 text-xs text-cyan-200/80">Credential: {selectedCredentialSummary}</p>
           {lastExcludedProviders.length > 0 && (
             <p className="mt-2 text-xs text-amber-300">Excluded providers: {lastExcludedProviders.join(", ")}</p>
           )}
@@ -374,6 +483,11 @@ export function CouncilModule() {
                         </span>
                       </div>
                       <p className="mt-1 text-[11px] leading-relaxed text-white/85">{truncate(attempt.error ?? "No error reason returned.", 160)}</p>
+                      {attempt.credential?.selectedCredentialMode && (
+                        <p className="mt-1 text-[10px] text-cyan-100/80">
+                          credential {attempt.credential.selectedCredentialMode} ({attempt.credential.source}) · {attempt.credential.credentialPriority}
+                        </p>
+                      )}
                     </div>
                   ))}
                 </div>

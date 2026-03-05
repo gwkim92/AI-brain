@@ -13,6 +13,7 @@ import {
     BarChart3,
     Inbox,
     LayoutGrid,
+    SlidersHorizontal,
     ChevronLeft,
     ChevronRight,
 } from "lucide-react";
@@ -282,6 +283,15 @@ function SidebarContent() {
                     description="Keys, connectors, policies."
                     active={activeWidgets.includes("settings")}
                     onClick={() => toggleWidget("settings")}
+                />
+                <NavItem
+                    compact={compact}
+                    icon={<SlidersHorizontal size={18} />}
+                    label="Model Control"
+                    title="Model Control"
+                    description="Credential mode, model defaults, recommendations, traces."
+                    active={activeWidgets.includes("model_control")}
+                    onClick={() => toggleWidget("model_control")}
                 />
                 <NavItem
                     compact={compact}

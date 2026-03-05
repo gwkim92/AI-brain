@@ -1,4 +1,5 @@
 import type {
+  AiInvocationTraceRecord,
   ApprovalRecord,
   AssistantContextEventRecord,
   AssistantContextGroundingClaimRecord,
@@ -7,7 +8,9 @@ import type {
   AuthUserWithPasswordRecord,
   CouncilRunRecord,
   ExecutionRunRecord,
+  ModelRecommendationRunRecord,
   MemorySegmentRecord,
+  UserModelSelectionPreferenceRecord,
   MissionRecord,
   RadarItemRecord,
   RadarRecommendationRecord,
@@ -31,11 +34,37 @@ export type MemoryProviderCredentialRow = {
   updatedAt: string;
 };
 
+export type MemoryUserProviderCredentialRow = {
+  encryptedPayload: string;
+  isActive: boolean;
+  updatedBy: string | null;
+  updatedAt: string;
+};
+
+export type MemoryProviderOauthStateRow = {
+  state: string;
+  userId: string;
+  provider: 'openai' | 'gemini' | 'anthropic' | 'local';
+  encryptedContext: string;
+  expiresAt: string;
+  consumedAt: string | null;
+  createdAt: string;
+};
+
+export type MemoryUserModelSelectionPreferenceRow = UserModelSelectionPreferenceRecord;
+export type MemoryModelRecommendationRunRow = ModelRecommendationRunRecord;
+export type MemoryAiInvocationTraceRow = AiInvocationTraceRecord;
+
 export type MemoryStoreState = {
   users: Map<string, AuthUserWithPasswordRecord>;
   userIdByEmail: Map<string, string>;
   sessions: Map<string, MemorySessionRow>;
   providerCredentials: Map<string, MemoryProviderCredentialRow>;
+  userProviderCredentials: Map<string, MemoryUserProviderCredentialRow>;
+  providerOauthStates: Map<string, MemoryProviderOauthStateRow>;
+  userModelSelectionPreferences: Map<string, MemoryUserModelSelectionPreferenceRow>;
+  modelRecommendationRuns: Map<string, MemoryModelRecommendationRunRow>;
+  aiInvocationTraces: Map<string, MemoryAiInvocationTraceRow>;
   missions: Map<string, MissionRecord>;
   assistantContexts: Map<string, AssistantContextRecord>;
   assistantContextByClientId: Map<string, string>;
@@ -64,6 +93,11 @@ export function createMemoryStoreState(): MemoryStoreState {
     userIdByEmail: new Map<string, string>(),
     sessions: new Map<string, MemorySessionRow>(),
     providerCredentials: new Map<string, MemoryProviderCredentialRow>(),
+    userProviderCredentials: new Map<string, MemoryUserProviderCredentialRow>(),
+    providerOauthStates: new Map<string, MemoryProviderOauthStateRow>(),
+    userModelSelectionPreferences: new Map<string, MemoryUserModelSelectionPreferenceRow>(),
+    modelRecommendationRuns: new Map<string, MemoryModelRecommendationRunRow>(),
+    aiInvocationTraces: new Map<string, MemoryAiInvocationTraceRow>(),
     missions: new Map<string, MissionRecord>(),
     assistantContexts: new Map<string, AssistantContextRecord>(),
     assistantContextByClientId: new Map<string, string>(),

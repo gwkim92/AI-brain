@@ -194,7 +194,10 @@ export function GlassWidget({
                 </button>
             </div>
 
-            <div className="flex-1 overflow-hidden relative" onPointerDown={(e) => e.stopPropagation()}>
+            <div
+                className={`flex-1 relative ${id === "settings" || id === "model_control" ? "overflow-y-auto" : "overflow-hidden"}`}
+                onPointerDown={(e) => e.stopPropagation()}
+            >
                 {children}
             </div>
 

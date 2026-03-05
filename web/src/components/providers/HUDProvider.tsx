@@ -31,6 +31,7 @@ const KNOWN_WIDGET_IDS = new Set([
     "approvals",
     "memory",
     "settings",
+    "model_control",
 ]);
 
 function readStoredArray(key: string, fallback: string[]): string[] {
@@ -260,6 +261,14 @@ interface HUDContextType {
     archiveSession: (sessionId: string) => void;
     linkSessionTask: (sessionId: string, taskId?: string, missionId?: string) => void;
     markSessionContextDelivered: (sessionId: string, contextId: string, revision: number) => void;
+    updateSessionStaleState: (
+        sessionId: string,
+        state: {
+            stale: boolean;
+            reason?: string | null;
+            detectedAt?: string | null;
+        }
+    ) => void;
     setActiveWorkspacePreset: (preset: HudWorkspacePreset | null) => void;
     visualCoreScene: Jarvis3DScene | null;
     setVisualCoreScene: (scene: Jarvis3DScene) => void;
@@ -735,6 +744,53 @@ export function HUDProvider({ children }: { children: ReactNode }) {
         });
     }, []);
 
+    const updateSessionStaleState = useCallback((
+        sessionId: string,
+        state: {
+            stale: boolean;
+            reason?: string | null;
+            detectedAt?: string | null;
+        }
+    ) => {
+        if (!sessionId) {
+            return;
+        }
+        setSessions((prev) => {
+            const target = prev.find((session) => session.id === sessionId);
+            if (!target) {
+                return prev;
+            }
+
+            const nextStale = state.stale === true;
+            const nextReason =
+                nextStale
+                    ? (typeof state.reason === "string" && state.reason.trim().length > 0
+                        ? state.reason.trim()
+                        : target.staleReason ?? "server_state_lost")
+                    : undefined;
+            const nextDetectedAt =
+                nextStale
+                    ? (typeof state.detectedAt === "string" && state.detectedAt.trim().length > 0
+                        ? state.detectedAt
+                        : target.staleDetectedAt ?? new Date().toISOString())
+                    : undefined;
+
+            if (
+                Boolean(target.stale) === nextStale &&
+                (target.staleReason ?? undefined) === nextReason &&
+                (target.staleDetectedAt ?? undefined) === nextDetectedAt
+            ) {
+                return prev;
+            }
+
+            return patchSession(prev, sessionId, {
+                stale: nextStale,
+                staleReason: nextReason,
+                staleDetectedAt: nextDetectedAt,
+            });
+        });
+    }, []);
+
     useEffect(() => {
         if (!activeSessionId) return;
         setSessions((prev) =>
@@ -785,6 +841,7 @@ export function HUDProvider({ children }: { children: ReactNode }) {
             archiveSession,
             linkSessionTask,
             markSessionContextDelivered,
+            updateSessionStaleState,
             setActiveWorkspacePreset,
             visualCoreScene,
             setVisualCoreScene

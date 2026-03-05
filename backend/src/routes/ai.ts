@@ -1,7 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { sendError, sendSuccess } from '../lib/http';
-import { summarizeResult, maskErrorForApi } from '../providers/router';
+import { withAiInvocationTrace } from '../observability/ai-trace';
+import { resolveModelSelection } from '../providers/model-selection';
+import { summarizeResult, maskErrorForApi, toProviderCredentialUsage } from '../providers/router';
+import type { ProviderName } from '../providers/types';
 import { buildRetrievalSystemInstruction, retrieveWebEvidence } from '../retrieval/adapter-router';
 import {
   buildGroundingSystemInstruction,
@@ -38,8 +41,8 @@ import type { RouteContext } from './types';
 const AiRespondSchema = z.object({
   prompt: z.string().min(1),
   system_prompt: z.string().optional(),
-  provider: z.enum(['auto', 'openai', 'gemini', 'anthropic', 'local']).default('auto'),
-  strict_provider: z.boolean().default(false),
+  provider: z.enum(['auto', 'openai', 'gemini', 'anthropic', 'local']).optional(),
+  strict_provider: z.boolean().optional(),
   task_type: z
     .enum(['chat', 'execute', 'council', 'code', 'compute', 'long_run', 'high_risk', 'radar_review', 'upgrade_execution'])
     .default('chat'),
@@ -57,15 +60,29 @@ export async function aiRoutes(app: FastifyInstance, ctx: RouteContext) {
       return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid AI respond payload', parsed.error.flatten());
     }
 
+    const resolvedCredentials = await ctx.resolveRequestProviderCredentials(request);
+    const credentialsByProvider = resolvedCredentials.credentialsByProvider;
+    const userId = ctx.resolveRequestUserId(request);
+    const modelSelection = await resolveModelSelection({
+      store: ctx.store,
+      userId,
+      featureKey: 'assistant_chat',
+      override: {
+        provider: parsed.data.provider,
+        strictProvider: parsed.data.strict_provider,
+        model: parsed.data.model
+      }
+    });
+
     const grounding = resolveGroundingPolicy({
       prompt: parsed.data.prompt,
       taskType: parsed.data.task_type
     });
     const languagePolicy = buildLanguageSystemInstruction(parsed.data.prompt);
-    const providerAvailability = ctx.providerRouter.listAvailability();
+    const providerAvailability = ctx.providerRouter.listAvailability(credentialsByProvider);
     const externalProviderEnabled = providerAvailability.some((item) => item.enabled && item.provider !== 'local');
     const localProviderEnabled = providerAvailability.some((item) => item.provider === 'local' && item.enabled);
-    const strictLocalOnly = parsed.data.provider === 'local' && parsed.data.strict_provider;
+    const strictLocalOnly = modelSelection.provider === 'local' && modelSelection.strictProvider;
     const shouldRunGroundedRetrieval = grounding.requiresGrounding;
     let retrievalPack: Awaited<ReturnType<typeof retrieveWebEvidence>> | null = null;
     if (shouldRunGroundedRetrieval) {
@@ -143,18 +160,47 @@ export async function aiRoutes(app: FastifyInstance, ctx: RouteContext) {
           );
       const routed = useRetrievalOnlyFallback
         ? null
-        : await ctx.providerRouter.generate({
-            prompt: generationPrompt,
-            systemPrompt: generationSystemPrompt,
-            provider: parsed.data.provider,
-            strictProvider: parsed.data.strict_provider,
+        : await withAiInvocationTrace({
+            store: ctx.store,
+            env: ctx.env,
+            userId,
+            featureKey: 'assistant_chat',
             taskType: parsed.data.task_type,
-            model: parsed.data.model,
-            temperature: grounding.requiresGrounding ? strictFactualTemperature : parsed.data.temperature,
-            topP: grounding.requiresGrounding ? 0.9 : undefined,
-            stop: grounding.requiresGrounding ? ['<|im_start|>', '<|im_end|>', '<|endoftext|>'] : undefined,
-            maxOutputTokens: grounding.requiresGrounding ? strictFactualMaxTokens : parsed.data.max_output_tokens,
-            excludeProviders: grounding.requiresGrounding && !canUseLocalGroundedFallback ? ['local'] : undefined
+            requestProvider: modelSelection.provider,
+            requestModel: modelSelection.model,
+            traceId: ctx.resolveRequestTraceId(request),
+            contextRefs: {
+              route: '/api/v1/ai/respond',
+              model_selection_source: modelSelection.source
+            },
+            run: () =>
+              ctx.providerRouter.generate({
+                prompt: generationPrompt,
+                systemPrompt: generationSystemPrompt,
+                provider: modelSelection.provider,
+                strictProvider: modelSelection.strictProvider,
+                credentialsByProvider,
+                traceId: ctx.resolveRequestTraceId(request),
+                onSpanEvent: (event) => {
+                  request.log.info(
+                    {
+                      trace_id: event.traceId,
+                      provider: event.provider,
+                      success: event.success,
+                      latency_ms: event.latencyMs,
+                      error: event.error
+                    },
+                    event.name
+                  );
+                },
+                taskType: parsed.data.task_type,
+                model: modelSelection.model ?? undefined,
+                temperature: grounding.requiresGrounding ? strictFactualTemperature : parsed.data.temperature,
+                topP: grounding.requiresGrounding ? 0.9 : undefined,
+                stop: grounding.requiresGrounding ? ['<|im_start|>', '<|im_end|>', '<|endoftext|>'] : undefined,
+                maxOutputTokens: grounding.requiresGrounding ? strictFactualMaxTokens : parsed.data.max_output_tokens,
+                excludeProviders: grounding.requiresGrounding && !canUseLocalGroundedFallback ? ['local'] : undefined
+              })
           });
       const groundedLocalViolation =
         grounding.requiresGrounding && routed?.result.provider === 'local' && !canUseLocalGroundedFallback;
@@ -290,6 +336,8 @@ export async function aiRoutes(app: FastifyInstance, ctx: RouteContext) {
       const responseProvider = routed?.result.provider ?? 'local';
       const responseModel = routed?.result.model ?? 'retrieval-fallback-v1';
       const responseUsage = routed?.result.usage;
+      const responseCredential =
+        routed?.result.credential ?? toProviderCredentialUsage(credentialsByProvider[responseProvider as ProviderName]);
       const responseAttempts =
         routed?.attempts ?? [{ provider: 'local', status: 'skipped' as const, error: 'retrieval_only_fallback' }];
       const responseSelection =
@@ -306,8 +354,15 @@ export async function aiRoutes(app: FastifyInstance, ctx: RouteContext) {
           provider: responseProvider,
           model: responseModel,
           usage: responseUsage,
-          outputText: output
+          outputText: output,
+          credential: responseCredential
         }),
+        credential: {
+          source: responseCredential.source,
+          selected_credential_mode: responseCredential.selectedCredentialMode,
+          credential_priority: responseCredential.credentialPriority,
+          auth_access_token_expires_at: responseCredential.authAccessTokenExpiresAt
+        },
         attempts: responseAttempts,
         used_fallback: responseUsedFallback,
         selection: responseSelection,

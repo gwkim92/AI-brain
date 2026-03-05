@@ -45,6 +45,7 @@ export function resolveGroundingPolicy(input: GroundingPolicyInput): GroundingDe
   const hasCitationDemand = includesSignal(CITATION_PATTERN, haystack);
   const isNews = intent === 'news' || includesSignal(NEWS_PATTERN, haystack);
   const hasHighRisk = taskType === 'high_risk' || includesSignal(HIGH_RISK_PATTERN, haystack);
+  const hasRecencyWithFactualIntent = hasRecency && (hasFactual || isNews || hasCitationDemand);
 
   const reasons: string[] = [];
   if (hasHighRisk) reasons.push('high_risk_signal');
@@ -55,7 +56,7 @@ export function resolveGroundingPolicy(input: GroundingPolicyInput): GroundingDe
 
   const policy: GroundingPolicy = hasHighRisk
     ? 'high_risk_factual'
-    : hasRecency || hasFactual || hasCitationDemand || isNews || taskType === 'radar_review'
+    : hasRecencyWithFactualIntent || hasFactual || hasCitationDemand || isNews || taskType === 'radar_review'
       ? 'dynamic_factual'
       : 'static';
 

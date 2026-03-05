@@ -1,0 +1,238 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e4]:
+      - img [ref=e5]
+      - textbox "Ask JARVIS anything..." [ref=e7]
+      - button "Toggle runtime debug events" [ref=e8]: TRACE OFF
+      - button "EXEC" [disabled] [ref=e9]
+    - generic [ref=e10]:
+      - generic [ref=e11]:
+        - generic [ref=e16]:
+          - paragraph [ref=e17]: JARVIS
+          - paragraph [ref=e18]: Workspace Navigator
+        - button "Collapse sidebar" [ref=e19]:
+          - img [ref=e20]
+      - navigation [ref=e22]:
+        - paragraph [ref=e23]: Workspaces
+        - button "Inbox" [ref=e26]:
+          - img [ref=e28]
+          - generic [ref=e32]: Home
+        - generic [ref=e34]:
+          - button "Mission Control" [ref=e35]:
+            - img [ref=e37]
+            - generic [ref=e42]: Composite Mission
+          - button "Open Mission full stack" [ref=e43]:
+            - img [ref=e44]
+        - generic [ref=e50]:
+          - button "Code" [ref=e51]:
+            - img [ref=e53]
+            - generic [ref=e58]: Code Studio
+          - button "Open Code full stack" [ref=e59]:
+            - img [ref=e60]
+        - generic [ref=e66]:
+          - button "Research" [ref=e67]:
+            - img [ref=e69]
+            - generic [ref=e73]: Research Studio
+          - button "Open Research full stack" [ref=e74]:
+            - img [ref=e75]
+        - generic [ref=e81]:
+          - button "Intelligence" [ref=e82]:
+            - img [ref=e84]
+            - generic [ref=e87]: Finance and News
+          - button "Open Intelligence full stack" [ref=e88]:
+            - img [ref=e89]
+        - paragraph [ref=e94]: Control Plane
+        - button "Approvals" [ref=e97]:
+          - img [ref=e99]
+          - generic [ref=e103]: Approval Center
+        - button "Memory" [ref=e107]:
+          - img [ref=e109]
+          - generic [ref=e118]: Personal Memory
+        - button "Settings" [ref=e121]:
+          - img [ref=e123]
+          - generic [ref=e127]: System Settings
+        - button "Logout" [ref=e130]:
+          - img [ref=e132]
+          - generic [ref=e136]: Logout
+      - generic [ref=e140]: System Online
+    - generic [ref=e141]:
+      - main [ref=e142]:
+        - generic [ref=e144]: VISUAL CORE INITPROBINGENG:CPU SW:0
+        - generic:
+          - generic:
+            - generic:
+              - generic [ref=e145]:
+                - generic [ref=e146]:
+                  - generic [ref=e147]:
+                    - img [ref=e148]
+                    - heading "ORCHESTRATION HUB" [level=3] [ref=e155]
+                  - button "Close ORCHESTRATION HUB" [ref=e156]:
+                    - img [ref=e157]
+                - main [ref=e161]:
+                  - generic:
+                    - generic:
+                      - heading "INBOX" [level=1]
+                      - paragraph: SYSTEM DASHBOARD
+                    - generic [ref=e163]:
+                      - generic [ref=e164]:
+                        - generic [ref=e165]:
+                          - heading "TODAY SUMMARY" [level=2] [ref=e166]
+                          - img [ref=e167]
+                        - paragraph [ref=e171]: Loading summary...
+                      - generic [ref=e172]:
+                        - generic [ref=e173]:
+                          - heading "ALERTS" [level=2] [ref=e174]
+                          - img [ref=e175]
+                        - generic [ref=e177]:
+                          - generic [ref=e178]:
+                            - paragraph [ref=e179]: Pending Approvals
+                            - paragraph [ref=e180]: 0 proposal(s) waiting.
+                          - generic [ref=e181]:
+                            - paragraph [ref=e182]: Radar Signals
+                            - paragraph [ref=e183]: 0 adopt recommendation(s).
+                          - generic [ref=e184]:
+                            - paragraph [ref=e185]: Task Failures
+                            - paragraph [ref=e186]: All clear.
+                - img [ref=e188]
+              - generic [ref=e190]:
+                - generic [ref=e191]:
+                  - generic [ref=e192]:
+                    - img [ref=e193]
+                    - heading "SYSTEM SETTINGS" [level=3] [ref=e200]
+                  - button "Close SYSTEM SETTINGS" [ref=e201]:
+                    - img [ref=e202]
+                - main [ref=e206]:
+                  - heading "SYSTEM SETTINGS" [level=2] [ref=e208]:
+                    - img [ref=e209]
+                    - text: SYSTEM SETTINGS
+                  - generic [ref=e212]:
+                    - img [ref=e213]
+                    - text: Loading settings...
+                  - heading "Connectors" [level=3] [ref=e216]:
+                    - img [ref=e217]
+                    - text: Connectors
+                  - generic [ref=e224]:
+                    - generic [ref=e225]:
+                      - heading "My Provider Credentials" [level=3] [ref=e226]:
+                        - img [ref=e227]
+                        - text: My Provider Credentials
+                      - button "Refresh" [ref=e230]:
+                        - img [ref=e231]
+                        - text: Refresh
+                    - generic [ref=e236]:
+                      - generic [ref=e237]:
+                        - generic [ref=e238]:
+                          - generic [ref=e239]: OPENAI
+                          - generic [ref=e240]: none
+                        - paragraph [ref=e241]: mode=none · priority=api_key_first
+                        - generic [ref=e242]:
+                          - textbox "OPENAI personal API key" [ref=e243]
+                          - generic [ref=e244]:
+                            - button "SAVE KEY" [disabled] [ref=e245]
+                            - button "TEST" [ref=e246]
+                            - button "REMOVE" [disabled] [ref=e247]
+                            - button "CONNECT OAUTH" [ref=e248]
+                        - paragraph [ref=e249]: user_credential=no · api_key=no · oauth=no
+                      - generic [ref=e250]:
+                        - generic [ref=e251]:
+                          - generic [ref=e252]: GEMINI
+                          - generic [ref=e253]: none
+                        - paragraph [ref=e254]: mode=none · priority=api_key_first
+                        - generic [ref=e255]:
+                          - textbox "GEMINI personal API key" [ref=e256]
+                          - generic [ref=e257]:
+                            - button "SAVE KEY" [disabled] [ref=e258]
+                            - button "TEST" [ref=e259]
+                            - button "REMOVE" [disabled] [ref=e260]
+                            - button "CONNECT OAUTH" [ref=e261]
+                        - paragraph [ref=e262]: user_credential=no · api_key=no · oauth=no
+                      - generic [ref=e263]:
+                        - generic [ref=e264]:
+                          - generic [ref=e265]: ANTHROPIC
+                          - generic [ref=e266]: none
+                        - paragraph [ref=e267]: mode=none · priority=api_key_first
+                        - generic [ref=e268]:
+                          - textbox "ANTHROPIC personal API key" [ref=e269]
+                          - generic [ref=e270]:
+                            - button "SAVE KEY" [disabled] [ref=e271]
+                            - button "TEST" [ref=e272]
+                            - button "REMOVE" [disabled] [ref=e273]
+                        - paragraph [ref=e274]: user_credential=no · api_key=no · oauth=no
+                      - generic [ref=e275]:
+                        - generic [ref=e276]:
+                          - generic [ref=e277]: LOCAL
+                          - generic [ref=e278]: none
+                        - paragraph [ref=e279]: mode=none · priority=api_key_first
+                        - generic [ref=e280]:
+                          - textbox "LOCAL personal API key" [ref=e281]
+                          - generic [ref=e282]:
+                            - button "SAVE KEY" [disabled] [ref=e283]
+                            - button "TEST" [ref=e284]
+                            - button "REMOVE" [disabled] [ref=e285]
+                        - paragraph [ref=e286]: user_credential=no · api_key=no · oauth=no
+                  - generic [ref=e287]:
+                    - heading "Provider API Keys" [level=3] [ref=e289]:
+                      - img [ref=e290]
+                      - text: Provider API Keys
+                    - paragraph [ref=e293]: Provider API key registration is admin-only. Sign in with an admin account to manage keys.
+                  - generic [ref=e294]:
+                    - heading "HUD Runtime" [level=3] [ref=e295]:
+                      - img [ref=e296]
+                      - text: HUD Runtime
+                    - generic [ref=e299]:
+                      - generic [ref=e300]:
+                        - generic [ref=e301]: Visual Core 3D
+                        - button "ON" [ref=e302]
+                        - generic [ref=e303]: disable to reduce GPU usage
+                      - generic [ref=e304]:
+                        - generic [ref=e305]: Auto focus default
+                        - button "ON" [ref=e306]
+                      - generic [ref=e307]:
+                        - generic [ref=e308]: Manual hold seconds
+                        - spinbutton [ref=e309]: "90"
+                        - button "SAVE" [ref=e310]
+                        - generic [ref=e311]: range 15-600s
+                  - generic [ref=e312]:
+                    - heading "Policy" [level=3] [ref=e313]:
+                      - img [ref=e314]
+                      - text: Policy
+                    - list [ref=e316]:
+                      - listitem [ref=e317]: High-risk operations require explicit approval.
+                      - listitem [ref=e318]: Provider failover is enabled in auto mode.
+                  - generic [ref=e319]:
+                    - generic [ref=e320]:
+                      - heading "Model Registry" [level=3] [ref=e321]:
+                        - img [ref=e322]
+                        - text: Model Registry
+                      - generic [ref=e326]: 0 models
+                    - paragraph [ref=e327]: No models in registry. Connect a Postgres store and sync models.
+                  - generic [ref=e328]:
+                    - generic [ref=e329]:
+                      - heading "Routing Policies" [level=3] [ref=e330]:
+                        - img [ref=e331]
+                        - text: Routing Policies
+                      - button "Add" [ref=e335]:
+                        - img [ref=e336]
+                        - text: Add
+                    - paragraph [ref=e337]: No routing policies defined. Add one above or use the default routing.
+                - img [ref=e339]
+          - region "Context Dock" [ref=e341]:
+            - generic [ref=e343]:
+              - button "Dock Settings" [ref=e344]:
+                - generic [ref=e345]: Settings
+                - img [ref=e346]
+              - generic [ref=e352]:
+                - button "Tile widgets" [ref=e353]:
+                  - img [ref=e354]
+                  - text: TILE
+                - button "Close all widgets" [ref=e359]:
+                  - img [ref=e360]
+                  - text: CLEAR
+                - button "Reset layout" [ref=e364]:
+                  - img [ref=e365]
+                  - text: RESET
+      - button "Toggle panel (Ctrl+.)" [ref=e368]:
+        - img [ref=e369]
+  - button "Open Next.js Dev Tools" [ref=e376] [cursor=pointer]:
+    - img [ref=e377]
+  - alert [ref=e380]

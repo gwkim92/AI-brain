@@ -1,0 +1,573 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e35]:
+      - img [ref=e36]
+      - textbox "Ask JARVIS anything..." [ref=e38]
+      - button "Toggle runtime debug events" [ref=e39]: TRACE OFF
+      - button "EXEC" [disabled] [ref=e40]
+    - generic [ref=e41]:
+      - generic [ref=e42]:
+        - generic [ref=e47]:
+          - paragraph [ref=e48]: JARVIS
+          - paragraph [ref=e49]: Workspace Navigator
+        - button "Collapse sidebar" [ref=e50]:
+          - img [ref=e51]
+      - navigation [ref=e53]:
+        - paragraph [ref=e54]: Workspaces
+        - button "Inbox" [ref=e57]:
+          - img [ref=e59]
+          - generic [ref=e63]: Home
+        - generic [ref=e65]:
+          - button "Mission Control" [ref=e66]:
+            - img [ref=e68]
+            - generic [ref=e73]: Composite Mission
+          - button "Open Mission full stack" [ref=e74]:
+            - img [ref=e75]
+        - generic [ref=e81]:
+          - button "Code" [ref=e82]:
+            - img [ref=e84]
+            - generic [ref=e89]: Code Studio
+          - button "Open Code full stack" [ref=e90]:
+            - img [ref=e91]
+        - generic [ref=e97]:
+          - button "Research" [ref=e98]:
+            - img [ref=e100]
+            - generic [ref=e104]: Research Studio
+          - button "Open Research full stack" [ref=e105]:
+            - img [ref=e106]
+        - generic [ref=e112]:
+          - button "Intelligence" [ref=e113]:
+            - img [ref=e115]
+            - generic [ref=e118]: Finance and News
+          - button "Open Intelligence full stack" [ref=e119]:
+            - img [ref=e120]
+        - paragraph [ref=e125]: Control Plane
+        - button "Approvals" [ref=e128]:
+          - img [ref=e130]
+          - generic [ref=e134]: Approval Center
+        - button "Memory" [ref=e138]:
+          - img [ref=e140]
+          - generic [ref=e149]: Personal Memory
+        - button "Settings" [ref=e152]:
+          - img [ref=e154]
+          - generic [ref=e158]: System Settings
+        - button "Model Control" [ref=e161]:
+          - img [ref=e163]
+          - generic [ref=e165]: Model Control
+        - button "Logout" [ref=e168]:
+          - img [ref=e170]
+          - generic [ref=e174]: Logout
+      - generic [ref=e178]: System Online
+    - generic [ref=e179]:
+      - main [ref=e180]:
+        - generic [ref=e182]: VISUAL CORE OKFULL 3D ACTIVEENG:GPGPU SW:1
+        - generic:
+          - generic:
+            - generic:
+              - generic [ref=e486]:
+                - generic [ref=e487]:
+                  - generic [ref=e488]:
+                    - img [ref=e489]
+                    - heading "AI ASSISTANT" [level=3] [ref=e496]
+                  - button "Close AI ASSISTANT" [ref=e497]:
+                    - img [ref=e498]
+                - main [ref=e502]:
+                  - generic [ref=e504]:
+                    - generic [ref=e505]:
+                      - heading "ASSISTANT" [level=2] [ref=e506]:
+                        - img [ref=e507]
+                        - text: ASSISTANT
+                      - generic [ref=e510]:
+                        - generic [ref=e511]:
+                          - img [ref=e512]
+                          - text: ASSISTANT MODE
+                        - button "DEBUG OFF" [ref=e524]
+                    - generic [ref=e525]:
+                      - generic [ref=e526]:
+                        - generic [ref=e527]: User Mode
+                        - generic [ref=e528]: grounded answers enabled for dynamic factual prompts
+                      - generic [ref=e530]:
+                        - generic [ref=e531]:
+                          - generic [ref=e532]: AI EXECUTION STAGES
+                          - generic [ref=e536]: model control trace test user managed
+                        - generic [ref=e537]:
+                          - generic [ref=e538]:
+                            - generic [ref=e539]: Accepted
+                            - generic [ref=e540]: "#1"
+                          - generic [ref=e541]:
+                            - generic [ref=e542]: Policy
+                            - generic [ref=e543]: "#2"
+                          - generic [ref=e544]:
+                            - generic [ref=e545]: Generation
+                            - generic [ref=e546]: "#3"
+                          - generic [ref=e752]:
+                            - generic [ref=e753]: Quality
+                            - generic [ref=e754]: "#4"
+                          - generic [ref=e755]:
+                            - generic [ref=e756]: Finalized
+                            - generic [ref=e757]: "#5"
+                        - generic [ref=e548]:
+                          - generic [ref=e549]: Finalized
+                          - generic [ref=e552]: 100%
+                        - generic [ref=e555]:
+                          - generic [ref=e556]:
+                            - generic [ref=e557]: REASONING SUMMARY
+                            - generic [ref=e560]: PASS
+                          - paragraph [ref=e561]: "실행 완료: 최종 응답을 전달했습니다."
+                          - list [ref=e562]:
+                            - listitem [ref=e563]: "- 정책 판정: static · grounded optional"
+                            - listitem [ref=e564]: "- 근거 수집: 0개 출처 확보"
+                            - listitem [ref=e758]: "- 품질 게이트: pass"
+                            - listitem [ref=e759]: "- 전달 경로: local/qwen2.5:7b · normal"
+                    - generic [ref=e565]:
+                      - generic [ref=e567]:
+                        - generic [ref=e568]:
+                          - img [ref=e570]
+                          - generic [ref=e573]: JARVIS
+                        - generic [ref=e575]: Connected to backend. Ask anything and I will route this to available providers.
+                      - generic [ref=e761]:
+                        - generic [ref=e762]:
+                          - img [ref=e764]
+                          - generic [ref=e767]: JARVIS
+                        - generic [ref=e769]: "It appears you've provided a series of terms that might be related to software development or system management. Here's a potential breakdown: 1. **Model**: Often used in context like model-view-controller (MVC) in software engineering. 2. **Control**: Could refer to control logic, control systems, or user interface controls. 3. **Trace**: Used for logging and debugging purposes. 4. **Test**: Commonly related to quality assurance and software testing activities. 5. **User Managed**: Indicates that users have management responsibilities. If these terms are part of a specific context you need clarified, please provide more details!"
+                        - generic [ref=e771]:
+                          - paragraph [ref=e772]: Response Feedback
+                          - paragraph [ref=e773]: 답변 품질과 출처 신뢰도를 각각 평가해주세요.
+                          - generic [ref=e774]:
+                            - generic [ref=e775]:
+                              - generic [ref=e776]: 답변 품질
+                              - button "GOOD" [ref=e777]
+                              - button "BAD" [ref=e778]
+                            - generic [ref=e779]:
+                              - generic [ref=e780]: 출처 신뢰도
+                              - button "GOOD" [ref=e781]
+                              - button "BAD" [ref=e782]
+                    - generic [ref=e577]:
+                      - textbox "Message JARVIS..." [ref=e578]
+                      - button "Send Message" [disabled] [ref=e579]:
+                        - img [ref=e580]
+                - img [ref=e584]
+              - generic [ref=e586]:
+                - generic [ref=e587]:
+                  - generic [ref=e588]:
+                    - img [ref=e589]
+                    - heading "TASK MANAGER" [level=3] [ref=e596]
+                  - button "Close TASK MANAGER" [ref=e597]:
+                    - img [ref=e598]
+                - main [ref=e602]:
+                  - heading "TASK MANAGER" [level=2] [ref=e604]:
+                    - img [ref=e605]
+                    - text: TASK MANAGER
+                  - generic [ref=e608]:
+                    - generic [ref=e609]:
+                      - img [ref=e610]
+                      - textbox [ref=e613]:
+                        - /placeholder: Search tasks...
+                    - generic [ref=e614]:
+                      - combobox [ref=e615]:
+                        - option "ALL" [selected]
+                        - option "QUEUED"
+                        - option "RUNNING"
+                        - option "BLOCKED"
+                        - option "RETRYING"
+                        - option "DONE"
+                        - option "FAILED"
+                        - option "CANCELLED"
+                      - button "Refresh tasks" [ref=e616]:
+                        - img [ref=e617]
+                  - generic [ref=e622]:
+                    - generic [ref=e623]:
+                      - generic [ref=e624]: ID
+                      - generic [ref=e625]: Title
+                      - generic [ref=e626]: Mode
+                      - generic [ref=e627]: State
+                    - link "5af661b1 model control trace test user managed code done 3m ago" [ref=e1033] [cursor=pointer]:
+                      - /url: /tasks/5af661b1-492b-4154-889f-d08332375d9e
+                      - generic [ref=e784]: 5af661b1
+                      - generic [ref=e785]: model control trace test user managed
+                      - generic [ref=e786]: code
+                      - generic [ref=e788]: done
+                      - generic [ref=e789]: 3m ago
+                - img [ref=e640]
+              - generic [ref=e642]:
+                - generic [ref=e643]:
+                  - generic [ref=e644]:
+                    - img [ref=e645]
+                    - heading "WORKBENCH" [level=3] [ref=e652]
+                  - button "Close WORKBENCH" [ref=e653]:
+                    - img [ref=e654]
+                - main [ref=e658]:
+                  - generic [ref=e659]:
+                    - heading "CODE & COMPUTE WORKBENCH" [level=1] [ref=e660]:
+                      - img [ref=e661]
+                      - text: CODE & COMPUTE WORKBENCH
+                    - paragraph [ref=e663]: DEDICATED EXECUTION RUN API
+                  - generic [ref=e664]:
+                    - button "CODE" [ref=e665]:
+                      - img [ref=e666]
+                      - text: CODE
+                    - button "COMPUTE" [ref=e668]:
+                      - img [ref=e669]
+                      - text: COMPUTE
+                  - generic [ref=e672]:
+                    - paragraph [ref=e673]: Prompt
+                    - textbox "Paste code task request..." [ref=e674]
+                    - generic [ref=e675]:
+                      - combobox [ref=e676]:
+                        - option "AUTO" [selected]
+                        - option "OPENAI (gpt-4.1-mini)" [disabled]
+                        - option "GEMINI (gemini-2.5-pro)" [disabled]
+                        - option "ANTHROPIC (claude-3-7-sonnet-latest)" [disabled]
+                        - option "LOCAL (qwen2.5:7b)"
+                      - combobox "model override (optional)" [ref=e677]
+                      - generic [ref=e678]:
+                        - checkbox "strict provider" [disabled] [ref=e679]
+                        - text: strict provider
+                    - generic [ref=e680]:
+                      - button "RUN" [disabled] [ref=e681]
+                      - generic [ref=e682]: "Provider: -"
+                      - generic [ref=e683]: "Credential: pending"
+                      - generic [ref=e684]: "Task: -"
+                      - generic [ref=e685]: "Run: -"
+                    - paragraph [ref=e686]: "Requested route: auto/default · strict=off"
+                  - generic [ref=e688]:
+                    - generic [ref=e689]:
+                      - generic [ref=e690]:
+                        - img [ref=e691]
+                        - text: "Database Access: Task sandbox policy"
+                      - generic [ref=e695]:
+                        - img [ref=e696]
+                        - text: "Network: Provider router policy"
+                    - generic [ref=e698]:
+                      - generic [ref=e699]:
+                        - generic [ref=e701]:
+                          - img [ref=e702]
+                          - generic [ref=e705]: typescript SANDBOX
+                        - code [ref=e708]: // Enter a code task prompt and press RUN
+                        - generic [ref=e710]: No execution yet.
+                      - generic [ref=e711]:
+                        - generic [ref=e713]:
+                          - img [ref=e714]
+                          - generic [ref=e717]: json SANDBOX
+                        - code [ref=e720]: "{ \"mode\": \"code\", \"provider_model\": \"-\", \"task_id\": \"-\", \"run_id\": \"-\" }"
+                        - generic [ref=e722]: No execution yet.
+                - img [ref=e724]
+              - generic [ref=e790]:
+                - generic [ref=e791]:
+                  - generic [ref=e792]:
+                    - img [ref=e793]
+                    - heading "MODEL CONTROL" [level=3] [ref=e800]
+                  - button "Close MODEL CONTROL" [ref=e801]:
+                    - img [ref=e802]
+                - main [ref=e806]:
+                  - generic [ref=e807]:
+                    - heading "MODEL CONTROL" [level=2] [ref=e808]:
+                      - img [ref=e809]
+                      - text: MODEL CONTROL
+                    - paragraph [ref=e810]: Choose credential mode, set per-feature model defaults, request recommendations, and inspect invocation traces.
+                  - generic [ref=e811]:
+                    - button "Refresh" [ref=e812]:
+                      - img [ref=e813]
+                      - text: Refresh
+                    - generic [ref=e1025]: "Assistant Chat routing updated: orchestrator-managed"
+                  - generic [ref=e818]:
+                    - heading "Credential Mode (Explicit)" [level=3] [ref=e819]:
+                      - img [ref=e820]
+                      - text: Credential Mode (Explicit)
+                    - paragraph [ref=e823]: "`auto | api_key | oauth_official | oauth_gateway`"
+                    - generic [ref=e824]:
+                      - generic [ref=e825]:
+                        - generic [ref=e826]:
+                          - generic [ref=e827]:
+                            - paragraph [ref=e828]: OPENAI
+                            - generic [ref=e829]: "source: none"
+                            - generic [ref=e830]: "active: none"
+                          - generic [ref=e831]: key=no · oauth-official=no · oauth-gateway=no
+                        - generic [ref=e832]:
+                          - combobox [ref=e833]:
+                            - option "auto" [selected]
+                            - option "api_key"
+                            - option "oauth_official"
+                            - option "oauth_gateway"
+                          - button "Apply mode" [disabled] [ref=e834]
+                      - generic [ref=e835]:
+                        - generic [ref=e836]:
+                          - generic [ref=e837]:
+                            - paragraph [ref=e838]: GEMINI
+                            - generic [ref=e839]: "source: none"
+                            - generic [ref=e840]: "active: none"
+                          - generic [ref=e841]: key=no · oauth-official=no · oauth-gateway=no
+                        - generic [ref=e842]:
+                          - combobox [ref=e843]:
+                            - option "auto" [selected]
+                            - option "api_key"
+                            - option "oauth_official"
+                            - option "oauth_gateway"
+                          - button "Apply mode" [disabled] [ref=e844]
+                      - generic [ref=e845]:
+                        - generic [ref=e846]:
+                          - generic [ref=e847]:
+                            - paragraph [ref=e848]: ANTHROPIC
+                            - generic [ref=e849]: "source: none"
+                            - generic [ref=e850]: "active: none"
+                          - generic [ref=e851]: key=no · oauth-official=no · oauth-gateway=no
+                        - generic [ref=e852]:
+                          - combobox [ref=e853]:
+                            - option "auto" [selected]
+                            - option "api_key"
+                          - button "Apply mode" [disabled] [ref=e854]
+                      - generic [ref=e855]:
+                        - generic [ref=e856]:
+                          - generic [ref=e857]:
+                            - paragraph [ref=e858]: LOCAL
+                            - generic [ref=e859]: "source: none"
+                            - generic [ref=e860]: "active: none"
+                          - generic [ref=e861]: key=no · oauth-official=no · oauth-gateway=no
+                        - generic [ref=e862]:
+                          - combobox [ref=e863]:
+                            - option "auto" [selected]
+                            - option "api_key"
+                          - button "Apply mode" [disabled] [ref=e864]
+                  - generic [ref=e865]:
+                    - heading "Feature Model Defaults" [level=3] [ref=e866]:
+                      - img [ref=e867]
+                      - text: Feature Model Defaults
+                    - paragraph [ref=e879]: "Pick who controls routing for each feature: Orchestrator or User. Resolution order: request override > feature default > global default > auto."
+                    - generic [ref=e880]:
+                      - generic [ref=e881]:
+                        - generic [ref=e882]:
+                          - paragraph [ref=e883]: Global Default
+                          - generic [ref=e884]: routing=orchestrator-managed
+                        - generic [ref=e885]:
+                          - combobox [disabled] [ref=e886]:
+                            - option "auto" [selected]
+                            - option "openai"
+                            - option "gemini"
+                            - option "anthropic"
+                            - option "local"
+                          - combobox [ref=e887]:
+                            - option "orchestrator-managed" [selected]
+                            - option "user-managed"
+                          - combobox "model id (optional)" [disabled] [ref=e888]
+                          - generic [ref=e889]:
+                            - checkbox "strict" [disabled] [ref=e890]
+                            - text: strict
+                          - button "Save" [ref=e891]
+                      - generic [ref=e892]:
+                        - generic [ref=e893]:
+                          - paragraph [ref=e894]: Assistant Chat
+                          - generic [ref=e895]: routing=orchestrator-managed
+                        - generic [ref=e896]:
+                          - combobox [disabled] [ref=e897]:
+                            - option "auto" [selected]
+                            - option "openai"
+                            - option "gemini"
+                            - option "anthropic"
+                            - option "local"
+                          - combobox [ref=e898]:
+                            - option "orchestrator-managed" [selected]
+                            - option "user-managed"
+                          - combobox "model id (optional)" [disabled] [ref=e899]
+                          - generic [ref=e900]:
+                            - checkbox "strict" [disabled] [ref=e901]
+                            - text: strict
+                          - button "Save" [ref=e902]
+                      - generic [ref=e903]:
+                        - generic [ref=e904]:
+                          - paragraph [ref=e905]: Assistant Context Run
+                          - generic [ref=e906]: routing=orchestrator-managed
+                        - generic [ref=e907]:
+                          - combobox [disabled] [ref=e908]:
+                            - option "auto" [selected]
+                            - option "openai"
+                            - option "gemini"
+                            - option "anthropic"
+                            - option "local"
+                          - combobox [ref=e909]:
+                            - option "orchestrator-managed" [selected]
+                            - option "user-managed"
+                          - combobox "model id (optional)" [disabled] [ref=e910]
+                          - generic [ref=e911]:
+                            - checkbox "strict" [disabled] [ref=e912]
+                            - text: strict
+                          - button "Save" [ref=e913]
+                      - generic [ref=e914]:
+                        - generic [ref=e915]:
+                          - paragraph [ref=e916]: Council Run
+                          - generic [ref=e917]: routing=orchestrator-managed
+                        - generic [ref=e918]:
+                          - combobox [disabled] [ref=e919]:
+                            - option "auto" [selected]
+                            - option "openai"
+                            - option "gemini"
+                            - option "anthropic"
+                            - option "local"
+                          - combobox [ref=e920]:
+                            - option "orchestrator-managed" [selected]
+                            - option "user-managed"
+                          - combobox "model id (optional)" [disabled] [ref=e921]
+                          - generic [ref=e922]:
+                            - checkbox "strict" [disabled] [ref=e923]
+                            - text: strict
+                          - button "Save" [ref=e924]
+                      - generic [ref=e925]:
+                        - generic [ref=e926]:
+                          - paragraph [ref=e927]: Execution Code
+                          - generic [ref=e928]: routing=orchestrator-managed
+                        - generic [ref=e929]:
+                          - combobox [disabled] [ref=e930]:
+                            - option "auto" [selected]
+                            - option "openai"
+                            - option "gemini"
+                            - option "anthropic"
+                            - option "local"
+                          - combobox [ref=e931]:
+                            - option "orchestrator-managed" [selected]
+                            - option "user-managed"
+                          - combobox "model id (optional)" [disabled] [ref=e932]
+                          - generic [ref=e933]:
+                            - checkbox "strict" [disabled] [ref=e934]
+                            - text: strict
+                          - button "Save" [ref=e935]
+                      - generic [ref=e936]:
+                        - generic [ref=e937]:
+                          - paragraph [ref=e938]: Execution Compute
+                          - generic [ref=e939]: routing=orchestrator-managed
+                        - generic [ref=e940]:
+                          - combobox [disabled] [ref=e941]:
+                            - option "auto" [selected]
+                            - option "openai"
+                            - option "gemini"
+                            - option "anthropic"
+                            - option "local"
+                          - combobox [ref=e942]:
+                            - option "orchestrator-managed" [selected]
+                            - option "user-managed"
+                          - combobox "model id (optional)" [disabled] [ref=e943]
+                          - generic [ref=e944]:
+                            - checkbox "strict" [disabled] [ref=e945]
+                            - text: strict
+                          - button "Save" [ref=e946]
+                      - generic [ref=e947]:
+                        - generic [ref=e948]:
+                          - paragraph [ref=e949]: Mission Plan Generation
+                          - generic [ref=e950]: routing=orchestrator-managed
+                        - generic [ref=e951]:
+                          - combobox [disabled] [ref=e952]:
+                            - option "auto" [selected]
+                            - option "openai"
+                            - option "gemini"
+                            - option "anthropic"
+                            - option "local"
+                          - combobox [ref=e953]:
+                            - option "orchestrator-managed" [selected]
+                            - option "user-managed"
+                          - combobox "model id (optional)" [disabled] [ref=e954]
+                          - generic [ref=e955]:
+                            - checkbox "strict" [disabled] [ref=e956]
+                            - text: strict
+                          - button "Save" [ref=e957]
+                      - generic [ref=e958]:
+                        - generic [ref=e959]:
+                          - paragraph [ref=e960]: Mission Execute Step
+                          - generic [ref=e961]: routing=orchestrator-managed
+                        - generic [ref=e962]:
+                          - combobox [disabled] [ref=e963]:
+                            - option "auto" [selected]
+                            - option "openai"
+                            - option "gemini"
+                            - option "anthropic"
+                            - option "local"
+                          - combobox [ref=e964]:
+                            - option "orchestrator-managed" [selected]
+                            - option "user-managed"
+                          - combobox "model id (optional)" [disabled] [ref=e965]
+                          - generic [ref=e966]:
+                            - checkbox "strict" [disabled] [ref=e967]
+                            - text: strict
+                          - button "Save" [ref=e968]
+                  - generic [ref=e969]:
+                    - heading "Recommender" [level=3] [ref=e970]:
+                      - img [ref=e971]
+                      - text: Recommender
+                    - generic [ref=e974]:
+                      - combobox [ref=e975]:
+                        - option "Assistant Chat" [selected]
+                        - option "Assistant Context Run"
+                        - option "Council Run"
+                        - option "Execution Code"
+                        - option "Execution Compute"
+                        - option "Mission Plan Generation"
+                        - option "Mission Execute Step"
+                      - textbox "Paste prompt or task context for recommendation..." [ref=e976]
+                      - button "Recommend" [disabled] [ref=e977]
+                    - paragraph [ref=e1034]: No recommendations yet.
+                  - generic [ref=e980]:
+                    - heading "Recent AI Traces" [level=3] [ref=e981]:
+                      - img [ref=e982]
+                      - text: Recent AI Traces
+                    - generic [ref=e986]:
+                      - generic [ref=e987]:
+                        - paragraph [ref=e988]: Total
+                        - paragraph [ref=e989]: "3"
+                      - generic [ref=e990]:
+                        - paragraph [ref=e991]: Success
+                        - paragraph [ref=e992]: "3"
+                      - generic [ref=e993]:
+                        - paragraph [ref=e994]: Failure
+                        - paragraph [ref=e995]: "0"
+                      - generic [ref=e996]:
+                        - paragraph [ref=e997]: P95 (ms)
+                        - paragraph [ref=e998]: "8311"
+                    - generic [ref=e999]:
+                      - generic [ref=e1035]:
+                        - generic [ref=e1036]:
+                          - paragraph [ref=e1037]: Assistant Chat · local/qwen2.5:7b
+                          - generic [ref=e1038]: 7498ms
+                        - paragraph [ref=e1039]: request=auto/default · credential=none(none)
+                        - paragraph [ref=e1040]: 2026. 3. 5. 오후 5:55:25
+                      - generic [ref=e1027]:
+                        - generic [ref=e1028]:
+                          - paragraph [ref=e1029]: Assistant Chat · local/qwen2.5:7b
+                          - generic [ref=e1030]: 8311ms
+                        - paragraph [ref=e1031]: request=local/qwen2.5:7b · credential=none(none)
+                        - paragraph [ref=e1032]: 2026. 3. 5. 오후 5:54:38
+                      - generic [ref=e1000]:
+                        - generic [ref=e1001]:
+                          - paragraph [ref=e1002]: Assistant Context Run · local/qwen2.5:7b
+                          - generic [ref=e1003]: 10953ms
+                        - paragraph [ref=e1004]: request=auto/default · credential=none(none)
+                        - paragraph [ref=e1005]: 2026. 3. 5. 오후 5:52:51
+                - img [ref=e1007]
+          - region "Context Dock" [ref=e228]:
+            - generic [ref=e230]:
+              - button "Dock Assistant" [ref=e726]:
+                - generic [ref=e727]: Assistant
+                - img [ref=e1009]
+                - img [ref=e1013]
+              - button "Dock Tasks" [ref=e734]:
+                - generic [ref=e735]: Tasks
+                - img [ref=e736]
+                - img [ref=e740]
+              - button "Dock Workbench" [ref=e743]:
+                - generic [ref=e744]: Workbench
+                - img [ref=e745]
+                - img [ref=e749]
+              - button "Dock Model Control" [ref=e1016]:
+                - generic [ref=e1017]: Model Control
+                - img [ref=e1018]
+              - generic [ref=e239]:
+                - button "Tile widgets" [ref=e240]:
+                  - img [ref=e241]
+                  - text: TILE
+                - button "Close all widgets" [ref=e246]:
+                  - img [ref=e247]
+                  - text: CLEAR
+                - button "Reset layout" [ref=e251]:
+                  - img [ref=e252]
+                  - text: RESET
+      - button "Toggle panel (Ctrl+.)" [ref=e255]:
+        - img [ref=e256]
+  - button "Open Next.js Dev Tools" [ref=e21] [cursor=pointer]:
+    - img [ref=e22]
+  - alert [ref=e25]

@@ -1,4 +1,5 @@
 import { ensureOk, joinPath } from '../http';
+import { withReasonAwareRetry } from '../retry';
 import type {
   LlmProvider,
   ProviderAvailability,
@@ -44,12 +45,20 @@ export class LocalProvider implements LlmProvider {
       throw new Error('local provider is disabled');
     }
 
+    const scopedCredential = request.credentialsByProvider?.local;
+    const hasScopedCredential = Boolean(scopedCredential && scopedCredential.source !== 'none');
+    const runtimeApiKey = hasScopedCredential
+      ? scopedCredential?.selectedCredentialMode === 'api_key'
+        ? scopedCredential.apiKey
+        : undefined
+      : this.options.apiKey;
+
     const headers: Record<string, string> = {
       'content-type': 'application/json'
     };
 
-    if (this.options.apiKey) {
-      headers.authorization = `Bearer ${this.options.apiKey}`;
+    if (runtimeApiKey) {
+      headers.authorization = `Bearer ${runtimeApiKey}`;
     }
 
     const model = request.model ?? this.options.model;
@@ -60,7 +69,7 @@ export class LocalProvider implements LlmProvider {
         throw error;
       }
 
-      const fallbackModels = await this.pickFallbackModels(model, headers);
+      const fallbackModels = await this.pickFallbackModels(model, headers, runtimeApiKey);
       if (fallbackModels.length === 0) {
         throw error;
       }
@@ -101,22 +110,30 @@ export class LocalProvider implements LlmProvider {
     }
     messages.push({ role: 'user', content: request.prompt });
 
-    const response = await fetch(joinPath(this.options.baseUrl, '/v1/chat/completions'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: request.temperature,
-        top_p: request.topP,
-        stop: request.stop,
-        max_tokens: request.maxOutputTokens,
-        stream: false
-      })
-    });
+    const bodyText = await withReasonAwareRetry(
+      async () => {
+        const response = await fetch(joinPath(this.options.baseUrl, '/v1/chat/completions'), {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            model,
+            messages,
+            temperature: request.temperature,
+            top_p: request.topP,
+            stop: request.stop,
+            max_tokens: request.maxOutputTokens,
+            stream: false
+          })
+        });
 
-    const bodyText = await response.text();
-    ensureOk(response, bodyText);
+        const text = await response.text();
+        ensureOk(response, text);
+        return text;
+      },
+      {
+        provider: this.name
+      }
+    );
 
     const payload = JSON.parse(bodyText) as {
       choices?: Array<{
@@ -157,15 +174,27 @@ export class LocalProvider implements LlmProvider {
     );
   }
 
-  private async pickFallbackModels(currentModel: string, headers: Record<string, string>): Promise<string[]> {
-    const response = await fetch(joinPath(this.options.baseUrl, '/api/tags'), {
-      method: 'GET',
-      headers: this.options.apiKey
-        ? { authorization: headers.authorization as string }
-        : undefined
-    });
-    const raw = await response.text();
-    ensureOk(response, raw);
+  private async pickFallbackModels(
+    currentModel: string,
+    headers: Record<string, string>,
+    runtimeApiKey?: string
+  ): Promise<string[]> {
+    const raw = await withReasonAwareRetry(
+      async () => {
+        const response = await fetch(joinPath(this.options.baseUrl, '/api/tags'), {
+          method: 'GET',
+          headers: runtimeApiKey
+            ? { authorization: headers.authorization as string }
+            : undefined
+        });
+        const text = await response.text();
+        ensureOk(response, text);
+        return text;
+      },
+      {
+        provider: this.name
+      }
+    );
 
     const payload = JSON.parse(raw) as {
       models?: Array<{ name?: string }>;

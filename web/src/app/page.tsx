@@ -40,6 +40,7 @@ import { ReportsModule } from "@/components/modules/ReportsModule";
 import { ApprovalsModule } from "@/components/modules/ApprovalsModule";
 import { MemoryModule } from "@/components/modules/MemoryModule";
 import { SettingsModule } from "@/components/modules/SettingsModule";
+import { ModelControlModule } from "@/components/modules/ModelControlModule";
 
 const EVENT_PULSE_MS = 2200;
 const KNOWN_WIDGET_IDS = new Set([
@@ -52,6 +53,7 @@ const KNOWN_WIDGET_IDS = new Set([
   "approvals",
   "memory",
   "settings",
+  "model_control",
 ]);
 
 type VisualSignalSnapshot = {
@@ -83,7 +85,8 @@ const WIDGET_DEFAULTS: Record<string, { x: number; y: number; w: number; h: numb
   reports:   { x: 240, y: 70,  w: 380, h: 360 },
   approvals: { x: 60,  y: 120, w: 360, h: 340 },
   memory:    { x: 280, y: 140, w: 360, h: 340 },
-  settings:  { x: 160, y: 100, w: 340, h: 340 },
+  settings:  { x: 140, y: 72,  w: 620, h: 760 },
+  model_control: { x: 180, y: 72, w: 760, h: 760 },
 };
 
 const WIDGET_TITLES: Record<string, string> = {
@@ -96,6 +99,7 @@ const WIDGET_TITLES: Record<string, string> = {
   approvals: "PENDING APPROVALS",
   memory: "SEMANTIC MEMORY",
   settings: "SYSTEM SETTINGS",
+  model_control: "MODEL CONTROL",
 };
 
 const WIDGET_COMPONENTS: Record<string, React.ComponentType> = {
@@ -108,6 +112,7 @@ const WIDGET_COMPONENTS: Record<string, React.ComponentType> = {
   approvals: ApprovalsModule,
   memory: MemoryModule,
   settings: SettingsModule,
+  model_control: ModelControlModule,
 };
 
 function HUDWidgetRenderer({ mountedWidgets, activeWidgets }: { mountedWidgets: string[]; activeWidgets: string[] }) {

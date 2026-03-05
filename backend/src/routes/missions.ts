@@ -5,6 +5,7 @@ import { sendError, sendSuccess } from '../lib/http';
 import { classifyComplexity, buildSimplePlan } from '../orchestrator/complexity';
 import { executeMission } from '../orchestrator/mission-executor';
 import { generatePlan, planToMissionInput } from '../orchestrator/planner';
+import { resolveModelSelection } from '../providers/model-selection';
 import type { MissionContractRecord, MissionContractUpdateInput, MissionRecord, MissionStepRecord } from '../store/types';
 import type { RouteContext } from './types';
 import { applySseCorsHeaders, truncateText, buildMissionSignature, type MissionDomain, type MissionStepType } from './types';
@@ -64,6 +65,12 @@ const MissionListQuerySchema = z.object({
 const MissionEventsQuerySchema = z.object({
   poll_ms: z.coerce.number().int().min(300).max(10000).default(1200),
   timeout_ms: z.coerce.number().int().min(1000).max(120000).default(45000)
+});
+
+const MissionExecuteSchema = z.object({
+  provider: z.enum(['auto', 'openai', 'gemini', 'anthropic', 'local']).optional(),
+  strict_provider: z.boolean().optional(),
+  model: z.string().max(160).optional()
 });
 
 const MissionUpdateSchema = z
@@ -171,7 +178,18 @@ function buildDefaultMissionSteps(domain: MissionDomain, objective: string): Mis
 }
 
 export async function missionRoutes(app: FastifyInstance, ctx: RouteContext) {
-  const { store, providerRouter, notificationService, resolveRequestUserId, publishMissionUpdated, subscribeMissionUpdates, missionExecutionsInFlight } = ctx;
+  const {
+    store,
+    env,
+    providerRouter,
+    notificationService,
+    resolveRequestUserId,
+    resolveRequestTraceId,
+    resolveRequestProviderCredentials,
+    publishMissionUpdated,
+    subscribeMissionUpdates,
+    missionExecutionsInFlight
+  } = ctx;
 
   app.post('/api/v1/missions', async (request, reply) => {
     const parsed = MissionCreateSchema.safeParse(request.body);
@@ -246,8 +264,23 @@ export async function missionRoutes(app: FastifyInstance, ctx: RouteContext) {
   });
 
   app.post('/api/v1/missions/:missionId/execute', async (request, reply) => {
+    const parsedBody = MissionExecuteSchema.safeParse(request.body ?? {});
+    if (!parsedBody.success) {
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid mission execute payload', parsedBody.error.flatten());
+    }
     const missionId = (request.params as { missionId: string }).missionId;
     const userId = resolveRequestUserId(request);
+    const resolvedCredentials = await resolveRequestProviderCredentials(request);
+    const modelSelection = await resolveModelSelection({
+      store,
+      userId,
+      featureKey: 'mission_execute_step',
+      override: {
+        provider: parsedBody.data.provider,
+        strictProvider: parsedBody.data.strict_provider,
+        model: parsedBody.data.model
+      }
+    });
     const mission = await store.getMissionById({ missionId, userId });
     if (!mission) return sendError(reply, request, 404, 'NOT_FOUND', 'mission not found');
     if (mission.status === 'running') return sendError(reply, request, 409, 'CONFLICT', 'mission is already running');
@@ -258,12 +291,18 @@ export async function missionRoutes(app: FastifyInstance, ctx: RouteContext) {
 
     void (async () => {
       try {
-        await executeMission(mission, store, providerRouter, userId, {
+        await executeMission(mission, store, env, providerRouter, userId, {
           onStepCompleted: (stepId) => {
             const step = mission.steps.find((s) => s.id === stepId);
             notificationService?.emitMissionStepCompleted(missionId, step?.title ?? stepId);
           },
-        });
+        }, {
+          modelSelectionOverride: {
+            provider: modelSelection.provider,
+            strictProvider: modelSelection.strictProvider,
+            model: modelSelection.model ?? undefined
+          }
+        }, resolvedCredentials.credentialsByProvider);
       } catch {
         // errors already handled inside executeMission
       } finally {
@@ -290,18 +329,42 @@ export async function missionRoutes(app: FastifyInstance, ctx: RouteContext) {
     const schema = z.object({
       prompt: z.string().min(1).max(5000),
       auto_create: z.boolean().default(false),
-      complexity_hint: z.enum(['simple', 'moderate', 'complex']).optional()
+      complexity_hint: z.enum(['simple', 'moderate', 'complex']).optional(),
+      provider: z.enum(['auto', 'openai', 'gemini', 'anthropic', 'local']).optional(),
+      strict_provider: z.boolean().optional(),
+      model: z.string().max(160).optional()
     });
     const parsed = schema.safeParse(request.body);
     if (!parsed.success) {
       return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid plan generation payload', parsed.error.flatten());
     }
     const userId = resolveRequestUserId(request);
+    const resolvedCredentials = await resolveRequestProviderCredentials(request);
+    const modelSelection = await resolveModelSelection({
+      store,
+      userId,
+      featureKey: 'mission_plan_generation',
+      override: {
+        provider: parsed.data.provider,
+        strictProvider: parsed.data.strict_provider,
+        model: parsed.data.model
+      }
+    });
     const complexity = parsed.data.complexity_hint ?? classifyComplexity(parsed.data.prompt);
     try {
       const plan = complexity === 'simple'
         ? buildSimplePlan(parsed.data.prompt)
-        : await generatePlan(parsed.data.prompt, providerRouter);
+        : await generatePlan(parsed.data.prompt, providerRouter, resolvedCredentials.credentialsByProvider, {
+            provider: modelSelection.provider,
+            strictProvider: modelSelection.strictProvider,
+            model: modelSelection.model ?? undefined,
+            trace: {
+              store,
+              env,
+              userId,
+              traceId: resolveRequestTraceId(request)
+            }
+          });
       if (parsed.data.auto_create) {
         const missionInput = planToMissionInput(plan, userId);
         const mission = await store.createMission(missionInput);

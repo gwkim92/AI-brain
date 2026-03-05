@@ -1,4 +1,5 @@
 import { joinPath, stripTrailingSlash } from '../http';
+import { buildProviderHttpError, withReasonAwareRetry } from '../retry';
 import type {
   LlmProvider,
   ProviderAvailability,
@@ -39,43 +40,72 @@ export class GeminiProvider implements LlmProvider {
   }
 
   async generate(request: ProviderGenerateRequest): Promise<ProviderGenerateResult> {
-    if (!this.options.apiKey) {
+    const scopedCredential = request.credentialsByProvider?.gemini;
+    const hasScopedCredential = Boolean(scopedCredential && scopedCredential.source !== 'none');
+    const runtimeApiKey = hasScopedCredential
+      ? scopedCredential?.selectedCredentialMode === 'api_key'
+        ? scopedCredential.apiKey
+        : undefined
+      : this.options.apiKey;
+    const runtimeAccessToken = hasScopedCredential
+      ? scopedCredential?.selectedCredentialMode === 'oauth_official'
+        ? scopedCredential.oauthAccessToken
+        : undefined
+      : undefined;
+
+    if (!runtimeApiKey && !runtimeAccessToken) {
       throw new Error('gemini provider is disabled: missing api key');
     }
 
     const model = request.model ?? this.options.model;
 
-    const endpoint = `${joinPath(stripTrailingSlash(this.options.baseUrl), `/v1beta/models/${model}:generateContent`)}?key=${encodeURIComponent(this.options.apiKey)}`;
+    const endpointBase = joinPath(stripTrailingSlash(this.options.baseUrl), `/v1beta/models/${model}:generateContent`);
+    const endpoint = runtimeApiKey ? `${endpointBase}?key=${encodeURIComponent(runtimeApiKey)}` : endpointBase;
 
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json'
-      },
-      body: JSON.stringify({
-        systemInstruction: request.systemPrompt
-          ? {
-              role: 'system',
-              parts: [{ text: request.systemPrompt }]
+    const bodyText = await withReasonAwareRetry(
+      async () => {
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(runtimeAccessToken ? { authorization: `Bearer ${runtimeAccessToken}` } : {})
+          },
+          body: JSON.stringify({
+            systemInstruction: request.systemPrompt
+              ? {
+                  role: 'system',
+                  parts: [{ text: request.systemPrompt }]
+                }
+              : undefined,
+            contents: [
+              {
+                role: 'user',
+                parts: [{ text: request.prompt }]
+              }
+            ],
+            generationConfig: {
+              temperature: request.temperature,
+              maxOutputTokens: request.maxOutputTokens
             }
-          : undefined,
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: request.prompt }]
-          }
-        ],
-        generationConfig: {
-          temperature: request.temperature,
-          maxOutputTokens: request.maxOutputTokens
-        }
-      })
-    });
+          })
+        });
 
-    const bodyText = await response.text();
-    if (!response.ok) {
-      throw new Error(`gemini provider http ${response.status}: ${bodyText.slice(0, 400)}`);
-    }
+        const text = await response.text();
+        if (!response.ok) {
+          throw buildProviderHttpError({
+            provider: this.name,
+            status: response.status,
+            statusText: response.statusText,
+            bodyText: text,
+            retryAfterHeader: response.headers.get('retry-after')
+          });
+        }
+        return text;
+      },
+      {
+        provider: this.name
+      }
+    );
 
     const payload = JSON.parse(bodyText) as {
       candidates?: Array<{

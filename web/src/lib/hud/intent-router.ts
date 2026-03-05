@@ -9,7 +9,8 @@ export type HudWidgetId =
   | "reports"
   | "approvals"
   | "memory"
-  | "settings";
+  | "settings"
+  | "model_control";
 
 export type HudIntent = "code" | "research" | "finance" | "news" | "general";
 export type HudTaskMode = "code" | "execute" | "radar_review";
