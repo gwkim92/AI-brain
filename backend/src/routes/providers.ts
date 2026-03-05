@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { decryptSecretValue, encryptSecretValue } from '../auth/secrets';
 import { sendError, sendSuccess } from '../lib/http';
 import { withAiInvocationTrace } from '../observability/ai-trace';
+import { logSpanEvent } from '../observability/spans';
 import { fetchProviderModelCatalog } from '../providers/catalog';
 import {
   parseUserProviderCredentialPayload,
@@ -527,7 +528,15 @@ export async function providerRoutes(app: FastifyInstance, ctx: RouteContext) {
 
     void store.cleanupExpiredProviderOauthStates({ limit: 200 }).catch(() => undefined);
 
-    request.log.info({ provider, user_id: userId, trace_id: resolveRequestTraceId(request) }, 'provider oauth start span');
+    logSpanEvent({
+      logger: request.log,
+      spanName: 'auth.oauth.start',
+      stage: 'start',
+      traceId: resolveRequestTraceId(request),
+      userId,
+      provider,
+      status: 'ok'
+    });
 
     return sendSuccess(reply, request, 200, {
       provider,
@@ -586,26 +595,57 @@ export async function providerRoutes(app: FastifyInstance, ctx: RouteContext) {
       return sendError(reply, request, 422, 'VALIDATION_ERROR', 'oauth provider is not configured or disabled');
     }
 
-    request.log.info({ provider, user_id: requesterUserId, trace_id: resolveRequestTraceId(request) }, 'provider oauth complete span start');
-
-    const tokenSet = await exchangeAuthorizationCode({
-      config,
-      code: parsedBody.data.code,
-      codeVerifier,
-      onRetry: (retry) => {
-        request.log.warn(
-          {
-            provider,
-            user_id: requesterUserId,
-            attempt: retry.attempt,
-            max_attempts: retry.maxAttempts,
-            delay_ms: retry.delayMs,
-            reason: retry.reason
-          },
-          'provider oauth token exchange retry'
-        );
-      }
+    logSpanEvent({
+      logger: request.log,
+      spanName: 'auth.oauth.complete',
+      stage: 'start',
+      traceId: resolveRequestTraceId(request),
+      userId: requesterUserId,
+      provider,
+      status: 'ok'
     });
+
+    const exchangeStartedAt = Date.now();
+    let tokenSet: Awaited<ReturnType<typeof exchangeAuthorizationCode>>;
+    try {
+      tokenSet = await exchangeAuthorizationCode({
+        config,
+        code: parsedBody.data.code,
+        codeVerifier,
+        onRetry: (retry) => {
+          logSpanEvent({
+            logger: request.log,
+            spanName: 'auth.oauth.token_exchange',
+            stage: 'retry',
+            traceId: resolveRequestTraceId(request),
+            userId: requesterUserId,
+            provider,
+            status: 'retry',
+            attrs: {
+              attempt: retry.attempt,
+              max_attempts: retry.maxAttempts,
+              delay_ms: retry.delayMs,
+              reason: retry.reason
+            }
+          });
+        }
+      });
+    } catch (error) {
+      logSpanEvent({
+        logger: request.log,
+        spanName: 'auth.oauth.complete',
+        stage: 'error',
+        traceId: resolveRequestTraceId(request),
+        userId: requesterUserId,
+        provider,
+        status: 'error',
+        durationMs: Date.now() - exchangeStartedAt,
+        attrs: {
+          error: error instanceof Error ? error.message : String(error)
+        }
+      });
+      throw error;
+    }
 
     const existing = await store.getUserProviderCredential({
       userId: requesterUserId,
@@ -662,7 +702,16 @@ export async function providerRoutes(app: FastifyInstance, ctx: RouteContext) {
       authAccessTokenExpiresAt: null
     };
 
-    request.log.info({ provider, user_id: requesterUserId, trace_id: resolveRequestTraceId(request) }, 'provider oauth complete span success');
+    logSpanEvent({
+      logger: request.log,
+      spanName: 'auth.oauth.complete',
+      stage: 'complete',
+      traceId: resolveRequestTraceId(request),
+      userId: requesterUserId,
+      provider,
+      status: 'ok',
+      durationMs: Date.now() - exchangeStartedAt
+    });
 
     return sendSuccess(reply, request, 200, buildCredentialView({
       provider,

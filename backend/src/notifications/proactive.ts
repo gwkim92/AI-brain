@@ -1,5 +1,7 @@
 import type { JarvisStore } from '../store/types';
 
+import type { NotificationChannel } from './channels';
+
 export type NotificationEventType =
   | 'mission_step_completed'
   | 'radar_new_item'
@@ -26,19 +28,51 @@ type EmitOptions = {
   dedupeWindowMs?: number;
 };
 
+type LoggerLike = {
+  info: (obj: Record<string, unknown>, msg?: string) => void;
+  warn: (obj: Record<string, unknown>, msg?: string) => void;
+  error: (obj: Record<string, unknown>, msg?: string) => void;
+};
+
+type NotificationChannelRuntime = {
+  name: string;
+  sent: number;
+  failed: number;
+  lastSuccessAt: string | null;
+  lastErrorAt: string | null;
+  lastError: string | null;
+};
+
 export type NotificationRuntimeStatus = {
   listeners: number;
   emitted: number;
   suppressed: number;
   lastEventAt: string | null;
   dedupeWindowMs: number;
+  channels: NotificationChannelRuntime[];
 };
 
 const DEFAULT_DEDUPE_WINDOW_MS = 1_200;
 
-export function createNotificationService() {
+export function createNotificationService(input?: {
+  channels?: NotificationChannel[];
+  logger?: LoggerLike;
+}) {
+  const channels = input?.channels ?? [];
+  const logger = input?.logger;
   const listeners = new Set<NotificationListener>();
   const dedupeCache = new Map<string, number>();
+  const channelRuntime = new Map<string, NotificationChannelRuntime>();
+  for (const channel of channels) {
+    channelRuntime.set(channel.name, {
+      name: channel.name,
+      sent: 0,
+      failed: 0,
+      lastSuccessAt: null,
+      lastErrorAt: null,
+      lastError: null
+    });
+  }
   const runtime = {
     emitted: 0,
     suppressed: 0,
@@ -90,6 +124,50 @@ export function createNotificationService() {
       } catch {
         // don't let listener errors crash the notification bus
       }
+    }
+
+    if (channels.length > 0) {
+      void Promise.all(
+        channels.map(async (channel) => {
+          const startedAt = Date.now();
+          try {
+            await channel.send(notification);
+            const state = channelRuntime.get(channel.name);
+            if (state) {
+              state.sent += 1;
+              state.lastSuccessAt = new Date().toISOString();
+              state.lastError = null;
+            }
+            logger?.info(
+              {
+                channel: channel.name,
+                notification_type: notification.type,
+                notification_id: notification.id,
+                duration_ms: Date.now() - startedAt
+              },
+              'notification channel delivery succeeded'
+            );
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const state = channelRuntime.get(channel.name);
+            if (state) {
+              state.failed += 1;
+              state.lastErrorAt = new Date().toISOString();
+              state.lastError = message;
+            }
+            logger?.warn(
+              {
+                channel: channel.name,
+                notification_type: notification.type,
+                notification_id: notification.id,
+                error: message,
+                duration_ms: Date.now() - startedAt
+              },
+              'notification channel delivery failed'
+            );
+          }
+        })
+      );
     }
   }
 
@@ -163,7 +241,8 @@ export function createNotificationService() {
       emitted: runtime.emitted,
       suppressed: runtime.suppressed,
       lastEventAt: runtime.lastEventAtMs ? new Date(runtime.lastEventAtMs).toISOString() : null,
-      dedupeWindowMs: DEFAULT_DEDUPE_WINDOW_MS
+      dedupeWindowMs: DEFAULT_DEDUPE_WINDOW_MS,
+      channels: Array.from(channelRuntime.values()).map((row) => ({ ...row }))
     };
   }
 

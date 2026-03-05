@@ -1,4 +1,5 @@
 import type { AppEnv } from '../config/env';
+import { logSpanEvent } from '../observability/spans';
 import type { JarvisStore } from '../store/types';
 import { startWorkerSupervisor } from '../workers/supervisor';
 
@@ -140,15 +141,20 @@ export function startProviderTokenRefreshWorker(input: {
     },
     onAfterRun: (run) => {
       pushRun(run);
-      if (run.status === 'ok') {
-        logger?.info({
-          oauth_refresh: run
-        }, 'provider oauth refresh worker run complete');
-      } else {
-        logger?.error({
-          oauth_refresh: run
-        }, 'provider oauth refresh worker run failed');
-      }
+      logSpanEvent({
+        logger,
+        spanName: 'worker.provider_oauth_refresh',
+        stage: run.status === 'ok' ? 'complete' : 'error',
+        status: run.status === 'ok' ? 'ok' : run.status,
+        durationMs: run.durationMs,
+        attrs: {
+          scanned_users: run.scannedUsers,
+          scanned_credentials: run.scannedCredentials,
+          refreshed: run.refreshed,
+          failed: run.failed,
+          error: run.error
+        }
+      });
     },
     onStatusChange: (status) => {
       runtimeState.enabled = status.enabled;

@@ -1,6 +1,7 @@
 import type { AppEnv } from '../config/env';
 import type { JarvisStore } from '../store/types';
 import { startWorkerSupervisor } from '../workers/supervisor';
+import { logSpanEvent } from './spans';
 
 type LoggerLike = {
   info: (obj: Record<string, unknown>, msg?: string) => void;
@@ -111,11 +112,18 @@ export function startAiTraceCleanupWorker(input: {
     },
     onAfterRun: (run) => {
       pushRun(run);
-      if (run.status === 'ok') {
-        logger?.info({ ai_trace_cleanup: run }, 'ai trace cleanup worker completed');
-      } else {
-        logger?.error({ ai_trace_cleanup: run }, 'ai trace cleanup worker failed');
-      }
+      logSpanEvent({
+        logger,
+        spanName: 'worker.ai_trace_cleanup',
+        stage: run.status === 'ok' ? 'complete' : 'error',
+        status: run.status === 'ok' ? 'ok' : run.status,
+        durationMs: run.durationMs,
+        attrs: {
+          traces_deleted: run.tracesDeleted,
+          recommendations_deleted: run.recommendationsDeleted,
+          error: run.error
+        }
+      });
     },
     onStatusChange: (status) => {
       runtimeState.enabled = status.enabled;

@@ -37,4 +37,38 @@ describe('notification service', () => {
     expect(status.emitted).toBe(1);
     expect(status.lastEventAt).not.toBeNull();
   });
+
+  it('tracks notification channel delivery metrics', async () => {
+    let delivered = 0;
+    const service = createNotificationService({
+      channels: [
+        {
+          name: 'test-webhook',
+          send: async () => {
+            delivered += 1;
+          }
+        },
+        {
+          name: 'failing-webhook',
+          send: async () => {
+            throw new Error('delivery failed');
+          }
+        }
+      ]
+    });
+
+    service.emitRadarNewItem(3);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const status = service.getRuntimeStatus();
+    const successChannel = status.channels.find((item) => item.name === 'test-webhook');
+    const failureChannel = status.channels.find((item) => item.name === 'failing-webhook');
+
+    expect(delivered).toBe(1);
+    expect(successChannel?.sent).toBe(1);
+    expect(successChannel?.failed).toBe(0);
+    expect(failureChannel?.sent).toBe(0);
+    expect(failureChannel?.failed).toBe(1);
+    expect(failureChannel?.lastError).toContain('delivery failed');
+  });
 });

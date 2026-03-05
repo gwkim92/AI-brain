@@ -18,6 +18,7 @@ import { syncModelRegistry, createRegistryRefreshInterval } from './providers/mo
 import { loadProviderStats } from './providers/stats-persistence';
 import { seedDefaultPolicies, loadPoliciesIntoCache } from './providers/task-model-policy';
 import { startProviderTokenRefreshWorker } from './providers/token-refresh-worker';
+import { createWebhookNotificationChannel } from './notifications/channels';
 import { createNotificationService } from './notifications/proactive';
 import { startAiTraceCleanupWorker } from './observability/ai-trace-worker';
 import { registerRoutes } from './routes';
@@ -174,7 +175,19 @@ export async function buildServer() {
     }
   }
 
-  const notificationService = createNotificationService();
+  const notificationChannels = [];
+  const webhookChannel = createWebhookNotificationChannel({
+    env,
+    logger: app.log
+  });
+  if (webhookChannel) {
+    notificationChannels.push(webhookChannel);
+  }
+
+  const notificationService = createNotificationService({
+    channels: notificationChannels,
+    logger: app.log
+  });
   await registerRoutes(app, store, env, providerRouter, notificationService);
 
   const oauthCallbackBridge = await startOauthCallbackBridge({

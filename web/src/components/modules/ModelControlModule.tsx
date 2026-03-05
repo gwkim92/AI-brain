@@ -7,6 +7,7 @@ import { ApiRequestError } from "@/lib/api/client";
 import {
   applyModelRecommendation,
   createModelRecommendation,
+  getSettingsOverview,
   getModelControlMetrics,
   getModelControlPreferences,
   listModelControlTraces,
@@ -26,6 +27,7 @@ import type {
   ProviderModelCatalogEntry,
   UserModelSelectionPreference,
   UserProviderCredentialRecord,
+  SettingsOverviewData,
 } from "@/lib/api/types";
 
 const PROVIDERS: ProviderName[] = ["openai", "gemini", "anthropic", "local"];
@@ -90,7 +92,27 @@ function toCredentialSourceClass(source: UserProviderCredentialRecord["source"])
   return "border-white/20 bg-white/5 text-white/55";
 }
 
-function buildDefaultDraft(featureKey: ModelControlFeatureKey): ModelPreferenceDraft {
+function formatCooldownRemaining(cooldownUntil: string | null | undefined): string | null {
+  if (!cooldownUntil) {
+    return null;
+  }
+  const endsAt = Date.parse(cooldownUntil);
+  if (!Number.isFinite(endsAt)) {
+    return null;
+  }
+  const remainingMs = endsAt - Date.now();
+  if (remainingMs <= 0) {
+    return null;
+  }
+  const seconds = Math.ceil(remainingMs / 1000);
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.ceil(seconds / 60);
+  return `${minutes}m`;
+}
+
+function buildDefaultDraft(): ModelPreferenceDraft {
   return {
     provider: "auto",
     model: "",
@@ -121,6 +143,7 @@ export function ModelControlModule() {
 
   const [traces, setTraces] = useState<AiInvocationTraceRecord[]>([]);
   const [metrics, setMetrics] = useState<AiInvocationMetrics | null>(null);
+  const [settingsOverview, setSettingsOverview] = useState<SettingsOverviewData | null>(null);
 
   const userCredentialMap = useMemo(() => {
     const map = new Map<ProviderName, UserProviderCredentialRecord>();
@@ -146,12 +169,25 @@ export function ModelControlModule() {
     return map;
   }, [modelCatalog]);
 
+  const providerRuntimeMap = useMemo(() => {
+    const map = new Map<ProviderName, NonNullable<SettingsOverviewData["providers"]>[number]>();
+    for (const row of settingsOverview?.providers ?? []) {
+      map.set(row.provider, row);
+    }
+    return map;
+  }, [settingsOverview]);
+
   const providerModelOverview = useMemo(() => {
-    return PROVIDERS.map((provider) => ({
-      provider,
-      models: modelCatalogMap.get(provider) ?? [],
-    }));
-  }, [modelCatalogMap]);
+    return PROVIDERS.map((provider) => {
+      const runtime = providerRuntimeMap.get(provider) ?? null;
+      const runtimeModel = runtime?.model ?? null;
+      return {
+        provider,
+        models: Array.from(new Set([...(modelCatalogMap.get(provider) ?? []), ...(runtimeModel ? [runtimeModel] : [])])),
+        runtime
+      };
+    });
+  }, [modelCatalogMap, providerRuntimeMap]);
 
   const resolvePreferenceDraft = useCallback(
     (feature: ModelControlFeatureKey): ModelPreferenceDraft => {
@@ -168,7 +204,7 @@ export function ModelControlModule() {
           selection_mode: stored.selectionMode,
         };
       }
-      return buildDefaultDraft(feature);
+      return buildDefaultDraft();
     },
     [preferenceDrafts, preferenceMap]
   );
@@ -177,7 +213,7 @@ export function ModelControlModule() {
     setLoading(true);
     setError(null);
     try {
-      const [credentialsResult, modelsResult, preferencesResult, recommendationsResult, tracesResult, metricsResult] =
+      const [credentialsResult, modelsResult, preferencesResult, recommendationsResult, tracesResult, metricsResult, settingsResult] =
         await Promise.all([
           listUserProviderCredentials(),
           listProviderModels({ scope: "user" }),
@@ -185,6 +221,7 @@ export function ModelControlModule() {
           listModelRecommendations({ limit: 30 }),
           listModelControlTraces({ limit: 40 }),
           getModelControlMetrics(),
+          getSettingsOverview(),
         ]);
       setCredentials(credentialsResult.providers ?? []);
       setModelCatalog(modelsResult.providers ?? []);
@@ -192,6 +229,7 @@ export function ModelControlModule() {
       setRecommendations(recommendationsResult.recommendations ?? []);
       setTraces(tracesResult.traces ?? []);
       setMetrics(metricsResult ?? null);
+      setSettingsOverview(settingsResult ?? null);
       setCredentialModeDrafts({});
       setPreferenceDrafts({});
     } catch (refreshError) {
@@ -390,9 +428,33 @@ export function ModelControlModule() {
         <div className="mt-3 rounded-lg border border-white/10 bg-black/40 p-2">
           <p className="text-[11px] uppercase tracking-[0.16em] text-white/55">Discovered Models (Auto)</p>
           <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
-            {providerModelOverview.map(({ provider, models }) => (
+            {providerModelOverview.map(({ provider, models, runtime }) => (
               <div key={`provider-overview-${provider}`} className="rounded border border-white/10 bg-black/35 p-2">
-                <p className="text-[11px] font-semibold text-white/85">{provider.toUpperCase()}</p>
+                <div className="flex flex-wrap items-center gap-1">
+                  <p className="text-[11px] font-semibold text-white/85">{provider.toUpperCase()}</p>
+                  <span
+                    className={`rounded border px-1.5 py-0.5 text-[10px] ${
+                      runtime?.enabled
+                        ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-200"
+                        : "border-rose-500/35 bg-rose-500/10 text-rose-200"
+                    }`}
+                  >
+                    {runtime?.enabled ? "enabled" : "disabled"}
+                  </span>
+                  {formatCooldownRemaining(runtime?.cooldown_until) && (
+                    <span className="rounded border border-amber-500/35 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-200">
+                      cooldown {formatCooldownRemaining(runtime?.cooldown_until)}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-[10px] text-white/45">
+                  success={Math.round(runtime?.success_rate_pct ?? 0)}% · attempts={runtime?.attempts ?? 0} · failures=
+                  {runtime?.health_failure_count ?? runtime?.failures ?? 0}
+                </p>
+                {runtime?.reason && <p className="mt-1 text-[10px] text-rose-200/90">reason: {runtime.reason}</p>}
+                {runtime?.cooldown_reason && (
+                  <p className="mt-1 text-[10px] text-amber-200/90">cooldown: {runtime.cooldown_reason}</p>
+                )}
                 <div className="mt-1 flex flex-wrap items-center gap-1">
                   {models.length > 0 ? (
                     models.map((modelId) => (

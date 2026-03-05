@@ -458,6 +458,9 @@ export type SettingsOverviewData = {
     avg_latency_ms: number;
     success_rate_pct: number;
     last_attempt_at: string | null;
+    cooldown_until?: string | null;
+    cooldown_reason?: string | null;
+    health_failure_count?: number;
   }>;
   policies: {
     high_risk_requires_approval: boolean;
@@ -468,6 +471,33 @@ export type SettingsOverviewData = {
     auth_allow_signup: boolean;
     auth_token_configured: boolean;
   };
+  oauth_worker?: {
+    enabled: boolean;
+    inflight: boolean;
+    history: Array<Record<string, unknown>>;
+    lastRun?: Record<string, unknown> | null;
+  };
+  ai_trace_worker?: {
+    enabled: boolean;
+    inflight: boolean;
+    history: Array<Record<string, unknown>>;
+    lastRun?: Record<string, unknown> | null;
+  };
+  notification_runtime?: {
+    listeners: number;
+    emitted: number;
+    suppressed: number;
+    lastEventAt: string | null;
+    dedupeWindowMs: number;
+    channels: Array<{
+      name: string;
+      sent: number;
+      failed: number;
+      lastSuccessAt: string | null;
+      lastErrorAt: string | null;
+      lastError: string | null;
+    }>;
+  } | null;
 };
 
 export type DashboardOverviewData = {

@@ -100,6 +100,11 @@ const EnvSchema = z.object({
   TELEGRAM_REPORT_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
   TELEGRAM_REPORT_RETRY_BASE_MS: z.coerce.number().int().min(100).default(2000),
   TELEGRAM_REPORT_RETRY_MAX_MS: z.coerce.number().int().min(200).default(60000),
+  NOTIFICATION_WEBHOOK_ENABLED: EnvBooleanSchema.default(false),
+  NOTIFICATION_WEBHOOK_URL: z.string().url().optional(),
+  NOTIFICATION_WEBHOOK_TIMEOUT_MS: z.coerce.number().int().min(250).max(30000).default(4000),
+  NOTIFICATION_WEBHOOK_BEARER_TOKEN: z.string().optional(),
+  NOTIFICATION_WEBHOOK_EVENT_TYPES: z.string().default('*'),
 
   MODEL_REGISTRY_REFRESH_MS: z.coerce.number().int().min(10000).default(300000),
   ROUTING_EXPLORATION_RATE: z.coerce.number().min(0).max(1).default(0.05)
