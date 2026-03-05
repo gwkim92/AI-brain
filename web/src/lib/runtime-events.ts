@@ -15,6 +15,10 @@ export type JarvisRuntimeEventName =
   | "assistant_quality_evaluated"
   | "assistant_quality_softened"
   | "assistant_delivery_rendered"
+  | "assistant_stream_closed"
+  | "assistant_stream_reconnect_scheduled"
+  | "assistant_stage_stalled_detected"
+  | "assistant_message_delivered"
   | "running_task_visible"
   | "visual_core_engine_switched";
 

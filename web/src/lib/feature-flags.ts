@@ -8,7 +8,11 @@ export type JarvisFeatureFlag =
   | "assistant.ui_soft_warn_render"
   | "assistant.optimistic_running_task"
   | "assistant.stage_timeline_v1"
-  | "session.restore_deterministic_v2";
+  | "session.restore_deterministic_v2"
+  | "assistant.stream_resilience_v2"
+  | "assistant.timeline_stage_seq_only"
+  | "assistant.hard_fail_raw_output_toggle"
+  | "hud.intent_router_ops_bias_v1";
 
 const STORAGE_PREFIX = "jarvis.ff.";
 
@@ -21,6 +25,10 @@ const ENV_BY_FLAG: Record<JarvisFeatureFlag, string> = {
   "assistant.optimistic_running_task": "NEXT_PUBLIC_FF_ASSISTANT_OPTIMISTIC_RUNNING_TASK",
   "assistant.stage_timeline_v1": "NEXT_PUBLIC_FF_ASSISTANT_STAGE_TIMELINE_V1",
   "session.restore_deterministic_v2": "NEXT_PUBLIC_FF_SESSION_RESTORE_DETERMINISTIC_V2",
+  "assistant.stream_resilience_v2": "NEXT_PUBLIC_FF_ASSISTANT_STREAM_RESILIENCE_V2",
+  "assistant.timeline_stage_seq_only": "NEXT_PUBLIC_FF_ASSISTANT_TIMELINE_STAGE_SEQ_ONLY",
+  "assistant.hard_fail_raw_output_toggle": "NEXT_PUBLIC_FF_ASSISTANT_HARD_FAIL_RAW_OUTPUT_TOGGLE",
+  "hud.intent_router_ops_bias_v1": "NEXT_PUBLIC_FF_HUD_INTENT_ROUTER_OPS_BIAS_V1",
 };
 
 function parseBoolean(value: string | null | undefined): boolean | null {

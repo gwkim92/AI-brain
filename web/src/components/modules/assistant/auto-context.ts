@@ -22,6 +22,7 @@ export type AutoMissionContext = {
 export type AutoMissionEvent = {
     id: string;
     sequence: number;
+    effectiveSeq: number;
     eventType: string;
     kind: "accepted" | "started" | "completed" | "failed" | "stage" | "other";
     data: Record<string, unknown>;
@@ -226,9 +227,24 @@ export function toAutoMissionEventAttempts(data: Record<string, unknown>): AutoM
 }
 
 export function toAutoMissionEvent(record: AssistantContextEventRecord): AutoMissionEvent {
+    const stageSeqRaw = record.data && typeof record.data === "object" ? (record.data as Record<string, unknown>).stage_seq : undefined;
+    const stageSeq =
+        typeof stageSeqRaw === "number" && Number.isFinite(stageSeqRaw)
+            ? stageSeqRaw
+            : typeof stageSeqRaw === "string" && stageSeqRaw.trim().length > 0 && Number.isFinite(Number(stageSeqRaw))
+                ? Number(stageSeqRaw)
+                : null;
+    const createdAtEpoch = Date.parse(record.createdAt);
+    const fallbackSeq =
+        typeof record.sequence === "number" && Number.isFinite(record.sequence)
+            ? record.sequence
+            : Number.isFinite(createdAtEpoch)
+                ? createdAtEpoch
+                : 0;
     return {
         id: record.id,
         sequence: record.sequence,
+        effectiveSeq: stageSeq ?? fallbackSeq,
         eventType: record.eventType,
         kind: toAutoMissionEventKind(record.eventType),
         data: record.data ?? {},
@@ -238,7 +254,7 @@ export function toAutoMissionEvent(record: AssistantContextEventRecord): AutoMis
     };
 }
 
-export function mergeAutoMissionEvents(prev: AutoMissionEvent[], incoming: AutoMissionEvent[], limit = 8): AutoMissionEvent[] {
+export function mergeAutoMissionEvents(prev: AutoMissionEvent[], incoming: AutoMissionEvent[], limit = 32): AutoMissionEvent[] {
     const map = new Map<string, AutoMissionEvent>();
     for (const item of prev) {
         map.set(item.id, item);
@@ -247,6 +263,11 @@ export function mergeAutoMissionEvents(prev: AutoMissionEvent[], incoming: AutoM
         map.set(item.id, item);
     }
     return Array.from(map.values())
-        .sort((left, right) => left.sequence - right.sequence)
+        .sort((left, right) => {
+            if (left.effectiveSeq !== right.effectiveSeq) {
+                return left.effectiveSeq - right.effectiveSeq;
+            }
+            return left.createdAt.localeCompare(right.createdAt);
+        })
         .slice(-limit);
 }

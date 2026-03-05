@@ -9,6 +9,7 @@ import {
     aiRespond,
     appendAssistantContextEvent,
     createAssistantContext,
+    getAssistantContext,
     getAssistantContextGroundingEvidence,
     listTasks,
     listAssistantContexts,
@@ -106,6 +107,14 @@ type ChatMessage = {
 const ASSISTANT_SESSION_MESSAGES_STORAGE_KEY = "assistant-session-messages-v1";
 const MAX_ASSISTANT_SESSION_MESSAGES = 120;
 const ASSISTANT_SYSTEM_GREETING = "Connected to backend. Ask anything and I will route this to available providers.";
+const STALE_AUTO_CONTEXT_ERROR_CODE = "server_state_lost";
+const STALE_AUTO_CONTEXT_ERROR_CODES = new Set([STALE_AUTO_CONTEXT_ERROR_CODE, "SERVER_RUN_STATE_LOST"]);
+const STALE_AUTO_CONTEXT_MESSAGE = "Server state was lost for this run. Re-run this session.";
+const AUTO_CONTEXT_STALE_TIMEOUT_MS = 45_000;
+
+function isStaleAutoContext(context: AutoMissionContext): boolean {
+    return typeof context.error === "string" && STALE_AUTO_CONTEXT_ERROR_CODES.has(context.error);
+}
 
 type ProviderSelection = "auto" | "openai" | "gemini" | "anthropic" | "local";
 
@@ -438,7 +447,7 @@ function formatElapsedShort(startedAt: string, nowMs: number): string | null {
 }
 
 export function AssistantModule() {
-    const { sessions, activeSessionId, markSessionContextDelivered } = useHUD();
+    const { sessions, activeSessionId, markSessionContextDelivered, updateSessionStaleState } = useHUD();
     const [inputVal, setInputVal] = useState("");
     const [messages, setMessages] = useState<ChatMessage[]>(() => defaultMessages());
     const [runRecords, setRunRecords] = useState<RunRecord[]>([]);
@@ -463,17 +472,29 @@ export function AssistantModule() {
     const [autoContextEventFilter, setAutoContextEventFilter] = useState<AutoMissionEventFilter>("all");
     const [autoContextFeedback, setAutoContextFeedback] = useState<Record<string, AutoMissionFeedbackDraft>>({});
     const autoContextsRef = useRef<AutoMissionContext[]>([]);
+    const autoContextEventsRef = useRef<Record<string, AutoMissionEvent[]>>({});
     const autoContextStartedThisSessionRef = useRef<Set<string>>(new Set());
     const autoContextDeliveredRevisionRef = useRef<Map<string, number>>(new Map());
     const sessionMessageStoreRef = useRef<Record<string, ChatMessage[]>>({});
     const activeMessageSessionRef = useRef<string | null>(null);
     const pendingSessionPersistSkipRef = useRef<string | null>(null);
     const contextStreamRef = useRef<Map<string, AssistantContextEventsStream>>(new Map());
+    const contextReconnectTimersRef = useRef<Map<string, number>>(new Map());
+    const contextLastEventAtRef = useRef<Map<string, number>>(new Map());
+    const contextSessionMapRef = useRef<Map<string, string>>(new Map());
     const loadedContextEventsRef = useRef<Set<string>>(new Set());
     const loadedGroundingEvidenceRef = useRef<Set<string>>(new Set());
+    const contextEventHydrationFailuresRef = useRef<Map<string, number>>(new Map());
+    const groundingHydrationFailuresRef = useRef<Map<string, number>>(new Map());
     const pendingTaskLinksRef = useRef<Map<string, string>>(new Map());
     const queuedRecoveryStartedRef = useRef(false);
     const queuedRecoveryInFlightRef = useRef(false);
+    const contextStreamRetryStateRef = useRef<Map<string, { failures: number; retryAtMs: number; terminal: boolean }>>(
+        new Map()
+    );
+    const contextMissingProbeInFlightRef = useRef<Set<string>>(new Set());
+    const lastAutoContextSyncMsRef = useRef(0);
+    const [streamReconnectTick, setStreamReconnectTick] = useState(0);
     const exactlyOnceDeliveryEnabled = useMemo(
         () => isFeatureEnabled("assistant.exactly_once_delivery", true),
         []
@@ -490,10 +511,26 @@ export function AssistantModule() {
         () => isFeatureEnabled("assistant.stage_timeline_v1", true),
         []
     );
+    const streamResilienceEnabled = useMemo(
+        () => isFeatureEnabled("assistant.stream_resilience_v2", true),
+        []
+    );
+    const timelineStageSeqOnlyEnabled = useMemo(
+        () => isFeatureEnabled("assistant.timeline_stage_seq_only", true),
+        []
+    );
+    const hardFailRawOutputToggleEnabled = useMemo(
+        () => isFeatureEnabled("assistant.hard_fail_raw_output_toggle", true),
+        []
+    );
 
     useEffect(() => {
         autoContextsRef.current = autoContexts;
     }, [autoContexts]);
+
+    useEffect(() => {
+        autoContextEventsRef.current = autoContextEvents;
+    }, [autoContextEvents]);
 
     useEffect(() => {
         sessionMessageStoreRef.current = loadStoredSessionMessages();
@@ -564,6 +601,130 @@ export function AssistantModule() {
         }
         return false;
     }, [syncAutoContexts]);
+
+    const syncAutoContextsWithThrottle = useCallback((minIntervalMs = 1000) => {
+        const nowMs = Date.now();
+        if (nowMs - lastAutoContextSyncMsRef.current < minIntervalMs) {
+            return;
+        }
+        lastAutoContextSyncMsRef.current = nowMs;
+        void syncAutoContexts();
+    }, [syncAutoContexts]);
+
+    const rememberContextSessionLink = useCallback((contextId: string, sessionId?: string | null) => {
+        const normalizedContextId = contextId.trim();
+        const normalizedSessionId = typeof sessionId === "string" ? sessionId.trim() : "";
+        if (!normalizedContextId || !normalizedSessionId) {
+            return;
+        }
+        contextSessionMapRef.current.set(normalizedContextId, normalizedSessionId);
+    }, []);
+
+    const scheduleContextReconnect = useCallback(
+        (serverContextId: string, clientContextId?: string, source: "close" | "error" = "error") => {
+            if (!streamResilienceEnabled) {
+                return;
+            }
+            const activeContext = autoContextsRef.current.find((item) => item.serverContextId === serverContextId);
+            if (!activeContext || activeContext.status !== "running") {
+                return;
+            }
+            if (contextReconnectTimersRef.current.has(serverContextId)) {
+                return;
+            }
+
+            const state = contextStreamRetryStateRef.current.get(serverContextId);
+            if (state?.terminal) {
+                return;
+            }
+            const failures = Math.max(1, state?.failures ?? 1);
+            const delayMs = Math.min(15_000, 400 * Math.pow(2, Math.max(0, failures - 1)));
+            emitRuntimeEvent("assistant_stream_reconnect_scheduled", {
+                serverContextId,
+                clientContextId: clientContextId ?? activeContext.id,
+                source,
+                failures,
+                delayMs,
+            });
+            const timerId = window.setTimeout(() => {
+                contextReconnectTimersRef.current.delete(serverContextId);
+                void syncAutoContextsWithRetry({ attempts: 3, baseDelayMs: 220 });
+                setStreamReconnectTick((prev) => prev + 1);
+            }, delayMs);
+            contextReconnectTimersRef.current.set(serverContextId, timerId);
+        },
+        [streamResilienceEnabled, syncAutoContextsWithRetry]
+    );
+
+    const markAutoContextAsStale = useCallback((serverContextId: string, clientContextId?: string) => {
+        const nowIso = new Date().toISOString();
+        setAutoContexts((prev) =>
+            prev.map((item) => {
+                const isTarget =
+                    item.serverContextId === serverContextId || (clientContextId && item.id === clientContextId);
+                if (!isTarget) {
+                    return item;
+                }
+                if (item.status === "error" && item.error === STALE_AUTO_CONTEXT_ERROR_CODE) {
+                    return item;
+                }
+                return {
+                    ...item,
+                    status: "error",
+                    output: STALE_AUTO_CONTEXT_MESSAGE,
+                    completedAt: item.completedAt ?? nowIso,
+                    error: STALE_AUTO_CONTEXT_ERROR_CODE,
+                };
+            })
+        );
+    }, []);
+
+    const handleContextStreamFailure = useCallback(
+        async (serverContextId: string, clientContextId?: string) => {
+            const currentState = contextStreamRetryStateRef.current.get(serverContextId);
+            const failures = (currentState?.failures ?? 0) + 1;
+            const retryDelayMs = Math.min(15000, 400 * Math.pow(2, Math.max(0, failures - 1)));
+            contextStreamRetryStateRef.current.set(serverContextId, {
+                failures,
+                retryAtMs: Date.now() + retryDelayMs,
+                terminal: currentState?.terminal ?? false,
+            });
+
+            if (currentState?.terminal) {
+                return;
+            }
+            if (contextMissingProbeInFlightRef.current.has(serverContextId)) {
+                return;
+            }
+            if (failures < 2) {
+                syncAutoContextsWithThrottle(800);
+                scheduleContextReconnect(serverContextId, clientContextId, "error");
+                return;
+            }
+
+            contextMissingProbeInFlightRef.current.add(serverContextId);
+            try {
+                await getAssistantContext(serverContextId);
+                syncAutoContextsWithThrottle(1000);
+                scheduleContextReconnect(serverContextId, clientContextId, "error");
+            } catch (err) {
+                if (err instanceof ApiRequestError && err.status === 404) {
+                    contextStreamRetryStateRef.current.set(serverContextId, {
+                        failures,
+                        retryAtMs: Date.now() + 60_000,
+                        terminal: true,
+                    });
+                    markAutoContextAsStale(serverContextId, clientContextId);
+                    return;
+                }
+                syncAutoContextsWithThrottle(err instanceof ApiRequestError && err.status === 429 ? 3000 : 1200);
+                scheduleContextReconnect(serverContextId, clientContextId, "error");
+            } finally {
+                contextMissingProbeInFlightRef.current.delete(serverContextId);
+            }
+        },
+        [markAutoContextAsStale, scheduleContextReconnect, syncAutoContextsWithThrottle]
+    );
 
     const recoverQueuedQuickCommandTasks = useCallback(async () => {
         if (queuedRecoveryInFlightRef.current) {
@@ -697,6 +858,78 @@ export function AssistantModule() {
             queuedRecoveryInFlightRef.current = false;
         }
     }, [syncAutoContextsWithRetry]);
+
+    useEffect(() => {
+        const staleByContextId = new Set(
+            autoContexts
+                .filter((context) => isStaleAutoContext(context))
+                .map((context) => context.id)
+        );
+        const staleByTaskId = new Set(
+            autoContexts
+                .filter((context) => isStaleAutoContext(context) && context.taskId)
+                .map((context) => context.taskId as string)
+        );
+
+        for (const session of sessions) {
+            const matchedStaleContext = autoContexts.find((context) => {
+                if (!isStaleAutoContext(context)) {
+                    return false;
+                }
+                if (context.id === session.id) {
+                    return true;
+                }
+                if (session.taskId && context.taskId === session.taskId) {
+                    return true;
+                }
+                return false;
+            });
+            const shouldBeStale =
+                staleByContextId.has(session.id) || (session.taskId ? staleByTaskId.has(session.taskId) : false);
+            const isStale = session.stale === true;
+            if (shouldBeStale === isStale) {
+                continue;
+            }
+            updateSessionStaleState(session.id, {
+                stale: shouldBeStale,
+                reason: shouldBeStale ? matchedStaleContext?.error ?? STALE_AUTO_CONTEXT_ERROR_CODE : null,
+                detectedAt: shouldBeStale ? new Date().toISOString() : null,
+            });
+        }
+    }, [autoContexts, sessions, updateSessionStaleState]);
+
+    useEffect(() => {
+        const timer = window.setInterval(() => {
+            const nowMs = Date.now();
+            for (const context of autoContextsRef.current) {
+                if (context.status !== "running" || !context.serverContextId) {
+                    continue;
+                }
+                const events = autoContextEventsRef.current[context.id] ?? [];
+                const startedAtMs = Date.parse(context.startedAt);
+                const lastEventMs =
+                    events.length > 0
+                        ? Date.parse(events[events.length - 1]?.createdAt ?? context.startedAt)
+                        : Number.NaN;
+                const activityMs = Number.isNaN(lastEventMs) ? startedAtMs : Math.max(startedAtMs, lastEventMs);
+                if (Number.isNaN(activityMs)) {
+                    continue;
+                }
+                if (nowMs - activityMs < AUTO_CONTEXT_STALE_TIMEOUT_MS) {
+                    continue;
+                }
+                contextStreamRetryStateRef.current.set(context.serverContextId, {
+                    failures: 99,
+                    retryAtMs: nowMs + 60_000,
+                    terminal: true,
+                });
+                markAutoContextAsStale(context.serverContextId, context.id);
+            }
+        }, 10_000);
+        return () => {
+            window.clearInterval(timer);
+        };
+    }, [markAutoContextAsStale]);
 
     const appendAutoContextEvents = useCallback((clientContextId: string, incoming: AutoMissionEvent[]) => {
         if (incoming.length === 0) {
@@ -845,15 +1078,24 @@ export function AssistantModule() {
         [autoContextFeedback, updateAutoContextFeedback]
     );
 
-    const hydrateAutoContextEvents = useCallback(async (serverContextId: string, clientContextId: string) => {
+    const hydrateAutoContextEvents = useCallback(async (serverContextId: string, clientContextId: string, cacheKey: string) => {
         try {
             const rows = await listAssistantContextEvents(serverContextId, { limit: 12 });
             const mapped = rows.events.map((event) => toAutoMissionEvent(event));
             appendAutoContextEvents(clientContextId, mapped);
-        } catch {
-            loadedContextEventsRef.current.delete(serverContextId);
+            contextEventHydrationFailuresRef.current.delete(serverContextId);
+        } catch (err) {
+            if (err instanceof ApiRequestError && err.status === 404) {
+                markAutoContextAsStale(serverContextId, clientContextId);
+                return;
+            }
+            const failures = (contextEventHydrationFailuresRef.current.get(serverContextId) ?? 0) + 1;
+            contextEventHydrationFailuresRef.current.set(serverContextId, failures);
+            if (failures < 2) {
+                loadedContextEventsRef.current.delete(cacheKey);
+            }
         }
-    }, [appendAutoContextEvents]);
+    }, [appendAutoContextEvents, markAutoContextAsStale]);
 
     const hydrateAutoContextGroundingEvidence = useCallback(
         async (serverContextId: string, clientContextId: string, cacheKey: string) => {
@@ -867,11 +1109,20 @@ export function AssistantModule() {
                     ...prev,
                     [clientContextId]: evidence.claims ?? [],
                 }));
-            } catch {
-                loadedGroundingEvidenceRef.current.delete(cacheKey);
+                groundingHydrationFailuresRef.current.delete(cacheKey);
+            } catch (err) {
+                if (err instanceof ApiRequestError && err.status === 404) {
+                    markAutoContextAsStale(serverContextId, clientContextId);
+                    return;
+                }
+                const failures = (groundingHydrationFailuresRef.current.get(cacheKey) ?? 0) + 1;
+                groundingHydrationFailuresRef.current.set(cacheKey, failures);
+                if (failures < 2) {
+                    loadedGroundingEvidenceRef.current.delete(cacheKey);
+                }
             }
         },
-        []
+        [markAutoContextAsStale]
     );
 
     useEffect(() => {
@@ -886,21 +1137,76 @@ export function AssistantModule() {
     }, [recoverQueuedQuickCommandTasks, syncAutoContexts]);
 
     useEffect(() => {
-        for (const context of autoContexts) {
+        const sortedByRecent = [...autoContexts]
+            .filter((context) => Boolean(context.serverContextId))
+            .sort((left, right) => {
+                const leftTime = Date.parse(left.completedAt ?? left.startedAt);
+                const rightTime = Date.parse(right.completedAt ?? right.startedAt);
+                const normalizedLeftTime = Number.isNaN(leftTime) ? 0 : leftTime;
+                const normalizedRightTime = Number.isNaN(rightTime) ? 0 : rightTime;
+                return normalizedRightTime - normalizedLeftTime;
+            });
+        const targetMap = new Map<string, AutoMissionContext>();
+        for (const context of sortedByRecent.slice(0, 12)) {
+            targetMap.set(context.id, context);
+        }
+        if (activeSessionId) {
+            const activeSession = sessions.find((session) => session.id === activeSessionId);
+            if (activeSession) {
+                for (const context of sortedByRecent) {
+                    if (
+                        context.id === activeSession.id ||
+                        (activeSession.taskId && context.taskId === activeSession.taskId)
+                    ) {
+                        targetMap.set(context.id, context);
+                    }
+                }
+            }
+        }
+
+        for (const context of targetMap.values()) {
             if (!context.serverContextId) {
                 continue;
             }
-            if (loadedContextEventsRef.current.has(context.serverContextId)) {
+            const cacheKey = `${context.serverContextId}:${context.revision ?? 0}`;
+            if (loadedContextEventsRef.current.has(cacheKey)) {
                 continue;
             }
 
-            loadedContextEventsRef.current.add(context.serverContextId);
-            void hydrateAutoContextEvents(context.serverContextId, context.id);
+            loadedContextEventsRef.current.add(cacheKey);
+            void hydrateAutoContextEvents(context.serverContextId, context.id, cacheKey);
         }
-    }, [autoContexts, hydrateAutoContextEvents]);
+    }, [activeSessionId, autoContexts, hydrateAutoContextEvents, sessions]);
 
     useEffect(() => {
-        for (const context of autoContexts) {
+        const sortedCompleted = [...autoContexts]
+            .filter((context) => Boolean(context.serverContextId) && context.status !== "running")
+            .sort((left, right) => {
+                const leftTime = Date.parse(left.completedAt ?? left.startedAt);
+                const rightTime = Date.parse(right.completedAt ?? right.startedAt);
+                const normalizedLeftTime = Number.isNaN(leftTime) ? 0 : leftTime;
+                const normalizedRightTime = Number.isNaN(rightTime) ? 0 : rightTime;
+                return normalizedRightTime - normalizedLeftTime;
+            });
+        const targetMap = new Map<string, AutoMissionContext>();
+        for (const context of sortedCompleted.slice(0, 6)) {
+            targetMap.set(context.id, context);
+        }
+        if (activeSessionId) {
+            const activeSession = sessions.find((session) => session.id === activeSessionId);
+            if (activeSession) {
+                for (const context of sortedCompleted) {
+                    if (
+                        context.id === activeSession.id ||
+                        (activeSession.taskId && context.taskId === activeSession.taskId)
+                    ) {
+                        targetMap.set(context.id, context);
+                    }
+                }
+            }
+        }
+
+        for (const context of targetMap.values()) {
             if (!context.serverContextId || context.status === "running") {
                 continue;
             }
@@ -912,7 +1218,7 @@ export function AssistantModule() {
             loadedGroundingEvidenceRef.current.add(cacheKey);
             void hydrateAutoContextGroundingEvidence(context.serverContextId, context.id, cacheKey);
         }
-    }, [autoContexts, hydrateAutoContextGroundingEvidence]);
+    }, [activeSessionId, autoContexts, hydrateAutoContextGroundingEvidence, sessions]);
 
     const evidenceItems: Evidence[] = useMemo(() => {
         const enabledProviders = providers.filter((item) => item.enabled);
@@ -1062,6 +1368,7 @@ export function AssistantModule() {
 
     const startAutoMissionContext = useCallback(async (payload: MissionIntakePayload) => {
         let shouldRun = false;
+        rememberContextSessionLink(payload.id, payload.id);
 
         setAutoContexts((prev) => {
             if (prev.some((item) => item.id === payload.id)) {
@@ -1116,6 +1423,7 @@ export function AssistantModule() {
 
             createdContext = effectiveContext;
             serverContextId = created.id;
+            rememberContextSessionLink(effectiveContext.clientContextId, payload.id);
             setAutoContexts((prev) => mergeAutoContexts(prev, [toAutoContextFromServer(effectiveContext)]));
         } catch (err) {
             const message =
@@ -1174,7 +1482,7 @@ export function AssistantModule() {
             );
             void syncAutoContextsWithRetry();
         }
-    }, [buildRequestPayload, syncAutoContextsWithRetry]);
+    }, [buildRequestPayload, rememberContextSessionLink, syncAutoContextsWithRetry]);
 
     const executePrompt = useCallback(async (prompt: string, options?: { auto?: boolean; autoStatus?: string }) => {
         const normalizedPrompt = prompt.trim();
@@ -1410,6 +1718,7 @@ export function AssistantModule() {
             if (payload.prestarted) {
                 autoContextStartedThisSessionRef.current.add(payload.id);
                 autoContextDeliveredRevisionRef.current.delete(payload.id);
+                rememberContextSessionLink(payload.id, payload.id);
                 void syncAutoContextsWithRetry();
                 return;
             }
@@ -1419,6 +1728,7 @@ export function AssistantModule() {
 
         const unsubscribeMissionTaskLink = subscribeMissionIntakeTaskLink((payload) => {
             pendingTaskLinksRef.current.set(payload.id, payload.taskId);
+            rememberContextSessionLink(payload.id, payload.id);
             const linkedContextId = autoContextsRef.current.find((item) => item.id === payload.id)?.serverContextId;
             setAutoContexts((prev) => prev.map((item) => (item.id === payload.id ? { ...item, taskId: payload.taskId } : item)));
             if (linkedContextId) {
@@ -1432,10 +1742,11 @@ export function AssistantModule() {
             unsubscribeMissionIntake();
             unsubscribeMissionTaskLink();
         };
-    }, [startAutoMissionContext, syncAutoContextsWithRetry]);
+    }, [rememberContextSessionLink, startAutoMissionContext, syncAutoContextsWithRetry]);
 
     useEffect(() => {
         const runningServerContextIds = new Set<string>();
+        const nowMs = Date.now();
         for (const context of autoContexts) {
             if (context.status !== "running" || !context.serverContextId) {
                 continue;
@@ -1443,13 +1754,25 @@ export function AssistantModule() {
 
             const serverContextId = context.serverContextId;
             runningServerContextIds.add(serverContextId);
+            const retryState = contextStreamRetryStateRef.current.get(serverContextId);
+            if (retryState?.terminal) {
+                continue;
+            }
+            if (retryState && retryState.retryAtMs > nowMs) {
+                continue;
+            }
 
             if (contextStreamRef.current.has(serverContextId)) {
                 continue;
             }
 
             const stream = streamAssistantContextEvents(serverContextId, {
+                onOpen: () => {
+                    contextStreamRetryStateRef.current.delete(serverContextId);
+                    contextLastEventAtRef.current.set(serverContextId, Date.now());
+                },
                 onEvent: (payload) => {
+                    contextLastEventAtRef.current.set(serverContextId, Date.now());
                     const row = payload.context;
                     const clientContextId =
                         row?.clientContextId ??
@@ -1459,7 +1782,7 @@ export function AssistantModule() {
                     }
 
                     if (!row) {
-                        void syncAutoContexts();
+                        syncAutoContextsWithThrottle(1000);
                         return;
                     }
 
@@ -1470,6 +1793,13 @@ export function AssistantModule() {
                             current.close();
                             contextStreamRef.current.delete(serverContextId);
                         }
+                        contextStreamRetryStateRef.current.delete(serverContextId);
+                        contextLastEventAtRef.current.delete(serverContextId);
+                        const reconnectTimer = contextReconnectTimersRef.current.get(serverContextId);
+                        if (reconnectTimer) {
+                            window.clearTimeout(reconnectTimer);
+                            contextReconnectTimersRef.current.delete(serverContextId);
+                        }
                     }
                 },
                 onClose: () => {
@@ -1478,7 +1808,13 @@ export function AssistantModule() {
                         current.close();
                     }
                     contextStreamRef.current.delete(serverContextId);
-                    void syncAutoContexts();
+                    contextLastEventAtRef.current.delete(serverContextId);
+                    emitRuntimeEvent("assistant_stream_closed", {
+                        serverContextId,
+                        source: "stream_close",
+                    });
+                    scheduleContextReconnect(serverContextId, context.id, "close");
+                    syncAutoContextsWithThrottle(1200);
                 },
                 onError: () => {
                     const current = contextStreamRef.current.get(serverContextId);
@@ -1486,7 +1822,12 @@ export function AssistantModule() {
                         current.close();
                     }
                     contextStreamRef.current.delete(serverContextId);
-                    void syncAutoContexts();
+                    contextLastEventAtRef.current.delete(serverContextId);
+                    emitRuntimeEvent("assistant_stream_closed", {
+                        serverContextId,
+                        source: "stream_error",
+                    });
+                    void handleContextStreamFailure(serverContextId, context.id);
                 },
             });
 
@@ -1499,16 +1840,74 @@ export function AssistantModule() {
             }
             stream.close();
             contextStreamRef.current.delete(serverContextId);
+            contextStreamRetryStateRef.current.delete(serverContextId);
+            contextLastEventAtRef.current.delete(serverContextId);
+            const reconnectTimer = contextReconnectTimersRef.current.get(serverContextId);
+            if (reconnectTimer) {
+                window.clearTimeout(reconnectTimer);
+                contextReconnectTimersRef.current.delete(serverContextId);
+            }
         }
-    }, [appendAutoContextEvents, autoContexts, syncAutoContexts]);
+    }, [
+        appendAutoContextEvents,
+        autoContexts,
+        handleContextStreamFailure,
+        scheduleContextReconnect,
+        streamReconnectTick,
+        syncAutoContextsWithThrottle,
+    ]);
+
+    useEffect(() => {
+        if (!streamResilienceEnabled) {
+            return;
+        }
+        const timerId = window.setInterval(() => {
+            const nowMs = Date.now();
+            for (const context of autoContextsRef.current) {
+                if (context.status !== "running" || !context.serverContextId) {
+                    continue;
+                }
+                const lastEventAt = contextLastEventAtRef.current.get(context.serverContextId);
+                if (!lastEventAt || nowMs - lastEventAt <= 20_000) {
+                    continue;
+                }
+                emitRuntimeEvent("assistant_stage_stalled_detected", {
+                    contextId: context.id,
+                    serverContextId: context.serverContextId,
+                    lastEventAgeMs: nowMs - lastEventAt,
+                });
+                contextLastEventAtRef.current.set(context.serverContextId, nowMs);
+                void syncAutoContextsWithRetry({ attempts: 3, baseDelayMs: 220 });
+                setStreamReconnectTick((prev) => prev + 1);
+            }
+        }, 5_000);
+        return () => {
+            window.clearInterval(timerId);
+        };
+    }, [streamResilienceEnabled, syncAutoContextsWithRetry]);
 
     useEffect(() => {
         const streamMap = contextStreamRef.current;
+        const streamRetryStateMap = contextStreamRetryStateRef.current;
+        const reconnectTimerMap = contextReconnectTimersRef.current;
+        const lastEventAtMap = contextLastEventAtRef.current;
+        const missingProbeSet = contextMissingProbeInFlightRef.current;
+        const eventHydrationFailuresMap = contextEventHydrationFailuresRef.current;
+        const groundingHydrationFailuresMap = groundingHydrationFailuresRef.current;
         return () => {
             for (const stream of streamMap.values()) {
                 stream.close();
             }
+            for (const timerId of reconnectTimerMap.values()) {
+                window.clearTimeout(timerId);
+            }
             streamMap.clear();
+            streamRetryStateMap.clear();
+            reconnectTimerMap.clear();
+            lastEventAtMap.clear();
+            missingProbeSet.clear();
+            eventHydrationFailuresMap.clear();
+            groundingHydrationFailuresMap.clear();
         };
     }, []);
 
@@ -1565,88 +1964,26 @@ export function AssistantModule() {
 
         const sourceEvents = autoContextEvents[target.id] ?? [];
         const parsedRows: AssistantStageTimelineRow[] = sourceEvents
+            .filter((event) => event.eventType === "assistant.context.stage.updated")
             .map((event) => {
                 const data = event.data ?? {};
-                if (event.eventType === "assistant.context.stage.updated") {
-                    const stage = toAssistantStage(data.stage);
-                    if (!stage) {
-                        return null;
-                    }
-                    const seq = toNumber(data.stage_seq) ?? event.sequence;
-                    const finalized = data.finalized === "delivered" || data.finalized === "failed" ? data.finalized : null;
-                    return {
-                        stage,
-                        stageSeq: seq,
-                        startedAt: toIsoStringOrNow(data.started_at ?? event.createdAt),
-                        endedAt: typeof data.ended_at === "string" ? data.ended_at : null,
-                        reasonCode: typeof data.reason_code === "string" ? data.reason_code : null,
-                        finalized,
-                        status: finalized === "failed" ? "failed" : "done",
-                        contextId: target.id,
-                    };
+                const stage = toAssistantStage(data.stage);
+                if (!stage) {
+                    return null;
                 }
-
-                if (event.eventType === "assistant.context.run.accepted") {
-                    return {
-                        stage: "accepted",
-                        stageSeq: event.sequence,
-                        startedAt: event.createdAt,
-                        endedAt: null,
-                        reasonCode: null,
-                        finalized: null,
-                        status: "done",
-                        contextId: target.id,
-                    };
-                }
-                if (event.eventType === "assistant.context.policy.resolved") {
-                    return {
-                        stage: "policy_resolved",
-                        stageSeq: event.sequence,
-                        startedAt: event.createdAt,
-                        endedAt: null,
-                        reasonCode: null,
-                        finalized: null,
-                        status: "done",
-                        contextId: target.id,
-                    };
-                }
-                if (event.eventType === "assistant.context.run.started") {
-                    return {
-                        stage: "generation_started",
-                        stageSeq: event.sequence,
-                        startedAt: event.createdAt,
-                        endedAt: null,
-                        reasonCode: null,
-                        finalized: null,
-                        status: "done",
-                        contextId: target.id,
-                    };
-                }
-                if (event.eventType === "assistant.context.run.completed") {
-                    return {
-                        stage: "finalized",
-                        stageSeq: event.sequence,
-                        startedAt: event.createdAt,
-                        endedAt: event.createdAt,
-                        reasonCode: null,
-                        finalized: "delivered",
-                        status: "done",
-                        contextId: target.id,
-                    };
-                }
-                if (event.eventType === "assistant.context.run.failed") {
-                    return {
-                        stage: "finalized",
-                        stageSeq: event.sequence,
-                        startedAt: event.createdAt,
-                        endedAt: event.createdAt,
-                        reasonCode: typeof data.reason === "string" ? data.reason : null,
-                        finalized: "failed",
-                        status: "failed",
-                        contextId: target.id,
-                    };
-                }
-                return null;
+                const stageSeqFromData = toNumber(data.stage_seq);
+                const seq = stageSeqFromData ?? (timelineStageSeqOnlyEnabled ? event.effectiveSeq : event.sequence);
+                const finalized = data.finalized === "delivered" || data.finalized === "failed" ? data.finalized : null;
+                return {
+                    stage,
+                    stageSeq: seq,
+                    startedAt: toIsoStringOrNow(data.started_at ?? event.createdAt),
+                    endedAt: typeof data.ended_at === "string" ? data.ended_at : null,
+                    reasonCode: typeof data.reason_code === "string" ? data.reason_code : null,
+                    finalized,
+                    status: finalized === "failed" ? "failed" : "done",
+                    contextId: target.id,
+                };
             })
             .filter((item): item is AssistantStageTimelineRow => item !== null);
 
@@ -1708,7 +2045,7 @@ export function AssistantModule() {
             context: target,
             rows,
         };
-    }, [activeSessionId, autoContextEvents, autoContexts, sessions, stageTimelineEnabled]);
+    }, [activeSessionId, autoContextEvents, autoContexts, sessions, stageTimelineEnabled, timelineStageSeqOnlyEnabled]);
 
     const [stageTimelineNowMs, setStageTimelineNowMs] = useState(() => Date.now());
     const timelineContextId = userStageTimeline?.context.id ?? null;
@@ -1762,7 +2099,7 @@ export function AssistantModule() {
 
         for (const event of sourceEvents) {
             const existingEvent = latestByEventType.get(event.eventType);
-            if (!existingEvent || event.sequence >= existingEvent.sequence) {
+            if (!existingEvent || event.effectiveSeq >= existingEvent.effectiveSeq) {
                 latestByEventType.set(event.eventType, event);
             }
             if (event.eventType !== "assistant.context.stage.updated") {
@@ -1772,7 +2109,7 @@ export function AssistantModule() {
             if (!stage) {
                 continue;
             }
-            const stageSeq = toNumber(event.data.stage_seq) ?? event.sequence;
+            const stageSeq = toNumber(event.data.stage_seq) ?? event.effectiveSeq;
             const current = stageDataByStage.get(stage);
             if (!current || stageSeq >= current.seq) {
                 stageDataByStage.set(stage, {
@@ -2178,6 +2515,9 @@ export function AssistantModule() {
             });
 
         const restoredContext = candidateContexts[0];
+        if (restoredContext) {
+            rememberContextSessionLink(restoredContext.id, activeSessionId);
+        }
         const restoredGrounding = restoredContext ? resolveAutoContextGrounding(restoredContext) : undefined;
         const fallbackMessages = restoredContext
             ? [
@@ -2200,7 +2540,7 @@ export function AssistantModule() {
         setMessages(normalizedFallbackMessages);
         sessionMessageStoreRef.current[activeSessionId] = normalizedFallbackMessages;
         persistStoredSessionMessages(sessionMessageStoreRef.current);
-    }, [activeSessionId, autoContexts, buildAutoContextStatusLabel, resolveAutoContextGrounding, sessions]);
+    }, [activeSessionId, autoContexts, buildAutoContextStatusLabel, rememberContextSessionLink, resolveAutoContextGrounding, sessions]);
 
     useEffect(() => {
         if (!activeSessionId || activeMessageSessionRef.current !== activeSessionId) {
@@ -2222,6 +2562,9 @@ export function AssistantModule() {
                 setMessages((prev) => pruneSessionMessages([...prev, message]));
                 return;
             }
+            if (message.contextId) {
+                rememberContextSessionLink(message.contextId, targetSessionId);
+            }
 
             const baseMessages = sessionMessageStoreRef.current[targetSessionId] ?? defaultMessages();
             const dedupedBase =
@@ -2237,7 +2580,7 @@ export function AssistantModule() {
                 setMessages(nextMessages);
             }
         },
-        [activeSessionId]
+        [activeSessionId, rememberContextSessionLink]
     );
 
     const deliverAutoContextMessage = useCallback(
@@ -2245,6 +2588,15 @@ export function AssistantModule() {
             if (context.status === "running") {
                 return;
             }
+            const resolvedSessionId =
+                sessionId ??
+                contextSessionMapRef.current.get(context.id) ??
+                (context.taskId
+                    ? sessions.find((session) => session.taskId === context.taskId)?.id ?? null
+                    : null) ??
+                activeSessionId ??
+                null;
+            rememberContextSessionLink(context.id, resolvedSessionId);
             const grounding = resolveAutoContextGrounding(context);
             const qualityGateResult = resolveQualityGateResult({
                 content: context.output,
@@ -2261,7 +2613,7 @@ export function AssistantModule() {
                 autoContextDeliveredRevisionRef.current.set(context.id, revision);
             }
 
-            appendMessageToSession(sessionId, {
+            appendMessageToSession(resolvedSessionId, {
                 role: "assistant",
                 content: context.output,
                 status: buildAutoContextStatusLabel(context),
@@ -2276,9 +2628,15 @@ export function AssistantModule() {
                 revision,
                 status: context.status,
                 exactlyOnceDeliveryEnabled,
-                sessionId: sessionId ?? null,
+                sessionId: resolvedSessionId,
                 taskId: context.taskId ?? null,
                 outputHash: hashText(context.output),
+            });
+            emitRuntimeEvent("assistant_message_delivered", {
+                contextId: context.id,
+                sessionId: resolvedSessionId,
+                revision,
+                qualityGateResult,
             });
             emitRuntimeEvent("assistant_quality_evaluated", {
                 route: "auto_context",
@@ -2301,16 +2659,19 @@ export function AssistantModule() {
                 gateResult: qualityGateResult,
                 softWarnRendered: uiSoftWarnEnabled && qualityGateResult === "soft_warn",
             });
-            if (exactlyOnceDeliveryEnabled && sessionId) {
-                markSessionContextDelivered(sessionId, context.id, revision);
+            if (exactlyOnceDeliveryEnabled && resolvedSessionId) {
+                markSessionContextDelivered(resolvedSessionId, context.id, revision);
             }
         },
         [
+            activeSessionId,
             appendMessageToSession,
             buildAutoContextStatusLabel,
             exactlyOnceDeliveryEnabled,
             markSessionContextDelivered,
+            rememberContextSessionLink,
             resolveAutoContextGrounding,
+            sessions,
             uiSoftWarnEnabled,
         ]
     );
@@ -2342,10 +2703,15 @@ export function AssistantModule() {
         }
 
         const resolveSessionIdForContext = (context: AutoMissionContext): string | null => {
+            const linkedFromMap = contextSessionMapRef.current.get(context.id);
+            if (linkedFromMap) {
+                return linkedFromMap;
+            }
             const linked = sessions.find(
                 (session) => session.id === context.id || (session.taskId && context.taskId && session.taskId === context.taskId)
             );
             if (linked) {
+                rememberContextSessionLink(context.id, linked.id);
                 return linked.id;
             }
             return activeSessionId ?? null;
@@ -2364,7 +2730,7 @@ export function AssistantModule() {
         for (const context of queued) {
             deliverAutoContextMessage(context, resolveSessionIdForContext(context));
         }
-    }, [activeSessionId, autoContexts, deliverAutoContextMessage, sessions]);
+    }, [activeSessionId, autoContexts, deliverAutoContextMessage, rememberContextSessionLink, sessions]);
 
     return (
         <main className="w-full h-full relative overflow-hidden bg-transparent text-white flex">
@@ -2646,6 +3012,7 @@ export function AssistantModule() {
                                     grounding={resolvedGrounding}
                                     renderMode={renderMode}
                                     softWarnUiEnabled={uiSoftWarnEnabled}
+                                    hardFailRawOutputToggleEnabled={hardFailRawOutputToggleEnabled}
                                     onRetry={
                                         retryPrompt
                                             ? () => {
@@ -2677,6 +3044,7 @@ export function AssistantModule() {
                                 route="manual"
                                 renderMode={renderMode}
                                 softWarnUiEnabled={uiSoftWarnEnabled}
+                                hardFailRawOutputToggleEnabled={hardFailRawOutputToggleEnabled}
                             />
                         )}
                     </div>
@@ -3046,6 +3414,7 @@ function SystemMessage({
     grounding,
     renderMode = "user_mode",
     softWarnUiEnabled = true,
+    hardFailRawOutputToggleEnabled = true,
     onRetry,
     feedback,
 }: {
@@ -3055,9 +3424,11 @@ function SystemMessage({
     grounding?: ChatMessage["grounding"];
     renderMode?: AssistantRenderMode;
     softWarnUiEnabled?: boolean;
+    hardFailRawOutputToggleEnabled?: boolean;
     onRetry?: () => void;
     feedback?: SystemMessageFeedback;
 }) {
+    const [showBlockedRawOutput, setShowBlockedRawOutput] = useState(false);
     const showDiagnostics = renderMode === "debug_mode";
     const qualityGateResult = resolveQualityGateResult({
         content,
@@ -3111,6 +3482,7 @@ function SystemMessage({
             };
         });
     };
+
     return (
         <div className="flex justify-start">
             <div className="max-w-[96%]">
@@ -3151,6 +3523,17 @@ function SystemMessage({
                                 >
                                     다시 시도
                                 </button>
+                                {hardFailRawOutputToggleEnabled && (
+                                    <button
+                                        type="button"
+                                        className="rounded border border-amber-500/40 bg-black/50 px-2.5 py-1 text-[10px] font-mono tracking-widest text-amber-200 hover:bg-amber-500/10"
+                                        onClick={() => {
+                                            setShowBlockedRawOutput((prev) => !prev);
+                                        }}
+                                    >
+                                        {showBlockedRawOutput ? "원본 출력 숨기기" : "원본 출력 보기"}
+                                    </button>
+                                )}
                                 <Link
                                     href="/settings"
                                     className="rounded border border-white/20 bg-black/40 px-2.5 py-1 text-[10px] font-mono tracking-widest text-white/70 hover:text-white"
@@ -3158,6 +3541,11 @@ function SystemMessage({
                                     PROVIDERS 설정
                                 </Link>
                             </div>
+                            {showBlockedRawOutput && (
+                                <pre className="mt-3 whitespace-pre-wrap break-words rounded border border-white/10 bg-black/40 px-3 py-2 text-[12px] leading-relaxed text-white/70">
+                                    {content}
+                                </pre>
+                            )}
                         </div>
                     </div>
                 ) : (
