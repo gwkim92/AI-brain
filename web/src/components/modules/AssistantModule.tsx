@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link";
 import { ToolCallTimeline, ToolCall } from "@/components/ui/ToolCallTimeline";
 import { EvidencePanel, Evidence } from "@/components/ui/EvidencePanel";
+import { MarkdownLite } from "@/components/ui/MarkdownLite";
 import { Send, Sparkles, BrainCircuit, Loader2 } from "lucide-react";
 import {
     aiRespond,
@@ -3615,9 +3616,10 @@ function SystemMessage({
                                 </ul>
                             </div>
                         )}
-                        <div className="text-[15px] leading-relaxed text-white/80 whitespace-pre-wrap break-words">
-                            {content}
-                        </div>
+                        <MarkdownLite
+                            content={content}
+                            className="text-[15px] leading-relaxed text-white/80 space-y-3"
+                        />
                     </div>
                 )}
                 {showDiagnostics && groundingSummary && (

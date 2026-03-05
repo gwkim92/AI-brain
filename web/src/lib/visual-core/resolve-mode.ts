@@ -46,6 +46,9 @@ export function resolveJarvis3DScene(signals: VisualCoreSignals): Jarvis3DScene 
   } else if (signals.focusedWidget === "memory") {
     baseMode = "sdf_brain";
     reason = "focused_widget_memory";
+  } else if (signals.focusedWidget === "ideation") {
+    baseMode = "multi_attractor";
+    reason = "focused_widget_ideation";
   } else if (signals.focusedWidget === "settings") {
     baseMode = "sdf_eye";
     reason = "focused_widget_settings";

@@ -10,7 +10,8 @@ export type HudWidgetId =
   | "approvals"
   | "memory"
   | "settings"
-  | "model_control";
+  | "model_control"
+  | "ideation";
 
 export type HudIntent = "code" | "research" | "finance" | "news" | "general";
 export type HudTaskMode = "code" | "execute" | "radar_review";
@@ -23,6 +24,7 @@ const RESEARCH_KEYWORDS = /(리서치|연구|논문|근거|인용|가설|조사|
 const FINANCE_KEYWORDS = /(금융|주식|환율|거시|포트폴리오|리스크|재무|finance|market|asset)/i;
 const NEWS_KEYWORDS = /(뉴스|정치|경제 브리핑|속보|이슈|뉴스레터|news|briefing)/i;
 const HIGH_RISK_KEYWORDS = /(승인|approve|결제|payment|환불|refund|권한|보안|security|법적|legal)/i;
+const IDEATION_KEYWORDS = /(브레인스토밍|아이디어|기획|전략|탐색|가설|우선순위|brainstorm|ideation|strategy|discovery)/i;
 
 export function inferHudIntent(prompt: string): HudIntent {
   if (CODE_KEYWORDS.test(prompt)) {
@@ -67,6 +69,10 @@ export function buildWidgetPlan(intent: HudIntent, prompt: string): HudWidgetId[
 
   if (HIGH_RISK_KEYWORDS.test(prompt)) {
     base.push("approvals");
+  }
+
+  if (IDEATION_KEYWORDS.test(prompt)) {
+    base.splice(1, 0, "ideation");
   }
 
   return Array.from(new Set(base));

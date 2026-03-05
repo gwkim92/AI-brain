@@ -37,6 +37,11 @@ const VISUAL_CORE_REASON_META: Record<string, VisualCoreReasonMeta> = {
     operatorHint: "Knowledge/memory context is currently emphasized.",
     severity: "info",
   },
+  focused_widget_ideation: {
+    label: "Ideation focus",
+    operatorHint: "Branch exploration and strategy synthesis are currently active.",
+    severity: "info",
+  },
   focused_widget_settings: {
     label: "Settings focus",
     operatorHint: "Configuration workspace is currently active.",

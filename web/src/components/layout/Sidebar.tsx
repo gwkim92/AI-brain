@@ -14,6 +14,7 @@ import {
     Inbox,
     LayoutGrid,
     SlidersHorizontal,
+    Lightbulb,
     ChevronLeft,
     ChevronRight,
 } from "lucide-react";
@@ -292,6 +293,15 @@ function SidebarContent() {
                     description="Credential mode, model defaults, recommendations, traces."
                     active={activeWidgets.includes("model_control")}
                     onClick={() => toggleWidget("model_control")}
+                />
+                <NavItem
+                    compact={compact}
+                    icon={<Lightbulb size={18} />}
+                    label="Ideation"
+                    title="Ideation Lab"
+                    description="Branch-based discovery and execution prompt handoff."
+                    active={activeWidgets.includes("ideation")}
+                    onClick={() => toggleWidget("ideation")}
                 />
                 <NavItem
                     compact={compact}

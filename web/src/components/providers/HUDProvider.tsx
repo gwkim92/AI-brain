@@ -32,6 +32,7 @@ const KNOWN_WIDGET_IDS = new Set([
     "memory",
     "settings",
     "model_control",
+    "ideation",
 ]);
 
 function readStoredArray(key: string, fallback: string[]): string[] {

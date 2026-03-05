@@ -41,6 +41,7 @@ import { ApprovalsModule } from "@/components/modules/ApprovalsModule";
 import { MemoryModule } from "@/components/modules/MemoryModule";
 import { SettingsModule } from "@/components/modules/SettingsModule";
 import { ModelControlModule } from "@/components/modules/ModelControlModule";
+import { IdeationModule } from "@/components/modules/IdeationModule";
 
 const EVENT_PULSE_MS = 2200;
 const KNOWN_WIDGET_IDS = new Set([
@@ -54,6 +55,7 @@ const KNOWN_WIDGET_IDS = new Set([
   "memory",
   "settings",
   "model_control",
+  "ideation",
 ]);
 
 type VisualSignalSnapshot = {
@@ -87,6 +89,7 @@ const WIDGET_DEFAULTS: Record<string, { x: number; y: number; w: number; h: numb
   memory:    { x: 280, y: 140, w: 360, h: 340 },
   settings:  { x: 140, y: 72,  w: 620, h: 760 },
   model_control: { x: 180, y: 72, w: 760, h: 760 },
+  ideation: { x: 120, y: 72, w: 920, h: 780 },
 };
 
 const WIDGET_TITLES: Record<string, string> = {
@@ -100,6 +103,7 @@ const WIDGET_TITLES: Record<string, string> = {
   memory: "SEMANTIC MEMORY",
   settings: "SYSTEM SETTINGS",
   model_control: "MODEL CONTROL",
+  ideation: "IDEATION LAB",
 };
 
 const WIDGET_COMPONENTS: Record<string, React.ComponentType> = {
@@ -113,6 +117,7 @@ const WIDGET_COMPONENTS: Record<string, React.ComponentType> = {
   memory: MemoryModule,
   settings: SettingsModule,
   model_control: ModelControlModule,
+  ideation: IdeationModule,
 };
 
 function HUDWidgetRenderer({ mountedWidgets, activeWidgets }: { mountedWidgets: string[]; activeWidgets: string[] }) {

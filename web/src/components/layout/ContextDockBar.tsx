@@ -43,6 +43,7 @@ const WIDGET_LABELS: Record<string, string> = {
   memory: "Memory",
   settings: "Settings",
   model_control: "Model Control",
+  ideation: "Ideation",
 };
 
 function widgetLabel(id: string): string {
