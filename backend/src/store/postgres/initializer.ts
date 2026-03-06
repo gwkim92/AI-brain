@@ -334,6 +334,27 @@ export async function initializePostgresStore({
     ADD COLUMN IF NOT EXISTS execution_result JSONB
   `);
   await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        WHERE t.relname = 'mission_steps'
+          AND c.conname = 'mission_steps_step_type_check'
+      ) THEN
+        ALTER TABLE mission_steps DROP CONSTRAINT mission_steps_step_type_check;
+      END IF;
+    END
+    $$;
+  `);
+  await pool.query(`
+    ALTER TABLE IF EXISTS mission_steps
+    ADD CONSTRAINT mission_steps_step_type_check
+    CHECK (step_type IN ('llm_generate', 'council_debate', 'human_gate', 'tool_call', 'sub_mission',
+                          'code', 'research', 'finance', 'news', 'approval', 'execute'))
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS assistant_contexts (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,

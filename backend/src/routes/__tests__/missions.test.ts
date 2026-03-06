@@ -254,4 +254,41 @@ describe('missions api', () => {
 
     await app.close();
   });
+
+  it('auto-creates mission from simple generated plan with UUID step ids', async () => {
+    const { app } = await buildServer();
+
+    const generated = await app.inject({
+      method: 'POST',
+      url: '/api/v1/missions/generate-plan',
+      payload: {
+        prompt: '오늘 세계 주요 뉴스와 전쟁 관련 최신 뉴스를 정리해줘',
+        auto_create: true,
+        complexity_hint: 'simple'
+      }
+    });
+
+    expect(generated.statusCode).toBe(201);
+    const body = generated.json() as {
+      data: {
+        plan: {
+          steps: Array<{ id: string }>;
+        };
+        mission: {
+          steps: Array<{ id: string }>;
+        };
+      };
+    };
+
+    expect(body.data.plan.steps.length).toBeGreaterThan(0);
+    expect(body.data.mission.steps.length).toBeGreaterThan(0);
+    expect(body.data.plan.steps[0]?.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
+    );
+    expect(body.data.mission.steps[0]?.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
+    );
+
+    await app.close();
+  });
 });

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import { classifyComplexity, buildSimplePlan } from '../complexity';
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
 describe('classifyComplexity', () => {
   it('classifies empty or short prompts as simple', () => {
     expect(classifyComplexity('')).toBe('simple');
@@ -60,5 +62,10 @@ describe('buildSimplePlan', () => {
     const longPrompt = 'A'.repeat(200);
     const plan = buildSimplePlan(longPrompt);
     expect(plan.title.length).toBeLessThanOrEqual(80);
+  });
+
+  it('emits UUID step id for persistence-safe mission creation', () => {
+    const plan = buildSimplePlan('Do something');
+    expect(plan.steps[0]?.id).toMatch(UUID_PATTERN);
   });
 });

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import type { ProviderRouter } from '../providers/router';
 import type { ProviderCredentialsByProvider } from '../providers/types';
 import { withAiInvocationTrace } from '../observability/ai-trace';
@@ -61,6 +63,15 @@ Respond with ONLY a valid JSON object in this exact format:
   ]
 }`;
 
+function createStepUuid(usedIds: Set<string>): string {
+  let candidate = randomUUID();
+  while (usedIds.has(candidate)) {
+    candidate = randomUUID();
+  }
+  usedIds.add(candidate);
+  return candidate;
+}
+
 export async function generatePlan(
   prompt: string,
   providerRouter: ProviderRouter,
@@ -121,18 +132,49 @@ export function parsePlanFromLLMOutput(output: string): OrchestratorPlan {
     throw new Error('Invalid plan structure: missing title, objective, or steps');
   }
 
-  const steps: PlanStep[] = parsed.steps.map((step: Record<string, unknown>, index: number) => ({
-    id: String(step.id ?? `step-${index + 1}`),
-    type: validateStepPattern(String(step.type ?? 'llm_generate')),
-    taskType: validateTaskType(String(step.task_type ?? 'execute')),
-    title: String(step.title ?? `Step ${index + 1}`),
-    description: String(step.description ?? ''),
-    order: typeof step.order === 'number' ? step.order : index + 1,
-    dependencies: Array.isArray(step.dependencies) ? step.dependencies.map(String) : [],
-    metadata: typeof step.metadata === 'object' && step.metadata !== null
-      ? step.metadata as Record<string, unknown>
-      : undefined
-  }));
+  const usedStepIds = new Set<string>();
+  const idMap = new Map<string, string>();
+  const parsedSteps = parsed.steps as Array<Record<string, unknown>>;
+
+  const normalized = parsedSteps.map((step, index) => {
+    const rawId = typeof step.id === 'string' && step.id.trim().length > 0 ? step.id.trim() : `step-${index + 1}`;
+    const normalizedId = createStepUuid(usedStepIds);
+    if (!idMap.has(rawId)) {
+      idMap.set(rawId, normalizedId);
+    }
+    return {
+      rawId,
+      normalizedId,
+      rawStep: step,
+      index
+    };
+  });
+
+  const steps: PlanStep[] = normalized.map(({ rawId, normalizedId, rawStep, index }) => {
+    const rawDependencies = Array.isArray(rawStep.dependencies) ? rawStep.dependencies.map(String) : [];
+    const dependencies = Array.from(
+      new Set(
+        rawDependencies
+          .map((dependencyId) => idMap.get(dependencyId.trim()) ?? null)
+          .filter((dependencyId): dependencyId is string => Boolean(dependencyId && dependencyId !== normalizedId))
+      )
+    );
+
+    return {
+      id: normalizedId,
+      type: validateStepPattern(String(rawStep.type ?? 'llm_generate')),
+      taskType: validateTaskType(String(rawStep.task_type ?? 'execute')),
+      title: String(rawStep.title ?? `Step ${index + 1}`),
+      description: String(rawStep.description ?? ''),
+      order: typeof rawStep.order === 'number' ? rawStep.order : index + 1,
+      dependencies,
+      metadata: typeof rawStep.metadata === 'object' && rawStep.metadata !== null
+        ? rawStep.metadata as Record<string, unknown>
+        : rawId
+        ? { raw_step_id: rawId }
+        : undefined
+    };
+  });
 
   return {
     title: String(parsed.title),

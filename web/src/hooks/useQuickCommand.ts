@@ -125,7 +125,7 @@ export function useQuickCommand() {
           ? primaryWidget
           : allowed[0]!;
       focusWidgetForSession = focus;
-      activeWidgetsForSession = [focus];
+      activeWidgetsForSession = [...allowed];
 
       if (pathname !== "/") {
         router.push("/");
@@ -151,6 +151,7 @@ export function useQuickCommand() {
 
     try {
       let linkedTaskId: string | null = null;
+      let linkedMissionId: string | null = null;
       let linkedContextId: string | null = null;
       if (complexity !== "simple") {
         const result = await generateMissionPlan({
@@ -164,12 +165,8 @@ export function useQuickCommand() {
         }, 0);
 
         if (result.mission) {
-          dispatchMissionIntakeTaskLink({
-            id: intake.id,
-            taskId: result.mission.id,
-          });
           linkSessionTask(sessionId, undefined, result.mission.id);
-          linkedTaskId = result.mission.id;
+          linkedMissionId = result.mission.id;
         }
       } else {
         const task = await createTask({
@@ -237,6 +234,7 @@ export function useQuickCommand() {
         prompt: trimmed,
         sessionId,
         taskId: linkedTaskId,
+        missionId: linkedMissionId,
         contextId: linkedContextId,
         taskMode: intake.taskMode,
         singleFlightEnabled,

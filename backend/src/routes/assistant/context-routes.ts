@@ -31,6 +31,12 @@ export function registerAssistantContextCrudRoutes(app: FastifyInstance, ctx: Ro
     });
 
     const resolvedTaskId = parsed.data.task_id ?? (await resolveTaskIdForContext(store, userId, parsed.data.client_context_id));
+    if (resolvedTaskId) {
+      const linkedTask = await store.getTaskById(resolvedTaskId);
+      if (!linkedTask || linkedTask.userId !== userId) {
+        return sendError(reply, request, 422, 'VALIDATION_ERROR', 'assistant context task_id must reference an existing user task');
+      }
+    }
 
     const context = await store.upsertAssistantContext({
       userId,
@@ -218,6 +224,12 @@ export function registerAssistantContextCrudRoutes(app: FastifyInstance, ctx: Ro
 
     const contextId = (request.params as { contextId: string }).contextId;
     const userId = resolveRequestUserId(request);
+    if (typeof parsed.data.task_id !== 'undefined' && parsed.data.task_id !== null) {
+      const linkedTask = await store.getTaskById(parsed.data.task_id);
+      if (!linkedTask || linkedTask.userId !== userId) {
+        return sendError(reply, request, 422, 'VALIDATION_ERROR', 'assistant context task_id must reference an existing user task');
+      }
+    }
     const updated = await store.updateAssistantContext({
       userId,
       contextId,

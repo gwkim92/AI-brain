@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 export type ComplexityLevel = 'simple' | 'moderate' | 'complex';
 
 const MULTI_STEP_KEYWORDS =
@@ -45,7 +47,7 @@ export function buildSimplePlan(prompt: string) {
     domain: 'mixed',
     steps: [
       {
-        id: 'step-1',
+        id: randomUUID(),
         type: 'llm_generate' as const,
         taskType: 'execute',
         title: 'Execute request',

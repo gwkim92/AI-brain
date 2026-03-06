@@ -163,15 +163,15 @@ export function RightPanel() {
     }, [applyOverviewSnapshot]);
 
     const resolveSessionFocus = (session: (typeof sessions)[number]): string => {
-        if ((session.taskId || session.missionId) && session.mountedWidgets.includes("assistant")) {
-            return "assistant";
-        }
         if (session.focusedWidget && session.mountedWidgets.includes(session.focusedWidget)) {
             return session.focusedWidget;
         }
         const activeCandidate = session.activeWidgets.find((widgetId) => session.mountedWidgets.includes(widgetId));
         if (activeCandidate) {
             return activeCandidate;
+        }
+        if ((session.taskId || session.missionId) && session.mountedWidgets.includes("assistant")) {
+            return "assistant";
         }
         if (session.mountedWidgets.includes("assistant")) {
             return "assistant";
@@ -542,7 +542,7 @@ export function RightPanel() {
                             >
                                 <button
                                     type="button"
-                                    onClick={() => activateSession(session.id, "focus_only")}
+                                    onClick={() => activateSession(session.id, "full")}
                                     className="w-full text-left"
                                 >
                                     <div className="flex items-start justify-between gap-2">

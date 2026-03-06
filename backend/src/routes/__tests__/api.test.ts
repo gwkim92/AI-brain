@@ -437,6 +437,35 @@ describe('API routes', () => {
     await app.close();
   });
 
+  it('rejects assistant context task ids that do not reference an existing user task', async () => {
+    const { app } = await buildServer();
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/assistant/contexts',
+      payload: {
+        client_context_id: 'ctx-invalid-task-link-001',
+        source: 'inbox_quick_command',
+        intent: 'research',
+        prompt: 'summarize the latest world news',
+        widget_plan: ['assistant', 'tasks'],
+        task_id: '11111111-1111-4111-8111-111111111111'
+      }
+    });
+
+    expect(create.statusCode).toBe(422);
+    const body = create.json() as {
+      error: {
+        code: string;
+        message: string;
+      };
+    };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(body.error.message).toContain('task_id');
+
+    await app.close();
+  });
+
   it('runs assistant context asynchronously on backend and syncs linked task status', async () => {
     process.env.OPENAI_API_KEY = 'test-openai-key';
     const fetchMock = vi.fn().mockResolvedValue(

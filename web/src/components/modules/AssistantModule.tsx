@@ -507,6 +507,7 @@ export function AssistantModule() {
     const autoContextEventsRef = useRef<Record<string, AutoMissionEvent[]>>({});
     const autoContextStartedThisSessionRef = useRef<Set<string>>(new Set());
     const autoContextDeliveredRevisionRef = useRef<Map<string, number>>(new Map());
+    const autoContextBootstrapInFlightRef = useRef<Set<string>>(new Set());
     const sessionMessageStoreRef = useRef<Record<string, ChatMessage[]>>({});
     const activeMessageSessionRef = useRef<string | null>(null);
     const pendingSessionPersistSkipRef = useRef<string | null>(null);
@@ -1169,6 +1170,37 @@ export function AssistantModule() {
     }, [recoverQueuedQuickCommandTasks, syncAutoContexts]);
 
     useEffect(() => {
+        const timerId = window.setInterval(() => {
+            const hasRunningContext = autoContextsRef.current.some((context) => context.status === "running");
+            if (!hasRunningContext) {
+                return;
+            }
+            void syncAutoContextsWithRetry({ attempts: 2, baseDelayMs: 220 });
+        }, 8_000);
+
+        return () => {
+            window.clearInterval(timerId);
+        };
+    }, [syncAutoContextsWithRetry]);
+
+    useEffect(() => {
+        const syncOnForeground = () => {
+            if (document.visibilityState !== "visible") {
+                return;
+            }
+            void syncAutoContextsWithRetry({ attempts: 2, baseDelayMs: 220 });
+        };
+
+        window.addEventListener("focus", syncOnForeground);
+        document.addEventListener("visibilitychange", syncOnForeground);
+
+        return () => {
+            window.removeEventListener("focus", syncOnForeground);
+            document.removeEventListener("visibilitychange", syncOnForeground);
+        };
+    }, [syncAutoContextsWithRetry]);
+
+    useEffect(() => {
         const sortedByRecent = [...autoContexts]
             .filter((context) => Boolean(context.serverContextId))
             .sort((left, right) => {
@@ -1410,14 +1442,20 @@ export function AssistantModule() {
         }), [runLabel, selectedProvider, strictProvider]);
 
     const startAutoMissionContext = useCallback(async (payload: MissionIntakePayload) => {
-        let shouldRun = false;
         rememberContextSessionLink(payload.id, payload.id);
 
+        if (
+            autoContextBootstrapInFlightRef.current.has(payload.id) ||
+            autoContextsRef.current.some((item) => item.id === payload.id)
+        ) {
+            return;
+        }
+
+        autoContextBootstrapInFlightRef.current.add(payload.id);
         setAutoContexts((prev) => {
             if (prev.some((item) => item.id === payload.id)) {
                 return prev;
             }
-            shouldRun = true;
             return [
                 {
                     id: payload.id,
@@ -1432,9 +1470,6 @@ export function AssistantModule() {
             ];
         });
 
-        if (!shouldRun) {
-            return;
-        }
         autoContextStartedThisSessionRef.current.add(payload.id);
         autoContextDeliveredRevisionRef.current.delete(payload.id);
 
@@ -1524,6 +1559,8 @@ export function AssistantModule() {
                 )
             );
             void syncAutoContextsWithRetry();
+        } finally {
+            autoContextBootstrapInFlightRef.current.delete(payload.id);
         }
     }, [buildRequestPayload, rememberContextSessionLink, syncAutoContextsWithRetry]);
 
@@ -1943,6 +1980,7 @@ export function AssistantModule() {
         const missingProbeSet = contextMissingProbeInFlightRef.current;
         const eventHydrationFailuresMap = contextEventHydrationFailuresRef.current;
         const groundingHydrationFailuresMap = groundingHydrationFailuresRef.current;
+        const bootstrapInFlightSet = autoContextBootstrapInFlightRef.current;
         return () => {
             for (const stream of streamMap.values()) {
                 stream.close();
@@ -1957,6 +1995,7 @@ export function AssistantModule() {
             missingProbeSet.clear();
             eventHydrationFailuresMap.clear();
             groundingHydrationFailuresMap.clear();
+            bootstrapInFlightSet.clear();
         };
     }, []);
 

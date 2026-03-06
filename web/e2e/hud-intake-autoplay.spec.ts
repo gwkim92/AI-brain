@@ -14,10 +14,14 @@ async function installHomeMocks(page: Page): Promise<{
   getCounts: () => {
     createdTaskCount: number;
     createdContextCount: number;
+    createdContextTaskIds: Array<string | null>;
+    createdContextTaskFieldPresence: boolean[];
   };
 }> {
   let createdTaskCount = 0;
   let createdContextCount = 0;
+  const createdContextTaskIds: Array<string | null> = [];
+  const createdContextTaskFieldPresence: boolean[] = [];
   const assistantContexts = new Map<string, {
     id: string;
     userId: string;
@@ -119,6 +123,7 @@ async function installHomeMocks(page: Page): Promise<{
         intent?: string;
         prompt: string;
         widget_plan?: string[];
+        task_id?: string;
       };
       const existing = Array.from(assistantContexts.values()).find((item) => item.clientContextId === payload.client_context_id);
       if (existing) {
@@ -131,6 +136,8 @@ async function installHomeMocks(page: Page): Promise<{
       }
 
       createdContextCount += 1;
+      createdContextTaskFieldPresence.push(Object.prototype.hasOwnProperty.call(payload, "task_id"));
+      createdContextTaskIds.push(typeof payload.task_id === "string" ? payload.task_id : null);
       const now = new Date(Date.now() + createdContextCount * 1000).toISOString();
       const nextId = `context-${createdContextCount}`;
       const row = {
@@ -501,6 +508,8 @@ async function installHomeMocks(page: Page): Promise<{
     getCounts: () => ({
       createdTaskCount,
       createdContextCount,
+      createdContextTaskIds,
+      createdContextTaskFieldPresence,
     }),
   };
 }
@@ -538,6 +547,124 @@ test("quick command auto-opens assistant/workbench/tasks and assistant auto-runs
   const counts = mocks.getCounts();
   expect(counts.createdTaskCount).toBe(1);
   expect(counts.createdContextCount).toBe(1);
+});
+
+test("complex quick command creates mission then kicks assistant context exactly once", async ({ page, context }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("jarvis.auth.role", "admin");
+    window.localStorage.setItem("jarvis.auth.token", "e2e-token");
+  });
+
+  await context.addCookies([
+    {
+      name: "jarvis_auth_token",
+      value: "e2e-token",
+      domain: "127.0.0.1",
+      path: "/",
+      httpOnly: false,
+      secure: false,
+      sameSite: "Lax",
+    },
+  ]);
+
+  const mocks = await installHomeMocks(page);
+  let generatedPlanCount = 0;
+
+  await page.route(`${API_BASE}/api/v1/missions/generate-plan`, async (route) => {
+    generatedPlanCount += 1;
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify(
+        envelope({
+          plan: {
+            title: "오늘자 뉴스 브리핑",
+            objective: "세계 주요 뉴스와 전쟁 관련 최신 뉴스를 정리한다",
+            domain: "research",
+            steps: [
+              {
+                id: "step-1",
+                type: "tool_call",
+                taskType: "execute",
+                title: "세계 주요 뉴스 수집",
+                description: "주요 글로벌 뉴스 수집",
+                order: 1,
+                dependencies: [],
+                metadata: {},
+              },
+              {
+                id: "step-2",
+                type: "llm_generate",
+                taskType: "chat",
+                title: "한국어 브리핑 작성",
+                description: "수집된 뉴스를 정리해 한국어 브리핑 작성",
+                order: 2,
+                dependencies: ["step-1"],
+                metadata: {},
+              },
+            ],
+          },
+          mission: {
+            id: "11111111-1111-4111-8111-111111111111",
+            userId: "00000000-0000-4000-8000-000000000000",
+            workspaceId: null,
+            title: "오늘자 뉴스 브리핑",
+            objective: "세계 주요 뉴스와 전쟁 관련 최신 뉴스를 정리한다",
+            domain: "research",
+            status: "draft",
+            missionContract: {
+              constraints: {},
+              approvalPolicy: {
+                mode: "required_for_high_risk",
+              },
+            },
+            steps: [
+              {
+                id: "22222222-2222-4222-8222-222222222222",
+                type: "tool_call",
+                title: "세계 주요 뉴스 수집",
+                description: "주요 글로벌 뉴스 수집",
+                route: "/mission",
+                status: "pending",
+                order: 1,
+                taskType: "execute",
+                metadata: {},
+              },
+              {
+                id: "33333333-3333-4333-8333-333333333333",
+                type: "llm_generate",
+                title: "한국어 브리핑 작성",
+                description: "수집된 뉴스를 정리해 한국어 브리핑 작성",
+                route: "/mission",
+                status: "pending",
+                order: 2,
+                taskType: "chat",
+                metadata: {},
+              },
+            ],
+            createdAt: "2026-02-24T00:00:00.000Z",
+            updatedAt: "2026-02-24T00:00:00.000Z",
+          },
+          complexity: "moderate",
+        })
+      ),
+    });
+  });
+
+  await page.goto("/?widget=inbox");
+
+  await page.getByPlaceholder("Ask JARVIS anything...").fill("오늘 세계 주요 뉴스 정리해서 보고해봐, 그리고 전쟁관련 뉴스도 최신뉴스로 정리해서 보고해");
+  await page.getByRole("button", { name: "EXEC" }).click();
+
+  await expect(page.getByRole("heading", { name: "AI ASSISTANT", exact: true }).first()).toBeVisible();
+  await expect(page.getByText("자동 위젯 오픈 후 Assistant가 요청을 처리했습니다.").first()).toBeVisible();
+
+  const counts = mocks.getCounts();
+  expect(generatedPlanCount).toBe(1);
+  expect(counts.createdTaskCount).toBe(0);
+  expect(counts.createdContextCount).toBe(1);
+  expect(counts.createdContextTaskFieldPresence).toEqual([false]);
+  expect(counts.createdContextTaskIds).toEqual([null]);
 });
 
 test("quick command ignores rapid duplicate submits and creates a single context", async ({ page, context }) => {
