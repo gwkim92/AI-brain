@@ -1,0 +1,27 @@
+{
+  "phase": "dogfood-20260306-jarvis-phase12",
+  "date": "2026-03-06",
+  "scope": "notification policy and settings visibility",
+  "status": "passed",
+  "open_issues": 0,
+  "checks": [
+    {
+      "id": "notification_warning_visible",
+      "status": "passed",
+      "evidence": "/Users/woody/ai/brain/output/dogfood-20260306-jarvis-phase12/phase12-notification-policy.json",
+      "note": "Notifications widget rendered the action proposal as a warning event."
+    },
+    {
+      "id": "settings_channel_section_visible",
+      "status": "passed",
+      "evidence": "/Users/woody/ai/brain/output/dogfood-20260306-jarvis-phase12/screenshots/phase12-notification-policy.png",
+      "note": "System Settings showed the Notification Channels section."
+    },
+    {
+      "id": "settings_overview_notification_policy",
+      "status": "passed",
+      "evidence": "/Users/woody/ai/brain/output/dogfood-20260306-jarvis-phase12/phase12-notification-policy.json",
+      "note": "Settings overview returned notification_policy and notification_runtime."
+    }
+  ]
+}

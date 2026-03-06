@@ -5,8 +5,8 @@ import Link from "next/link";
 import { ListTodo, RefreshCw, Search } from "lucide-react";
 
 import { ApiRequestError } from "@/lib/api/client";
-import { listTasks, streamDashboardOverviewEvents } from "@/lib/api/endpoints";
-import type { TaskRecord, TaskStatus } from "@/lib/api/types";
+import { listJarvisSessions, listTasks, streamDashboardOverviewEvents } from "@/lib/api/endpoints";
+import type { JarvisSessionRecord, TaskRecord, TaskStatus } from "@/lib/api/types";
 import { AsyncState } from "@/components/ui/AsyncState";
 import { TaskStatusBadge } from "@/components/ui/TaskStatusBadge";
 import { useHUD } from "@/components/providers/HUDProvider";
@@ -27,6 +27,7 @@ const PAGE_SIZE = 20;
 export function TasksModule() {
   const { sessions } = useHUD();
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
+  const [jarvisSessions, setJarvisSessions] = useState<JarvisSessionRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -50,11 +51,15 @@ export function TasksModule() {
     setLoading(true);
     setError(null);
     try {
-      const rows = await listTasks({
-        limit: PAGE_SIZE,
-        status: statusFilter === "all" ? undefined : statusFilter,
-      });
+      const [rows, sessionRows] = await Promise.all([
+        listTasks({
+          limit: PAGE_SIZE,
+          status: statusFilter === "all" ? undefined : statusFilter,
+        }),
+        listJarvisSessions({ limit: 12 }).then((result) => result.sessions).catch(() => []),
+      ]);
       setTasks(rows);
+      setJarvisSessions(sessionRows);
       setHasMore(rows.length >= PAGE_SIZE);
     } catch (err) {
       if (err instanceof ApiRequestError) {
@@ -63,6 +68,7 @@ export function TasksModule() {
         setError("failed to load tasks");
       }
       setTasks([]);
+      setJarvisSessions([]);
     } finally {
       setLoading(false);
     }
@@ -157,6 +163,29 @@ export function TasksModule() {
           >
             <RefreshCw size={14} />
           </button>
+        </div>
+      </div>
+
+      <div className="mb-4 rounded border border-cyan-500/20 bg-cyan-500/5 p-3">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-[10px] font-mono tracking-widest text-cyan-300 uppercase">Jarvis Action Queue</p>
+          <span className="text-[10px] font-mono text-white/45">{jarvisSessions.length} session(s)</span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {jarvisSessions.length === 0 && <span className="text-xs text-white/45">No active Jarvis sessions.</span>}
+          {jarvisSessions.map((session) => (
+            <span key={session.id} className={`rounded border px-2 py-1 text-[10px] font-mono ${
+              session.status === "completed"
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                : session.status === "failed"
+                  ? "border-rose-500/30 bg-rose-500/10 text-rose-200"
+                  : session.status === "needs_approval"
+                    ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+                    : "border-cyan-500/30 bg-cyan-500/10 text-cyan-200"
+            }`}>
+              {session.primaryTarget} · {session.title}
+            </span>
+          ))}
         </div>
       </div>
 

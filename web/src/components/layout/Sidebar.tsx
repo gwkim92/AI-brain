@@ -13,8 +13,12 @@ import {
     BarChart3,
     Inbox,
     LayoutGrid,
+    BellRing,
     SlidersHorizontal,
     Lightbulb,
+    Bot,
+    RadioTower,
+    BookOpenText,
     ChevronLeft,
     ChevronRight,
 } from "lucide-react";
@@ -29,6 +33,7 @@ import {
     getHudWorkspacePrimaryWidget,
     type HudWorkspacePreset,
 } from "@/lib/hud/widget-presets";
+import { measureHudViewport, tileWidgetLayouts } from "@/lib/hud/widget-layout";
 
 const SIDEBAR_COMPACT_KEY = "jarvis.sidebar.compact";
 
@@ -60,25 +65,20 @@ function SidebarContent() {
         if (!canAccessWidget(role, primaryWidget)) {
             return;
         }
-
-        if (mode === "primary") {
-            openWidgets([primaryWidget], {
-                focus: primaryWidget,
-                replace: true,
-                activate: "focus_only",
-                workspacePreset: preset,
-            });
-            return;
-        }
-
         const config = getHudWorkspacePresetConfig(preset);
         const allowedWidgets = config.widgets.filter((widgetId) => canAccessWidget(role, widgetId));
         if (allowedWidgets.length === 0) {
             return;
         }
         const focusWidget = allowedWidgets.includes(config.focus) ? config.focus : allowedWidgets[0]!;
-        openWidgets(allowedWidgets, {
-            focus: focusWidget,
+        const widgetPlan = mode === "primary" ? allowedWidgets.slice(0, Math.min(3, allowedWidgets.length)) : allowedWidgets;
+        const normalizedFocus = widgetPlan.includes(focusWidget) ? focusWidget : widgetPlan[0]!;
+        if (widgetPlan.length > 1) {
+            const viewport = measureHudViewport();
+            tileWidgetLayouts(widgetPlan, viewport.width, viewport.height, 24);
+        }
+        openWidgets(widgetPlan, {
+            focus: normalizedFocus,
             replace: true,
             activate: "all",
             workspacePreset: preset,
@@ -196,13 +196,13 @@ function SidebarContent() {
                     compact={compact}
                     icon={<Target size={18} />}
                     label="Mission Control"
-                    title="Composite Mission"
-                    description="Mission start. Grid = full stack."
+                    title="Jarvis"
+                    description="Unified Jarvis session lane. Grid = full stack."
                     active={isWorkspacePresetActive("mission")}
                     onClick={(event) => handleWorkspaceClick("mission", event)}
                     secondaryAction={{
                         icon: <LayoutGrid size={12} />,
-                        label: "Open Mission full stack",
+                        label: "Open Jarvis full stack",
                         onClick: (event) => handleWorkspaceOpenFull("mission", event),
                     }}
                 />
@@ -210,8 +210,8 @@ function SidebarContent() {
                     compact={compact}
                     icon={<Code2 size={18} />}
                     label="Code"
-                    title="Code Studio"
-                    description="Code start. Grid = full stack."
+                    title="Execution"
+                    description="Execution lane for code-heavy work."
                     active={isWorkspacePresetActive("studio_code")}
                     onClick={(event) => handleWorkspaceClick("studio_code", event)}
                     secondaryAction={{
@@ -224,8 +224,8 @@ function SidebarContent() {
                     compact={compact}
                     icon={<Search size={18} />}
                     label="Research"
-                    title="Research Studio"
-                    description="Research start. Grid = full stack."
+                    title="Research"
+                    description="Watcher + dossier research lane."
                     active={isWorkspacePresetActive("studio_research")}
                     onClick={(event) => handleWorkspaceClick("studio_research", event)}
                     secondaryAction={{
@@ -238,13 +238,13 @@ function SidebarContent() {
                     compact={compact}
                     icon={<BarChart3 size={18} />}
                     label="Intelligence"
-                    title="Finance and News"
-                    description="Intel start. Grid = full stack."
+                    title="Control"
+                    description="Signals, reports, and operator control."
                     active={isWorkspacePresetActive("studio_intelligence")}
                     onClick={(event) => handleWorkspaceClick("studio_intelligence", event)}
                     secondaryAction={{
                         icon: <LayoutGrid size={12} />,
-                        label: "Open Intelligence full stack",
+                        label: "Open Control full stack",
                         onClick: (event) => handleWorkspaceOpenFull("studio_intelligence", event),
                     }}
                 />
@@ -278,12 +278,48 @@ function SidebarContent() {
                 />
                 <NavItem
                     compact={compact}
+                    icon={<RadioTower size={18} />}
+                    label="Watchers"
+                    title="Watchers"
+                    description="Persistent proactive monitoring."
+                    active={activeWidgets.includes("watchers")}
+                    onClick={() => toggleWidget("watchers")}
+                />
+                <NavItem
+                    compact={compact}
+                    icon={<BookOpenText size={18} />}
+                    label="Dossiers"
+                    title="Dossier Archive"
+                    description="Grounded research archive."
+                    active={activeWidgets.includes("dossier")}
+                    onClick={() => toggleWidget("dossier")}
+                />
+                <NavItem
+                    compact={compact}
+                    icon={<BellRing size={18} />}
+                    label="Alerts"
+                    title="Notifications"
+                    description="Watcher hits, approvals, and stalled sessions."
+                    active={activeWidgets.includes("notifications")}
+                    onClick={() => toggleWidget("notifications")}
+                />
+                <NavItem
+                    compact={compact}
                     icon={<Settings size={18} />}
                     label="Settings"
                     title="System Settings"
                     description="Keys, connectors, policies."
                     active={activeWidgets.includes("settings")}
                     onClick={() => toggleWidget("settings")}
+                />
+                <NavItem
+                    compact={compact}
+                    icon={<ShieldCheck size={18} />}
+                    label="Action Center"
+                    title="Action Center"
+                    description="Approval-gated Jarvis proposals."
+                    active={activeWidgets.includes("action_center")}
+                    onClick={() => toggleWidget("action_center")}
                 />
                 <NavItem
                     compact={compact}
@@ -302,6 +338,15 @@ function SidebarContent() {
                     description="Branch-based discovery and execution prompt handoff."
                     active={activeWidgets.includes("ideation")}
                     onClick={() => toggleWidget("ideation")}
+                />
+                <NavItem
+                    compact={compact}
+                    icon={<Bot size={18} />}
+                    label="Skills"
+                    title="Skills"
+                    description="Reusable Jarvis capability registry."
+                    active={activeWidgets.includes("skills")}
+                    onClick={() => toggleWidget("skills")}
                 />
                 <NavItem
                     compact={compact}

@@ -1,0 +1,220 @@
+{
+  "email": "phase11-approve-exact-1772795736597@example.com",
+  "logs": [
+    "BOX {\"x\":795,\"y\":1113,\"width\":75,\"height\":25}",
+    "REQ POST http://127.0.0.1:4000/api/v1/jarvis/sessions/a5b0d217-510b-4365-be90-fda24f0c3b18/actions/ac8776f0-d5c4-402f-a0d6-0bb282ab7830/approve",
+    "RES 200 http://127.0.0.1:4000/api/v1/jarvis/sessions/a5b0d217-510b-4365-be90-fda24f0c3b18/actions/ac8776f0-d5c4-402f-a0d6-0bb282ab7830/approve {\"request_id\":\"req-1xx\",\"data\":{\"session\":{\"id\":\"a5b0d217-510b-4365-be90-fda24f0c3b18\",\"userId\":\"c65bf4c0-cc8a-40ed-a311-af61b7e46183\",\"title\":\"Approve process launch in Code Runtime\",\"prompt\":\"node -p process.platform\",\"source\":\"workspace_runtime\",\"intent\":\"code\",\"status\":\"running\",\"workspacePreset"
+  ],
+  "targetId": "a5b0d217-510b-4365-be90-fda24f0c3b18",
+  "before": {
+    "status": 200,
+    "body": {
+      "request_id": "req-1xv",
+      "data": {
+        "sessions": [
+          {
+            "id": "a5b0d217-510b-4365-be90-fda24f0c3b18",
+            "userId": "c65bf4c0-cc8a-40ed-a311-af61b7e46183",
+            "title": "Approve process launch in Code Runtime",
+            "prompt": "node -p process.platform",
+            "source": "workspace_runtime",
+            "intent": "code",
+            "status": "needs_approval",
+            "workspacePreset": "execution",
+            "primaryTarget": "execution",
+            "taskId": null,
+            "missionId": null,
+            "assistantContextId": null,
+            "councilRunId": null,
+            "executionRunId": null,
+            "briefingId": null,
+            "dossierId": null,
+            "lastEventAt": "2026-03-06T11:15:43.182Z",
+            "createdAt": "2026-03-06T11:15:43.178Z",
+            "updatedAt": "2026-03-06T11:15:43.182Z"
+          }
+        ]
+      },
+      "meta": {}
+    }
+  },
+  "after": {
+    "status": 200,
+    "body": {
+      "request_id": "req-1y6",
+      "data": {
+        "session": {
+          "id": "a5b0d217-510b-4365-be90-fda24f0c3b18",
+          "userId": "c65bf4c0-cc8a-40ed-a311-af61b7e46183",
+          "title": "Approve process launch in Code Runtime",
+          "prompt": "node -p process.platform",
+          "source": "workspace_runtime",
+          "intent": "code",
+          "status": "completed",
+          "workspacePreset": "execution",
+          "primaryTarget": "execution",
+          "taskId": null,
+          "missionId": null,
+          "assistantContextId": null,
+          "councilRunId": null,
+          "executionRunId": null,
+          "briefingId": null,
+          "dossierId": null,
+          "lastEventAt": "2026-03-06T11:15:45.476Z",
+          "createdAt": "2026-03-06T11:15:43.178Z",
+          "updatedAt": "2026-03-06T11:15:45.476Z"
+        },
+        "events": [
+          {
+            "id": "3b76f27b-c274-48cb-9fdd-8396f33fc925",
+            "sessionId": "a5b0d217-510b-4365-be90-fda24f0c3b18",
+            "sequence": 86,
+            "eventType": "workspace.approval_requested",
+            "status": "needs_approval",
+            "summary": "Approve process launch in Code Runtime: node -p process.platform",
+            "data": {
+              "cwd": "/Users/woody/ai/brain",
+              "impact": {
+                "files": {
+                  "level": "possible",
+                  "summary": "Build artifacts, caches, or local outputs may be created.",
+                  "targets": [
+                    "process.platform"
+                  ]
+                },
+                "notes": [
+                  "Targets the primary repository checkout on the host."
+                ],
+                "network": {
+                  "level": "none",
+                  "summary": "No external network access expected unless the tool fetches dependencies implicitly.",
+                  "targets": [
+                    "process.platform"
+                  ]
+                },
+                "processes": {
+                  "level": "expected",
+                  "summary": "A runtime or script process is expected to start.",
+                  "targets": [
+                    "node -p",
+                    "process.platform"
+                  ]
+                }
+              },
+              "command": "node -p process.platform",
+              "risk_level": "build",
+              "workspace_id": "b944a880-7310-4735-94e3-35e23310177a",
+              "policy_reason": "runtime or script launch on host or worktree runtimes requires approval",
+              "impact_profile": "process_launch",
+              "policy_severity": "high",
+              "action_proposal_id": "ac8776f0-d5c4-402f-a0d6-0bb282ab7830",
+              "policy_disposition": "approval_required"
+            },
+            "createdAt": "2026-03-06T11:15:43.182Z"
+          },
+          {
+            "id": "a5acfd13-4b98-47c2-b04e-0da56b3c69fa",
+            "sessionId": "a5b0d217-510b-4365-be90-fda24f0c3b18",
+            "sequence": 87,
+            "eventType": "action.approved",
+            "status": "running",
+            "summary": "Approve process launch in Code Runtime",
+            "data": {
+              "kind": "workspace_prepare",
+              "action_id": "ac8776f0-d5c4-402f-a0d6-0bb282ab7830"
+            },
+            "createdAt": "2026-03-06T11:15:45.338Z"
+          },
+          {
+            "id": "08772c38-85ed-4a25-abf9-533539c12b97",
+            "sessionId": "a5b0d217-510b-4365-be90-fda24f0c3b18",
+            "sequence": 88,
+            "eventType": "workspace.started",
+            "status": "running",
+            "summary": "Running workspace command in Code Runtime",
+            "data": {
+              "cwd": "/Users/woody/ai/brain",
+              "command": "node -p process.platform",
+              "action_id": "ac8776f0-d5c4-402f-a0d6-0bb282ab7830",
+              "workspace_id": "b944a880-7310-4735-94e3-35e23310177a"
+            },
+            "createdAt": "2026-03-06T11:15:45.356Z"
+          },
+          {
+            "id": "2f0b8356-b2de-4f0d-949c-308e76f5293c",
+            "sessionId": "a5b0d217-510b-4365-be90-fda24f0c3b18",
+            "sequence": 89,
+            "eventType": "workspace.completed",
+            "status": "completed",
+            "summary": "Workspace command completed",
+            "data": {
+              "command": null,
+              "exit_code": 0,
+              "workspace_id": "b944a880-7310-4735-94e3-35e23310177a",
+              "action_proposal_id": "ac8776f0-d5c4-402f-a0d6-0bb282ab7830"
+            },
+            "createdAt": "2026-03-06T11:15:45.476Z"
+          }
+        ],
+        "actions": [
+          {
+            "id": "ac8776f0-d5c4-402f-a0d6-0bb282ab7830",
+            "userId": "c65bf4c0-cc8a-40ed-a311-af61b7e46183",
+            "sessionId": "a5b0d217-510b-4365-be90-fda24f0c3b18",
+            "kind": "workspace_prepare",
+            "title": "Approve process launch in Code Runtime",
+            "summary": "A runtime or script process is expected to start. Targets: node -p, process.platform. Severity: high. Explicit approval is required before execution.",
+            "status": "approved",
+            "payload": {
+              "cwd": "/Users/woody/ai/brain",
+              "impact": {
+                "files": {
+                  "level": "possible",
+                  "summary": "Build artifacts, caches, or local outputs may be created.",
+                  "targets": [
+                    "process.platform"
+                  ]
+                },
+                "notes": [
+                  "Targets the primary repository checkout on the host."
+                ],
+                "network": {
+                  "level": "none",
+                  "summary": "No external network access expected unless the tool fetches dependencies implicitly.",
+                  "targets": [
+                    "process.platform"
+                  ]
+                },
+                "processes": {
+                  "level": "expected",
+                  "summary": "A runtime or script process is expected to start.",
+                  "targets": [
+                    "node -p",
+                    "process.platform"
+                  ]
+                }
+              },
+              "command": "node -p process.platform",
+              "risk_level": "build",
+              "workspace_id": "b944a880-7310-4735-94e3-35e23310177a",
+              "policy_reason": "runtime or script launch on host or worktree runtimes requires approval",
+              "impact_profile": "process_launch",
+              "workspace_kind": "current",
+              "workspace_name": "Code Runtime",
+              "policy_severity": "high",
+              "policy_disposition": "approval_required"
+            },
+            "decidedAt": "2026-03-06T11:15:45.335Z",
+            "decidedBy": "c65bf4c0-cc8a-40ed-a311-af61b7e46183",
+            "createdAt": "2026-03-06T11:15:43.180Z",
+            "updatedAt": "2026-03-06T11:15:45.335Z"
+          }
+        ],
+        "briefing": null,
+        "dossier": null
+      },
+      "meta": {}
+    }
+  },
+  "bodySnippet": "TRACE OFF\nEXEC\n\nJARVIS\n\nWorkspace Navigator\n\nWORKSPACES\n\nHome\nJarvis\nExecution\nResearch\nControl\n\nCONTROL PLANE\n\nPersonal Memory\nWatchers\nDossier Archive\nNotifications\nSystem Settings\nAction Center\nModel Control\nIdeation Lab\nSkills\nLogout\nSystem Online\nVISUAL CORE DEGRADEDWEBGL UNAVAILABLEENG:CPU SW:0 ERR:webgl_unavailable\nAI ASSISTANT\nASSISTANT\nASSISTANT MODE\nDEBUG OFF\nUSER MODE\ngrounded answers enabled for dynamic factual prompts\nJARVIS\n\nConnected to backend. Ask anything and I will route this to available providers.\n\nTASK MANAGER\nTASK MANAGER\nALL\nQUEUED\nRUNNING\nBLOCKED\nRETRYING\nDONE\nFAILED\nCANCELLED\n\nJARVIS ACTION QUEUE\n\n1 session(s)\nexecution · Approve process launch in Code Runtime\nID\nTITLE\nMODE\nSTATE\nNo matching tasks.\nWORKBENCH\nCODE & COMPUTE WORKBENCH\n\nAI execution runs + approval-gated workspace runtime\n\nCODE\nCOMPUTE\n\nPROMPT\n\nAUTO\nOPENAI (gpt-4.1-mini)\nGEMINI (gemini-2.5-pro)\nANTHROPIC (claude-3-7-sonnet-latest)\nLOCAL (qwen2.5:7b)\nstrict provider\nRUN\nROUTE VIA SKILL\nProvider: -\nCredential: pending\nTask: -\nRun: -\n\nRequested route: auto/default · strict=off\n\nDatabase Access: Task sandbox policy\nNetwork: Provider router policy\nTypescript SANDBOX\n// Enter a code task prompt and press RUN\nNo execution yet.\nJson SANDBOX\n{\n  \"mode\": \"code\",\n  \"provider_model\": \"-\",\n  \"task_id\": \"-\",\n  \"run_id\": \"-\"\n}\nNo execution yet.\nSAFE WORKSPACE RUNTIME\n\nRead-only commands run directly. Commands outside the allowlist generate approval proposals for members.\n\nNEW WORKSPACE\nREFRESH\nDELETE\nWORKSPACE MODE\nCurrent repo runtime\nIsolated git worktree\nDocker devcontainer\nWORKSPACE\nSelect workspace\nCode Runtime · current · ready\n\nID: b944a880\n\nKind: current\n\nBase ref: -\n\nSource workspace: -\n\nContainer image: -\n\nContainer source: -\n\nManaged image: no\n\nContainer name: -\n\nBuild context: -\n\nDockerfile: -\n\nFeatures: -\n\nApplied features: -\n\nContainer workdir: -\n\nConfig path: -\n\nRun args: -\n\nStatus: ready\n\nCWD: /Users/woody/ai/brain\n\nApproval: required\n\nCommand: -\n\nExit: -\n\nUSE PROMPT AS SHELL COMMAND\nRUN COMMAND\nSTOP\nAuto-run: read-only everywhere, build inside devcontainers. Role-gated on host current runtime: write, network, process control, unknown.\n\nrisk: build\n\nimpact profile: process_launch\n\nseverity: high\n\npolicy: approval_required\n\nreason: runtime or script launch on host or worktree runtimes requires approval\n\nESTIMATED IMPACT\n\nFILES\npossible\n\nBuild artifacts, caches, or local outputs may be created.\n\ntargets: process.platform\n\nNETWORK\nnone\n\nNo external network access expected unless the tool fetches dependencies implicitly.\n\ntargets: process.platform\n\nPROCESSES\nexpected\n\nA runtime or script process is expected to start.\n\ntargets: node -p, process.platform\n\nnotes: Targets the primary repository checkout on the host.\n\nApproval queued: Approve process launch in Code Runtime (build)\n\nApproval pending. Existing workspace output is hidden until this command is approved.\nWRITE STDIN\nACTION CENTER\nACTION CENTER\n\nApproval-gated action proposals\n\nALL\nCRITICAL\nHIGH\nMEDIUM\nLOW\nSTALE 0\nALL TARGETS\nALL\nFRESH\nSTALE\n\nNo approval-gated sessions for this filter.\n\nChoose a session to inspect pending actions.\n\nNOTIFICATIONS\n\nALERT TRAY\n\nLive Notifications\nIDLE\nN:0 I:0 W:0 C:0\nALL\nCRITICAL\nWARNING\nINFO\nALL TARGETS\nNo notifications for this filter yet.\nAssistant\nTasks\nWorkbench\naction_center\nnotifications\nTILE\nCLEAR\nRESET"
+}

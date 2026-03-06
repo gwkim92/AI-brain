@@ -199,6 +199,214 @@ export async function initializePostgresStore({
     ON ai_invocation_traces(user_id, feature_key, created_at DESC)
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS jarvis_sessions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      source TEXT NOT NULL,
+      intent TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      workspace_preset TEXT,
+      primary_target TEXT NOT NULL,
+      task_id UUID,
+      mission_id UUID,
+      assistant_context_id UUID,
+      council_run_id UUID,
+      execution_run_id UUID,
+      briefing_id UUID,
+      dossier_id UUID,
+      last_event_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (intent IN ('general', 'code', 'research', 'finance', 'news')),
+      CHECK (status IN ('queued', 'running', 'blocked', 'needs_approval', 'completed', 'failed', 'stale')),
+      CHECK (workspace_preset IS NULL OR workspace_preset IN ('jarvis', 'research', 'execution', 'control')),
+      CHECK (primary_target IN ('assistant', 'mission', 'council', 'execution', 'briefing', 'dossier'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_jarvis_sessions_user_status_updated_at
+    ON jarvis_sessions(user_id, status, updated_at DESC)
+  `);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        WHERE t.relname = 'jarvis_sessions'
+          AND c.conname = 'jarvis_sessions_intent_check'
+      ) THEN
+        ALTER TABLE jarvis_sessions DROP CONSTRAINT jarvis_sessions_intent_check;
+      END IF;
+    END
+    $$;
+  `);
+  await pool.query(`
+    ALTER TABLE IF EXISTS jarvis_sessions
+    ADD CONSTRAINT jarvis_sessions_intent_check
+    CHECK (intent IN ('general', 'code', 'research', 'finance', 'news', 'council'))
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS jarvis_session_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      session_id UUID NOT NULL REFERENCES jarvis_sessions(id) ON DELETE CASCADE,
+      sequence BIGSERIAL NOT NULL UNIQUE,
+      event_type TEXT NOT NULL,
+      status TEXT,
+      summary TEXT,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (status IS NULL OR status IN ('queued', 'running', 'blocked', 'needs_approval', 'completed', 'failed', 'stale'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_jarvis_session_events_session_sequence
+    ON jarvis_session_events(session_id, sequence ASC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS action_proposals (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      session_id UUID NOT NULL REFERENCES jarvis_sessions(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      decided_at TIMESTAMPTZ,
+      decided_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (kind IN ('mission_execute', 'council_run', 'execution_run', 'workspace_prepare', 'notify', 'custom')),
+      CHECK (status IN ('pending', 'approved', 'rejected'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_action_proposals_user_status_updated_at
+    ON action_proposals(user_id, status, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS watchers (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      title TEXT NOT NULL,
+      query TEXT NOT NULL,
+      config_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      last_run_at TIMESTAMPTZ,
+      last_hit_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (kind IN ('external_topic', 'company', 'market', 'war_region', 'repo', 'task_health', 'mission_health', 'approval_backlog')),
+      CHECK (status IN ('active', 'paused', 'error'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_watchers_user_status_updated_at
+    ON watchers(user_id, status, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS watcher_runs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      watcher_id UUID NOT NULL REFERENCES watchers(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'running',
+      summary TEXT NOT NULL DEFAULT '',
+      briefing_id UUID,
+      dossier_id UUID,
+      error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (status IN ('running', 'completed', 'failed'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_watcher_runs_watcher_created_at
+    ON watcher_runs(watcher_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS briefings (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      watcher_id UUID REFERENCES watchers(id) ON DELETE SET NULL,
+      session_id UUID REFERENCES jarvis_sessions(id) ON DELETE SET NULL,
+      type TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      title TEXT NOT NULL,
+      query TEXT NOT NULL,
+      summary TEXT NOT NULL DEFAULT '',
+      answer_markdown TEXT NOT NULL DEFAULT '',
+      source_count INTEGER NOT NULL DEFAULT 0,
+      quality_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (type IN ('daily', 'on_change', 'on_demand')),
+      CHECK (status IN ('draft', 'completed', 'failed'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_briefings_user_created_at
+    ON briefings(user_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dossiers (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      session_id UUID REFERENCES jarvis_sessions(id) ON DELETE SET NULL,
+      briefing_id UUID REFERENCES briefings(id) ON DELETE SET NULL,
+      title TEXT NOT NULL,
+      query TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      summary TEXT NOT NULL DEFAULT '',
+      answer_markdown TEXT NOT NULL DEFAULT '',
+      quality_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      conflicts_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (status IN ('draft', 'ready', 'failed'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_dossiers_user_created_at
+    ON dossiers(user_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dossier_sources (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      dossier_id UUID NOT NULL REFERENCES dossiers(id) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      title TEXT NOT NULL,
+      domain TEXT NOT NULL,
+      snippet TEXT NOT NULL DEFAULT '',
+      published_at TIMESTAMPTZ,
+      source_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (dossier_id, url)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_dossier_sources_dossier_order
+    ON dossier_sources(dossier_id, source_order ASC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dossier_claims (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      dossier_id UUID NOT NULL REFERENCES dossiers(id) ON DELETE CASCADE,
+      claim_text TEXT NOT NULL,
+      claim_order INTEGER NOT NULL DEFAULT 0,
+      source_urls TEXT[] NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_dossier_claims_dossier_order
+    ON dossier_claims(dossier_id, claim_order ASC)
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS provider_stats (
       provider TEXT NOT NULL,
       task_type TEXT NOT NULL,

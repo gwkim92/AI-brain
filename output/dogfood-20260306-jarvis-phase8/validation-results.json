@@ -1,0 +1,53 @@
+{
+  "date": "2026-03-06",
+  "scope": [
+    "notification_to_dossier_deeplink",
+    "command_bar_explicit_council_routing"
+  ],
+  "open_issue_count": 0,
+  "validated": [
+    {
+      "id": "notification_to_dossier_deeplink",
+      "status": "passed",
+      "evidence": [
+        "screenshots/phase8-notification-found.png",
+        "screenshots/phase8-after-open-click.png"
+      ],
+      "details": {
+        "dossier_url_param": true,
+        "placeholder_hidden": true,
+        "dossier_token_visible": true,
+        "evidence_panels_visible": true
+      }
+    },
+    {
+      "id": "command_bar_explicit_council_routing",
+      "status": "passed_after_fix",
+      "evidence": [
+        "screenshots/phase8-council-after-4s.png",
+        "screenshots/phase8-council-after-16s.png"
+      ],
+      "details": {
+        "internal_error_visible": false,
+        "jarvis_session_not_found_visible": false,
+        "council_widget_visible": true,
+        "session_status": "running_council",
+        "task_queue_mode": "COUNCIL",
+        "route_summary_visible": true,
+        "council_session_eventual_completion": true
+      }
+    }
+  ],
+  "resolved": [
+    {
+      "id": "phase8-explicit-council-misroute",
+      "severity": "high",
+      "status": "resolved",
+      "root_cause": [
+        "frontend_intent_router_missing_council_intent",
+        "backend_jarvis_intent_router_missing_council_intent",
+        "postgres_jarvis_sessions_intent_check_missing_council"
+      ]
+    }
+  ]
+}

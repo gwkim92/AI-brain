@@ -1,4 +1,5 @@
 const STORAGE_PREFIX = "hud-widget-layout:";
+const HUD_VIEWPORT_SELECTOR = "[data-hud-viewport='true']";
 
 export type WidgetLayout = { x: number; y: number; w: number; h: number };
 
@@ -50,6 +51,25 @@ export function clearAllWidgetLayouts(): void {
   }
 }
 
+export function measureHudViewport(): { width: number; height: number } {
+  if (typeof window === "undefined") {
+    return { width: 0, height: 0 };
+  }
+
+  const element = document.querySelector<HTMLElement>(HUD_VIEWPORT_SELECTOR);
+  if (element) {
+    return {
+      width: Math.max(320, element.clientWidth),
+      height: Math.max(320, element.clientHeight),
+    };
+  }
+
+  return {
+    width: Math.max(320, window.innerWidth - 80),
+    height: Math.max(320, window.innerHeight),
+  };
+}
+
 export function tileWidgetLayouts(
   widgetIds: string[],
   viewportWidth: number,
@@ -59,7 +79,9 @@ export function tileWidgetLayouts(
   if (widgetIds.length === 0) return;
 
   const gap = 12;
-  const cols = Math.ceil(Math.sqrt(widgetIds.length));
+  const preferredTileWidth = 360;
+  const maxColsByWidth = Math.max(1, Math.floor((viewportWidth - gap) / (preferredTileWidth + gap)));
+  const cols = Math.max(1, Math.min(widgetIds.length, Math.ceil(Math.sqrt(widgetIds.length)), maxColsByWidth));
   const rows = Math.ceil(widgetIds.length / cols);
   const usableW = viewportWidth - gap * (cols + 1);
   const usableH = viewportHeight - topOffset - gap * (rows + 1);

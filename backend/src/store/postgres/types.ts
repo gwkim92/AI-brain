@@ -202,6 +202,135 @@ export type AiInvocationTraceRow = {
   created_at: Date;
 };
 
+export type JarvisSessionRow = {
+  id: string;
+  user_id: string;
+  title: string;
+  prompt: string;
+  source: string;
+  intent: 'general' | 'code' | 'research' | 'finance' | 'news';
+  status: 'queued' | 'running' | 'blocked' | 'needs_approval' | 'completed' | 'failed' | 'stale';
+  workspace_preset: 'jarvis' | 'research' | 'execution' | 'control' | null;
+  primary_target: 'assistant' | 'mission' | 'council' | 'execution' | 'briefing' | 'dossier';
+  task_id: string | null;
+  mission_id: string | null;
+  assistant_context_id: string | null;
+  council_run_id: string | null;
+  execution_run_id: string | null;
+  briefing_id: string | null;
+  dossier_id: string | null;
+  last_event_at: Date;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type JarvisSessionEventRow = {
+  id: string;
+  session_id: string;
+  sequence: string | number;
+  event_type: string;
+  status: 'queued' | 'running' | 'blocked' | 'needs_approval' | 'completed' | 'failed' | 'stale' | null;
+  summary: string | null;
+  data: Record<string, unknown>;
+  created_at: Date;
+};
+
+export type ActionProposalRow = {
+  id: string;
+  user_id: string;
+  session_id: string;
+  kind: 'mission_execute' | 'council_run' | 'execution_run' | 'workspace_prepare' | 'notify' | 'custom';
+  title: string;
+  summary: string;
+  status: 'pending' | 'approved' | 'rejected';
+  payload: Record<string, unknown>;
+  decided_at: Date | null;
+  decided_by: string | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type WatcherRow = {
+  id: string;
+  user_id: string;
+  kind: 'external_topic' | 'company' | 'market' | 'war_region' | 'repo' | 'task_health' | 'mission_health' | 'approval_backlog';
+  status: 'active' | 'paused' | 'error';
+  title: string;
+  query: string;
+  config_json: Record<string, unknown>;
+  last_run_at: Date | null;
+  last_hit_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type WatcherRunRow = {
+  id: string;
+  watcher_id: string;
+  user_id: string;
+  status: 'running' | 'completed' | 'failed';
+  summary: string;
+  briefing_id: string | null;
+  dossier_id: string | null;
+  error: string | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type BriefingRow = {
+  id: string;
+  user_id: string;
+  watcher_id: string | null;
+  session_id: string | null;
+  type: 'daily' | 'on_change' | 'on_demand';
+  status: 'draft' | 'completed' | 'failed';
+  title: string;
+  query: string;
+  summary: string;
+  answer_markdown: string;
+  source_count: number;
+  quality_json: Record<string, unknown>;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type DossierRow = {
+  id: string;
+  user_id: string;
+  session_id: string | null;
+  briefing_id: string | null;
+  title: string;
+  query: string;
+  status: 'draft' | 'ready' | 'failed';
+  summary: string;
+  answer_markdown: string;
+  quality_json: Record<string, unknown>;
+  conflicts_json: Record<string, unknown>;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type DossierSourceRow = {
+  id: string;
+  dossier_id: string;
+  url: string;
+  title: string;
+  domain: string;
+  snippet: string;
+  published_at: Date | null;
+  source_order: number;
+  created_at: Date;
+};
+
+export type DossierClaimRow = {
+  id: string;
+  dossier_id: string;
+  claim_text: string;
+  claim_order: number;
+  source_urls: string[];
+  created_at: Date;
+};
+
 export type MissionRow = {
   id: string;
   user_id: string;

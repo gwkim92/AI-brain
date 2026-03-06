@@ -1,4 +1,5 @@
 import type {
+  ActionProposalRecord,
   AiInvocationTraceRecord,
   ApprovalRecord,
   AssistantContextEventRecord,
@@ -6,8 +7,14 @@ import type {
   AssistantContextGroundingSourceRecord,
   AssistantContextRecord,
   AuthUserWithPasswordRecord,
+  BriefingRecord,
   CouncilRunRecord,
+  DossierClaimRecord,
+  DossierRecord,
+  DossierSourceRecord,
   ExecutionRunRecord,
+  JarvisSessionEventRecord,
+  JarvisSessionRecord,
   ModelRecommendationRunRecord,
   MemorySegmentRecord,
   UserModelSelectionPreferenceRecord,
@@ -18,6 +25,8 @@ import type {
   TaskRecord,
   TelegramReportRecord,
   UpgradeProposalRecord,
+  WatcherRecord,
+  WatcherRunRecord,
   UpgradeRunApiRecord
 } from '../types';
 
@@ -54,6 +63,15 @@ export type MemoryProviderOauthStateRow = {
 export type MemoryUserModelSelectionPreferenceRow = UserModelSelectionPreferenceRecord;
 export type MemoryModelRecommendationRunRow = ModelRecommendationRunRecord;
 export type MemoryAiInvocationTraceRow = AiInvocationTraceRecord;
+export type MemoryJarvisSessionRow = JarvisSessionRecord;
+export type MemoryJarvisSessionEventRow = JarvisSessionEventRecord;
+export type MemoryActionProposalRow = ActionProposalRecord;
+export type MemoryWatcherRow = WatcherRecord;
+export type MemoryWatcherRunRow = WatcherRunRecord;
+export type MemoryBriefingRow = BriefingRecord;
+export type MemoryDossierRow = DossierRecord;
+export type MemoryDossierSourceRow = DossierSourceRecord;
+export type MemoryDossierClaimRow = DossierClaimRecord;
 
 export type MemoryStoreState = {
   users: Map<string, AuthUserWithPasswordRecord>;
@@ -65,6 +83,16 @@ export type MemoryStoreState = {
   userModelSelectionPreferences: Map<string, MemoryUserModelSelectionPreferenceRow>;
   modelRecommendationRuns: Map<string, MemoryModelRecommendationRunRow>;
   aiInvocationTraces: Map<string, MemoryAiInvocationTraceRow>;
+  jarvisSessions: Map<string, MemoryJarvisSessionRow>;
+  jarvisSessionEvents: Map<string, MemoryJarvisSessionEventRow[]>;
+  jarvisSessionEventSequence: number;
+  actionProposals: Map<string, MemoryActionProposalRow>;
+  watchers: Map<string, MemoryWatcherRow>;
+  watcherRuns: Map<string, MemoryWatcherRunRow>;
+  briefings: Map<string, MemoryBriefingRow>;
+  dossiers: Map<string, MemoryDossierRow>;
+  dossierSources: Map<string, MemoryDossierSourceRow[]>;
+  dossierClaims: Map<string, MemoryDossierClaimRow[]>;
   missions: Map<string, MissionRecord>;
   assistantContexts: Map<string, AssistantContextRecord>;
   assistantContextByClientId: Map<string, string>;
@@ -98,6 +126,16 @@ export function createMemoryStoreState(): MemoryStoreState {
     userModelSelectionPreferences: new Map<string, MemoryUserModelSelectionPreferenceRow>(),
     modelRecommendationRuns: new Map<string, MemoryModelRecommendationRunRow>(),
     aiInvocationTraces: new Map<string, MemoryAiInvocationTraceRow>(),
+    jarvisSessions: new Map<string, MemoryJarvisSessionRow>(),
+    jarvisSessionEvents: new Map<string, MemoryJarvisSessionEventRow[]>(),
+    jarvisSessionEventSequence: 0,
+    actionProposals: new Map<string, MemoryActionProposalRow>(),
+    watchers: new Map<string, MemoryWatcherRow>(),
+    watcherRuns: new Map<string, MemoryWatcherRunRow>(),
+    briefings: new Map<string, MemoryBriefingRow>(),
+    dossiers: new Map<string, MemoryDossierRow>(),
+    dossierSources: new Map<string, MemoryDossierSourceRow[]>(),
+    dossierClaims: new Map<string, MemoryDossierClaimRow[]>(),
     missions: new Map<string, MissionRecord>(),
     assistantContexts: new Map<string, AssistantContextRecord>(),
     assistantContextByClientId: new Map<string, string>(),

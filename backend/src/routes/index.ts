@@ -32,15 +32,21 @@ import { mcpRoutes } from './mcp';
 import { authRoutes } from './auth';
 import { providerRoutes } from './providers';
 import { modelControlRoutes } from './model-control';
+import { jarvisRoutes } from './jarvis';
+import { skillRoutes } from './skills';
 import { settingsRoutes } from './settings';
 import { dashboardRoutes } from './dashboard';
 import { adminCredentialRoutes } from './admin-credentials';
 import { aiRoutes } from './ai';
+import { briefingRoutes } from './briefings';
+import { dossierRoutes } from './dossiers';
 import { missionRoutes } from './missions';
 import { assistantRoutes } from './assistant';
 import { councilRoutes } from './councils';
 import { executionRoutes } from './executions';
+import { workspaceRoutes } from './workspaces';
 import { taskRoutes } from './tasks';
+import { watcherRoutes } from './watchers';
 import { memoryRoutes } from './memory';
 import { approvalRoutes } from './approvals';
 import { reportRoutes } from './reports';
@@ -263,11 +269,16 @@ export async function registerRoutes(
     const userRole = resolveRequestRole(request);
     const allowAllTaskScope = input.task_scope === 'all' && userRole === 'admin';
     const scopedUserId = allowAllTaskScope ? undefined : resolveRequestUserId(request);
-    const [tasks, pendingApprovals] = await Promise.all([
+    const [tasks, pendingApprovals, pendingSessionApprovals] = await Promise.all([
       store.listTasks({ userId: scopedUserId, limit: input.task_limit, status: undefined }),
       ROLE_RANK[userRole] >= ROLE_RANK.operator
         ? store.listUpgradeProposals('proposed')
-        : Promise.resolve([])
+        : Promise.resolve([]),
+      store.listJarvisSessions({
+        userId: resolveRequestUserId(request),
+        status: 'needs_approval',
+        limit: input.pending_approval_limit
+      })
     ]);
 
     const ACTIVE_QUEUED_WINDOW_MS = 2 * 60 * 1000;
@@ -302,7 +313,8 @@ export async function registerRoutes(
         running_count: runningCount,
         failed_count: failedCount,
         blocked_count: blockedCount,
-        pending_approval_count: pendingApprovals.length
+        pending_approval_count: pendingApprovals.length + pendingSessionApprovals.length,
+        pending_session_approval_count: pendingSessionApprovals.length
       },
       tasks,
       running_tasks: runningTasks,
@@ -317,6 +329,7 @@ export async function registerRoutes(
       snapshot.signals.failed_count,
       snapshot.signals.blocked_count,
       snapshot.signals.pending_approval_count,
+      snapshot.signals.pending_session_approval_count,
       buildDashboardTaskSignature(snapshot.tasks),
       buildDashboardApprovalSignature(snapshot.pending_approvals)
     ].join('|');
@@ -386,6 +399,11 @@ export async function registerRoutes(
   await authRoutes(app, ctx);
   await providerRoutes(app, ctx);
   await modelControlRoutes(app, ctx);
+  await jarvisRoutes(app, ctx);
+  await skillRoutes(app, ctx);
+  await watcherRoutes(app, ctx);
+  await briefingRoutes(app, ctx);
+  await dossierRoutes(app, ctx);
   await settingsRoutes(app, ctx);
   await dashboardRoutes(app, ctx);
   await adminCredentialRoutes(app, ctx);
@@ -394,6 +412,7 @@ export async function registerRoutes(
   await assistantRoutes(app, ctx);
   await councilRoutes(app, ctx);
   await executionRoutes(app, ctx);
+  await workspaceRoutes(app, ctx);
   await taskRoutes(app, ctx);
   await memoryRoutes(app, ctx);
   await approvalRoutes(app, ctx);

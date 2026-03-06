@@ -7,6 +7,8 @@ import { ApiRequestError } from "@/lib/api/client";
 import {
   getReportsOverview,
   getUpgradeRun,
+  listBriefings,
+  listDossiers,
   listUpgradeRuns,
   listRadarTelegramReports,
   listUpgradeProposals,
@@ -14,7 +16,14 @@ import {
   startUpgradeRun,
   streamRadarTelegramReportsEvents,
 } from "@/lib/api/endpoints";
-import type { ReportsOverviewData, TelegramReportRecord, UpgradeProposalRecord, UpgradeRunRecord } from "@/lib/api/types";
+import type {
+  BriefingRecord,
+  DossierRecord,
+  ReportsOverviewData,
+  TelegramReportRecord,
+  UpgradeProposalRecord,
+  UpgradeRunRecord,
+} from "@/lib/api/types";
 import { hasMinRole, useCurrentRole } from "@/lib/auth/role";
 import { AsyncState } from "@/components/ui/AsyncState";
 
@@ -31,6 +40,8 @@ export function ReportsModule() {
   const [overview, setOverview] = useState<ReportsOverviewData | null>(null);
   const [latestRun, setLatestRun] = useState<UpgradeRunRecord | null>(null);
   const [telegramReports, setTelegramReports] = useState<TelegramReportRecord[]>([]);
+  const [briefings, setBriefings] = useState<BriefingRecord[]>([]);
+  const [dossiers, setDossiers] = useState<DossierRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [startingFor, setStartingFor] = useState<string | null>(null);
@@ -42,6 +53,8 @@ export function ReportsModule() {
       setOverview(null);
       setLatestRun(null);
       setTelegramReports([]);
+      setBriefings([]);
+      setDossiers([]);
       setError(null);
       setLoading(false);
       return;
@@ -50,16 +63,20 @@ export function ReportsModule() {
     setLoading(true);
     setError(null);
     try {
-      const [proposalData, overviewData, telegramData, upgradeRunsData] = await Promise.all([
+      const [proposalData, overviewData, telegramData, upgradeRunsData, briefingData, dossierData] = await Promise.all([
         listUpgradeProposals(),
         getReportsOverview(),
         listRadarTelegramReports({ limit: 20 }),
         listUpgradeRuns({ limit: 1 }),
+        listBriefings({ limit: 12 }).catch(() => ({ briefings: [] })),
+        listDossiers({ limit: 12 }).catch(() => ({ dossiers: [] })),
       ]);
       setProposals(proposalData.proposals);
       setOverview(overviewData);
       setTelegramReports(telegramData.reports);
       setLatestRun(upgradeRunsData.runs[0] ?? null);
+      setBriefings(briefingData.briefings);
+      setDossiers(dossierData.dossiers);
     } catch (err) {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
@@ -70,6 +87,8 @@ export function ReportsModule() {
       setOverview(null);
       setTelegramReports([]);
       setLatestRun(null);
+      setBriefings([]);
+      setDossiers([]);
     } finally {
       setLoading(false);
     }
@@ -202,6 +221,35 @@ export function ReportsModule() {
             <p className="text-sm font-mono text-emerald-300">
               {overview.providers.enabled}/{overview.providers.items.length} enabled
             </p>
+          </div>
+        </section>
+      )}
+
+      {canOperate && (
+        <section className="mb-3 grid grid-cols-1 xl:grid-cols-2 gap-3">
+          <div className="rounded border border-cyan-500/20 bg-cyan-500/5 p-3">
+            <p className="text-[10px] font-mono tracking-widest text-cyan-300 uppercase mb-2">Briefing Archive</p>
+            <div className="space-y-2">
+              {briefings.slice(0, 4).map((briefing) => (
+                <div key={briefing.id} className="rounded border border-white/10 bg-black/30 px-3 py-2">
+                  <p className="text-sm text-white/90">{briefing.title}</p>
+                  <p className="text-[10px] font-mono text-white/45">{briefing.sourceCount} sources</p>
+                </div>
+              ))}
+              {briefings.length === 0 && <p className="text-xs text-white/45">No briefings generated yet.</p>}
+            </div>
+          </div>
+          <div className="rounded border border-cyan-500/20 bg-cyan-500/5 p-3">
+            <p className="text-[10px] font-mono tracking-widest text-cyan-300 uppercase mb-2">Dossier Archive</p>
+            <div className="space-y-2">
+              {dossiers.slice(0, 4).map((dossier) => (
+                <div key={dossier.id} className="rounded border border-white/10 bg-black/30 px-3 py-2">
+                  <p className="text-sm text-white/90">{dossier.title}</p>
+                  <p className="text-[10px] font-mono text-white/45">{dossier.status}</p>
+                </div>
+              ))}
+              {dossiers.length === 0 && <p className="text-xs text-white/45">No dossiers compiled yet.</p>}
+            </div>
           </div>
         </section>
       )}

@@ -5,8 +5,9 @@ import { AgentArgumentCard } from "@/components/ui/AgentArgumentCard";
 import { CouncilConsensusPanel } from "@/components/ui/CouncilConsensusPanel";
 import { Network, AlertCircle, Loader2 } from "lucide-react";
 
-import { listProviderModels, listProviders, startCouncilRun, streamCouncilRunEvents } from "@/lib/api/endpoints";
+import { getCouncilRun, listProviderModels, listProviders, startCouncilRun, streamCouncilRunEvents } from "@/lib/api/endpoints";
 import { ApiRequestError } from "@/lib/api/client";
+import { subscribeCouncilIntake } from "@/lib/hud/council-intake";
 import type { AgentRole } from "@/components/ui/AgentArgumentCard";
 import type {
   CouncilConsensusStatus,
@@ -162,7 +163,7 @@ export function CouncilModule() {
     };
   }, []);
 
-  const applyCouncilResult = (result: {
+  const applyCouncilResult = React.useCallback((result: {
     summary: string;
     status: "queued" | "running" | "completed" | "failed";
     consensus_status: CouncilConsensusStatus | null;
@@ -241,9 +242,103 @@ export function CouncilModule() {
     setLastTaskId(result.task_id);
     setProviderAttempts(result.attempts);
     setSelectedCredentialSummary(credentialSummary);
-  };
+  }, []);
 
-  const runCouncil = async (
+  const attachCouncilStream = React.useCallback((runId: string) => {
+    streamRef.current?.close();
+    streamRef.current = streamCouncilRunEvents(runId, {
+      onRoundStarted: (payload) => {
+        if (payload && typeof payload === "object" && "round" in payload) {
+          const data = payload as { round: number; max_rounds: number };
+          setRounds((current) => Math.max(current, data.round));
+          setSummary(`Round ${data.round}/${data.max_rounds} in progress...`);
+        }
+      },
+      onAgentResponded: (payload) => {
+        if (payload && typeof payload === "object" && "attempt" in payload) {
+          const data = payload as { attempt: ProviderAttempt; agent_index?: number };
+          setProviderAttempts((current) => {
+            if (typeof data.agent_index === "number") {
+              if (data.agent_index <= 0) return current;
+              const next = [...current];
+              next[data.agent_index - 1] = data.attempt;
+              return next;
+            }
+            return [...current, data.attempt];
+          });
+        }
+      },
+      onRoundCompleted: (payload) => {
+        if (payload && typeof payload === "object" && "round" in payload && "summary" in payload) {
+          const data = payload as { round: number; summary: string };
+          setRounds((current) => Math.max(current, data.round));
+          setSummary(data.summary);
+        }
+      },
+      onUpdated: (payload) => {
+        if (!payload || typeof payload !== "object" || !("data" in payload)) return;
+        const body = payload as { data?: Parameters<typeof applyCouncilResult>[0] };
+        if (body.data) {
+          applyCouncilResult(body.data);
+        }
+      },
+      onCompleted: (payload) => {
+        if (!payload || typeof payload !== "object" || !("data" in payload)) return;
+        const body = payload as { data?: Parameters<typeof applyCouncilResult>[0] };
+        if (body.data) {
+          applyCouncilResult(body.data);
+        }
+        setRunning(false);
+      },
+      onFailed: (payload) => {
+        if (!payload || typeof payload !== "object" || !("data" in payload)) return;
+        const body = payload as { data?: Parameters<typeof applyCouncilResult>[0] };
+        if (body.data) {
+          applyCouncilResult(body.data);
+        }
+        setRunning(false);
+      },
+      onClose: () => {
+        streamRef.current = null;
+        setRunning(false);
+      },
+      onError: () => {
+        setError("council event stream failed");
+        streamRef.current = null;
+        setRunning(false);
+      },
+    });
+  }, [applyCouncilResult]);
+
+  React.useEffect(() => {
+    return subscribeCouncilIntake((payload) => {
+      setQuery(payload.prompt);
+      setLastTaskId(payload.taskId ?? null);
+      setError(null);
+      setRunning(true);
+      setIdempotentReplay(false);
+      void (async () => {
+        try {
+          const run = await getCouncilRun(payload.runId);
+          applyCouncilResult(run);
+          if (run.status === "completed" || run.status === "failed") {
+            setRunning(false);
+            return;
+          }
+          attachCouncilStream(run.id);
+        } catch (err) {
+          if (err instanceof ApiRequestError) {
+            setError(`${err.code}: ${err.message}`);
+          } else {
+            setError("failed to load council run");
+          }
+          setRunning(false);
+        }
+      })();
+    });
+  }, [attachCouncilStream]);
+
+  const runCouncil = React.useCallback(async (
     createTask: boolean,
     options?: {
       excludeProviders?: ProviderAttempt["provider"][];
@@ -284,69 +379,7 @@ export function CouncilModule() {
         return;
       }
 
-      streamRef.current?.close();
-      streamRef.current = streamCouncilRunEvents(result.id, {
-        onRoundStarted: (payload) => {
-          if (payload && typeof payload === "object" && "round" in payload) {
-            const data = payload as { round: number; max_rounds: number };
-            setRounds((current) => Math.max(current, data.round));
-            setSummary(`Round ${data.round}/${data.max_rounds} in progress...`);
-          }
-        },
-        onAgentResponded: (payload) => {
-          if (payload && typeof payload === "object" && "attempt" in payload) {
-            const data = payload as { attempt: ProviderAttempt; agent_index?: number };
-            setProviderAttempts((current) => {
-              if (typeof data.agent_index === "number") {
-                if (data.agent_index <= 0) return current;
-                const next = [...current];
-                next[data.agent_index - 1] = data.attempt;
-                return next;
-              }
-              return [...current, data.attempt];
-            });
-          }
-        },
-        onRoundCompleted: (payload) => {
-          if (payload && typeof payload === "object" && "round" in payload && "summary" in payload) {
-            const data = payload as { round: number; summary: string };
-            setRounds((current) => Math.max(current, data.round));
-            setSummary(data.summary);
-          }
-        },
-        onUpdated: (payload) => {
-          if (!payload || typeof payload !== "object" || !("data" in payload)) return;
-          const body = payload as { data?: Parameters<typeof applyCouncilResult>[0] };
-          if (body.data) {
-            applyCouncilResult(body.data);
-          }
-        },
-        onCompleted: (payload) => {
-          if (!payload || typeof payload !== "object" || !("data" in payload)) return;
-          const body = payload as { data?: Parameters<typeof applyCouncilResult>[0] };
-          if (body.data) {
-            applyCouncilResult(body.data);
-          }
-          setRunning(false);
-        },
-        onFailed: (payload) => {
-          if (!payload || typeof payload !== "object" || !("data" in payload)) return;
-          const body = payload as { data?: Parameters<typeof applyCouncilResult>[0] };
-          if (body.data) {
-            applyCouncilResult(body.data);
-          }
-          setRunning(false);
-        },
-        onClose: () => {
-          streamRef.current = null;
-          setRunning(false);
-        },
-        onError: () => {
-          setError("council event stream failed");
-          streamRef.current = null;
-          setRunning(false);
-        },
-      });
+      attachCouncilStream(result.id);
     } catch (err) {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
@@ -365,7 +398,7 @@ export function CouncilModule() {
         setRunning(false);
       }
     }
-  };
+  }, [applyCouncilResult, attachCouncilStream, modelOverride, query, running, selectedProvider, strictProvider]);
 
   return (
     <main className="w-full h-full relative overflow-hidden bg-transparent text-white flex">

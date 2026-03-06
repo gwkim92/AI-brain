@@ -1,0 +1,23 @@
+{
+  "date": "2026-03-06",
+  "session": "jarvis-phase3",
+  "scope": [
+    "mission_control_open",
+    "workbench_runtime",
+    "approval_gated_workspace_command"
+  ],
+  "issues": [
+    {
+      "id": "ISSUE-001",
+      "title": "Approval-required workspace command replays stale transcript and looks already executed",
+      "severity": "high",
+      "status": "resolved",
+      "code_fix": "/Users/woody/ai/brain/web/src/components/modules/WorkbenchModule.tsx",
+      "regression_test": "/Users/woody/ai/brain/web/e2e/sidebar-studio-navigation.spec.ts"
+    }
+  ],
+  "verification": {
+    "web_tsc": "passed",
+    "playwright_sidebar_spec": "passed"
+  }
+}

@@ -9,6 +9,7 @@ import { ZodError } from 'zod';
 
 import { hashPassword } from './auth/crypto';
 import { loadEnv } from './config/env';
+import { startJarvisWatcherWorker } from './jarvis/watcher-worker';
 import { startTelegramDeliveryWorker } from './integrations/telegram/delivery-worker';
 import { sendError } from './lib/http';
 import { createProviderRouter } from './providers';
@@ -18,12 +19,13 @@ import { syncModelRegistry, createRegistryRefreshInterval } from './providers/mo
 import { loadProviderStats } from './providers/stats-persistence';
 import { seedDefaultPolicies, loadPoliciesIntoCache } from './providers/task-model-policy';
 import { startProviderTokenRefreshWorker } from './providers/token-refresh-worker';
-import { createWebhookNotificationChannel } from './notifications/channels';
+import { createTelegramNotificationChannel, createWebhookNotificationChannel } from './notifications/channels';
 import { createNotificationService } from './notifications/proactive';
 import { startAiTraceCleanupWorker } from './observability/ai-trace-worker';
 import { registerRoutes } from './routes';
 import { createStore } from './store';
 import type { JarvisStore } from './store/types';
+import { getWorkspaceRuntimeManager } from './workspaces/runtime-manager';
 
 type RawBodyFastifyRequest = {
   rawBody?: string;
@@ -183,12 +185,23 @@ export async function buildServer() {
   if (webhookChannel) {
     notificationChannels.push(webhookChannel);
   }
+  const telegramChannel = createTelegramNotificationChannel({
+    env,
+    logger: app.log
+  });
+  if (telegramChannel) {
+    notificationChannels.push(telegramChannel);
+  }
 
   const notificationService = createNotificationService({
     channels: notificationChannels,
     logger: app.log
   });
   await registerRoutes(app, store, env, providerRouter, notificationService);
+  const workspaceRuntimeManager = getWorkspaceRuntimeManager();
+  app.addHook('onClose', async () => {
+    await workspaceRuntimeManager.shutdownAll();
+  });
 
   const oauthCallbackBridge = await startOauthCallbackBridge({
     env,
@@ -236,6 +249,16 @@ export async function buildServer() {
   });
   app.addHook('onClose', async () => {
     aiTraceCleanupWorker.stop();
+  });
+
+  const jarvisWatcherWorker = startJarvisWatcherWorker({
+    store,
+    env,
+    notificationService,
+    logger: app.log
+  });
+  app.addHook('onClose', async () => {
+    jarvisWatcherWorker.stop();
   });
 
   return {

@@ -64,6 +64,7 @@ export type DashboardOverview = {
     failed_count: number;
     blocked_count: number;
     pending_approval_count: number;
+    pending_session_approval_count: number;
   };
   tasks: Array<{ id: string; status: string; mode: string; updatedAt: string; [key: string]: unknown }>;
   running_tasks: Array<{ id: string; status: string; mode: string; updatedAt: string; [key: string]: unknown }>;

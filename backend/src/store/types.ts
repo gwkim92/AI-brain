@@ -211,6 +211,323 @@ export type ReplaceAssistantContextGroundingClaimsInput = {
   }>;
 };
 
+export type JarvisSessionIntent = 'general' | 'code' | 'research' | 'finance' | 'news' | 'council';
+export type JarvisSessionStatus = 'queued' | 'running' | 'blocked' | 'needs_approval' | 'completed' | 'failed' | 'stale';
+export type JarvisWorkspacePreset = 'jarvis' | 'research' | 'execution' | 'control';
+export type JarvisSessionPrimaryTarget = 'assistant' | 'mission' | 'council' | 'execution' | 'briefing' | 'dossier';
+
+export type JarvisSessionRecord = {
+  id: string;
+  userId: string;
+  title: string;
+  prompt: string;
+  source: string;
+  intent: JarvisSessionIntent;
+  status: JarvisSessionStatus;
+  workspacePreset: JarvisWorkspacePreset | null;
+  primaryTarget: JarvisSessionPrimaryTarget;
+  taskId: string | null;
+  missionId: string | null;
+  assistantContextId: string | null;
+  councilRunId: string | null;
+  executionRunId: string | null;
+  briefingId: string | null;
+  dossierId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lastEventAt: string;
+};
+
+export type CreateJarvisSessionInput = {
+  id?: string;
+  userId: string;
+  title: string;
+  prompt: string;
+  source: string;
+  intent: JarvisSessionIntent;
+  status?: JarvisSessionStatus;
+  workspacePreset?: JarvisWorkspacePreset | null;
+  primaryTarget: JarvisSessionPrimaryTarget;
+  taskId?: string | null;
+  missionId?: string | null;
+  assistantContextId?: string | null;
+  councilRunId?: string | null;
+  executionRunId?: string | null;
+  briefingId?: string | null;
+  dossierId?: string | null;
+};
+
+export type UpdateJarvisSessionInput = {
+  sessionId: string;
+  userId: string;
+  title?: string;
+  prompt?: string;
+  status?: JarvisSessionStatus;
+  workspacePreset?: JarvisWorkspacePreset | null;
+  primaryTarget?: JarvisSessionPrimaryTarget;
+  taskId?: string | null;
+  missionId?: string | null;
+  assistantContextId?: string | null;
+  councilRunId?: string | null;
+  executionRunId?: string | null;
+  briefingId?: string | null;
+  dossierId?: string | null;
+};
+
+export type JarvisSessionEventRecord = {
+  id: string;
+  sessionId: string;
+  sequence: number;
+  eventType: string;
+  status: JarvisSessionStatus | null;
+  summary: string | null;
+  data: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type AppendJarvisSessionEventInput = {
+  userId: string;
+  sessionId: string;
+  eventType: string;
+  status?: JarvisSessionStatus | null;
+  summary?: string | null;
+  data?: Record<string, unknown>;
+};
+
+export type ActionProposalKind = 'mission_execute' | 'council_run' | 'execution_run' | 'workspace_prepare' | 'notify' | 'custom';
+export type ActionProposalStatus = 'pending' | 'approved' | 'rejected';
+
+export type ActionProposalRecord = {
+  id: string;
+  userId: string;
+  sessionId: string;
+  kind: ActionProposalKind;
+  title: string;
+  summary: string;
+  status: ActionProposalStatus;
+  payload: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  decidedAt: string | null;
+  decidedBy: string | null;
+};
+
+export type CreateActionProposalInput = {
+  userId: string;
+  sessionId: string;
+  kind: ActionProposalKind;
+  title: string;
+  summary: string;
+  payload?: Record<string, unknown>;
+};
+
+export type DecideActionProposalInput = {
+  proposalId: string;
+  userId: string;
+  decidedBy: string;
+  decision: Exclude<ActionProposalStatus, 'pending'>;
+};
+
+export type WatcherKind =
+  | 'external_topic'
+  | 'company'
+  | 'market'
+  | 'war_region'
+  | 'repo'
+  | 'task_health'
+  | 'mission_health'
+  | 'approval_backlog';
+
+export type WatcherStatus = 'active' | 'paused' | 'error';
+export type WatcherRunStatus = 'running' | 'completed' | 'failed';
+
+export type WatcherRecord = {
+  id: string;
+  userId: string;
+  kind: WatcherKind;
+  status: WatcherStatus;
+  title: string;
+  query: string;
+  configJson: Record<string, unknown>;
+  lastRunAt: string | null;
+  lastHitAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreateWatcherInput = {
+  userId: string;
+  kind: WatcherKind;
+  title: string;
+  query: string;
+  status?: WatcherStatus;
+  configJson?: Record<string, unknown>;
+};
+
+export type UpdateWatcherInput = {
+  watcherId: string;
+  userId: string;
+  kind?: WatcherKind;
+  status?: WatcherStatus;
+  title?: string;
+  query?: string;
+  configJson?: Record<string, unknown>;
+  lastRunAt?: string | null;
+  lastHitAt?: string | null;
+};
+
+export type WatcherRunRecord = {
+  id: string;
+  watcherId: string;
+  userId: string;
+  status: WatcherRunStatus;
+  summary: string;
+  briefingId: string | null;
+  dossierId: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreateWatcherRunInput = {
+  watcherId: string;
+  userId: string;
+  status?: WatcherRunStatus;
+  summary?: string;
+  briefingId?: string | null;
+  dossierId?: string | null;
+  error?: string | null;
+};
+
+export type UpdateWatcherRunInput = {
+  runId: string;
+  userId: string;
+  status?: WatcherRunStatus;
+  summary?: string;
+  briefingId?: string | null;
+  dossierId?: string | null;
+  error?: string | null;
+};
+
+export type BriefingType = 'daily' | 'on_change' | 'on_demand';
+export type BriefingStatus = 'draft' | 'completed' | 'failed';
+
+export type BriefingRecord = {
+  id: string;
+  userId: string;
+  watcherId: string | null;
+  sessionId: string | null;
+  type: BriefingType;
+  status: BriefingStatus;
+  title: string;
+  query: string;
+  summary: string;
+  answerMarkdown: string;
+  sourceCount: number;
+  qualityJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreateBriefingInput = {
+  userId: string;
+  watcherId?: string | null;
+  sessionId?: string | null;
+  type: BriefingType;
+  status?: BriefingStatus;
+  title: string;
+  query: string;
+  summary: string;
+  answerMarkdown: string;
+  sourceCount?: number;
+  qualityJson?: Record<string, unknown>;
+};
+
+export type DossierStatus = 'draft' | 'ready' | 'failed';
+
+export type DossierRecord = {
+  id: string;
+  userId: string;
+  sessionId: string | null;
+  briefingId: string | null;
+  title: string;
+  query: string;
+  status: DossierStatus;
+  summary: string;
+  answerMarkdown: string;
+  qualityJson: Record<string, unknown>;
+  conflictsJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreateDossierInput = {
+  userId: string;
+  sessionId?: string | null;
+  briefingId?: string | null;
+  title: string;
+  query: string;
+  status?: DossierStatus;
+  summary?: string;
+  answerMarkdown?: string;
+  qualityJson?: Record<string, unknown>;
+  conflictsJson?: Record<string, unknown>;
+};
+
+export type UpdateDossierInput = {
+  dossierId: string;
+  userId: string;
+  title?: string;
+  query?: string;
+  status?: DossierStatus;
+  summary?: string;
+  answerMarkdown?: string;
+  qualityJson?: Record<string, unknown>;
+  conflictsJson?: Record<string, unknown>;
+};
+
+export type DossierSourceRecord = {
+  id: string;
+  dossierId: string;
+  url: string;
+  title: string;
+  domain: string;
+  snippet: string;
+  publishedAt: string | null;
+  sourceOrder: number;
+  createdAt: string;
+};
+
+export type ReplaceDossierSourcesInput = {
+  userId: string;
+  dossierId: string;
+  sources: Array<{
+    url: string;
+    title: string;
+    domain: string;
+    snippet?: string;
+    publishedAt?: string | null;
+  }>;
+};
+
+export type DossierClaimRecord = {
+  id: string;
+  dossierId: string;
+  claimText: string;
+  claimOrder: number;
+  sourceUrls: string[];
+  createdAt: string;
+};
+
+export type ReplaceDossierClaimsInput = {
+  userId: string;
+  dossierId: string;
+  claims: Array<{
+    claimText: string;
+    sourceUrls: string[];
+  }>;
+};
+
 export type ProviderCredentialRecord = {
   provider: ProviderCredentialProvider;
   encryptedApiKey: string;
@@ -759,6 +1076,69 @@ export type JarvisStore = {
     retentionDays?: number;
     limit?: number;
   }) => Promise<number>;
+
+  createJarvisSession: (input: CreateJarvisSessionInput) => Promise<JarvisSessionRecord>;
+  listJarvisSessions: (input: {
+    userId: string;
+    status?: JarvisSessionStatus;
+    limit: number;
+  }) => Promise<JarvisSessionRecord[]>;
+  getJarvisSessionById: (input: { userId: string; sessionId: string }) => Promise<JarvisSessionRecord | null>;
+  updateJarvisSession: (input: UpdateJarvisSessionInput) => Promise<JarvisSessionRecord | null>;
+  appendJarvisSessionEvent: (input: AppendJarvisSessionEventInput) => Promise<JarvisSessionEventRecord | null>;
+  listJarvisSessionEvents: (input: {
+    userId: string;
+    sessionId: string;
+    sinceSequence?: number;
+    limit: number;
+  }) => Promise<JarvisSessionEventRecord[]>;
+  createActionProposal: (input: CreateActionProposalInput) => Promise<ActionProposalRecord>;
+  listActionProposals: (input: {
+    userId: string;
+    sessionId?: string;
+    status?: ActionProposalStatus;
+    limit: number;
+  }) => Promise<ActionProposalRecord[]>;
+  decideActionProposal: (input: DecideActionProposalInput) => Promise<ActionProposalRecord | null>;
+
+  createWatcher: (input: CreateWatcherInput) => Promise<WatcherRecord>;
+  listWatchers: (input: {
+    userId: string;
+    status?: WatcherStatus;
+    kind?: WatcherKind;
+    limit: number;
+  }) => Promise<WatcherRecord[]>;
+  listActiveWatchers: (input: {
+    limit: number;
+  }) => Promise<WatcherRecord[]>;
+  getWatcherById: (input: { userId: string; watcherId: string }) => Promise<WatcherRecord | null>;
+  updateWatcher: (input: UpdateWatcherInput) => Promise<WatcherRecord | null>;
+  deleteWatcher: (input: { userId: string; watcherId: string }) => Promise<boolean>;
+  createWatcherRun: (input: CreateWatcherRunInput) => Promise<WatcherRunRecord>;
+  listWatcherRuns: (input: { userId: string; watcherId: string; limit: number }) => Promise<WatcherRunRecord[]>;
+  updateWatcherRun: (input: UpdateWatcherRunInput) => Promise<WatcherRunRecord | null>;
+
+  createBriefing: (input: CreateBriefingInput) => Promise<BriefingRecord>;
+  listBriefings: (input: {
+    userId: string;
+    type?: BriefingType;
+    status?: BriefingStatus;
+    limit: number;
+  }) => Promise<BriefingRecord[]>;
+  getBriefingById: (input: { userId: string; briefingId: string }) => Promise<BriefingRecord | null>;
+
+  createDossier: (input: CreateDossierInput) => Promise<DossierRecord>;
+  listDossiers: (input: {
+    userId: string;
+    status?: DossierStatus;
+    limit: number;
+  }) => Promise<DossierRecord[]>;
+  getDossierById: (input: { userId: string; dossierId: string }) => Promise<DossierRecord | null>;
+  updateDossier: (input: UpdateDossierInput) => Promise<DossierRecord | null>;
+  replaceDossierSources: (input: ReplaceDossierSourcesInput) => Promise<DossierSourceRecord[]>;
+  listDossierSources: (input: { userId: string; dossierId: string; limit: number }) => Promise<DossierSourceRecord[]>;
+  replaceDossierClaims: (input: ReplaceDossierClaimsInput) => Promise<DossierClaimRecord[]>;
+  listDossierClaims: (input: { userId: string; dossierId: string; limit: number }) => Promise<DossierClaimRecord[]>;
 
   createMission: (input: CreateMissionInput) => Promise<MissionRecord>;
   listMissions: (input: { userId: string; status?: MissionStatus; limit: number }) => Promise<MissionRecord[]>;

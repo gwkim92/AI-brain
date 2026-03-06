@@ -19,6 +19,7 @@ import type { Jarvis3DBaseMode, Jarvis3DScene } from "@/lib/visual-core/types";
 import { canAccessWidget, useCurrentRoleState } from "@/lib/auth/role";
 import { resolveMissionFocus } from "@/lib/hud/mission-focus";
 import { ContextDockBar } from "@/components/layout/ContextDockBar";
+import { measureHudViewport, tileWidgetLayouts } from "@/lib/hud/widget-layout";
 import {
   HUD_DEFAULT_MISSION_AUTO_FOCUS_HOLD_SECONDS,
   HUD_MISSION_AUTO_FOCUS_HOLD_SECONDS_KEY,
@@ -37,6 +38,11 @@ import { CouncilModule } from "@/components/modules/CouncilModule";
 import { WorkbenchModule } from "@/components/modules/WorkbenchModule";
 import { TasksModule } from "@/components/modules/TasksModule";
 import { ReportsModule } from "@/components/modules/ReportsModule";
+import { WatchersModule } from "@/components/modules/WatchersModule";
+import { DossierModule } from "@/components/modules/DossierModule";
+import { ActionCenterModule } from "@/components/modules/ActionCenterModule";
+import { NotificationsModule } from "@/components/modules/NotificationsModule";
+import { SkillsModule } from "@/components/modules/SkillsModule";
 import { ApprovalsModule } from "@/components/modules/ApprovalsModule";
 import { MemoryModule } from "@/components/modules/MemoryModule";
 import { SettingsModule } from "@/components/modules/SettingsModule";
@@ -51,6 +57,11 @@ const KNOWN_WIDGET_IDS = new Set([
   "council",
   "workbench",
   "reports",
+  "watchers",
+  "dossier",
+  "action_center",
+  "notifications",
+  "skills",
   "approvals",
   "memory",
   "settings",
@@ -85,6 +96,11 @@ const WIDGET_DEFAULTS: Record<string, { x: number; y: number; w: number; h: numb
   council:   { x: 400, y: 300, w: 380, h: 360 },
   workbench: { x: 200, y: 80,  w: 400, h: 380 },
   reports:   { x: 240, y: 70,  w: 380, h: 360 },
+  watchers:  { x: 24,  y: 72,  w: 500, h: 460 },
+  dossier:   { x: 560, y: 72,  w: 820, h: 760 },
+  action_center: { x: 200, y: 72, w: 760, h: 640 },
+  notifications: { x: 980, y: 72, w: 420, h: 560 },
+  skills: { x: 220, y: 72, w: 980, h: 720 },
   approvals: { x: 60,  y: 120, w: 360, h: 340 },
   memory:    { x: 280, y: 140, w: 360, h: 340 },
   settings:  { x: 140, y: 72,  w: 620, h: 760 },
@@ -99,6 +115,11 @@ const WIDGET_TITLES: Record<string, string> = {
   workbench: "WORKBENCH",
   tasks: "TASK MANAGER",
   reports: "SYSTEM REPORTS",
+  watchers: "WATCHERS",
+  dossier: "DOSSIER ARCHIVE",
+  action_center: "ACTION CENTER",
+  notifications: "NOTIFICATIONS",
+  skills: "SKILLS",
   approvals: "PENDING APPROVALS",
   memory: "SEMANTIC MEMORY",
   settings: "SYSTEM SETTINGS",
@@ -113,6 +134,11 @@ const WIDGET_COMPONENTS: Record<string, React.ComponentType> = {
   workbench: WorkbenchModule,
   tasks: TasksModule,
   reports: ReportsModule,
+  watchers: WatchersModule,
+  dossier: DossierModule,
+  action_center: ActionCenterModule,
+  notifications: NotificationsModule,
+  skills: SkillsModule,
   approvals: ApprovalsModule,
   memory: MemoryModule,
   settings: SettingsModule,
@@ -124,7 +150,7 @@ function HUDWidgetRenderer({ mountedWidgets, activeWidgets }: { mountedWidgets: 
   const constraintsRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div ref={constraintsRef} className="w-full h-full relative overflow-hidden pointer-events-none">
+    <div ref={constraintsRef} data-hud-viewport="true" className="w-full h-full relative overflow-hidden pointer-events-none">
       <AnimatePresence>
         {mountedWidgets.map((widgetId) => {
           const isVisible = activeWidgets.includes(widgetId);
@@ -814,6 +840,10 @@ export default function JarvisHUD() {
           requestedPlan.focus && allowed.includes(requestedPlan.focus)
             ? requestedPlan.focus
             : allowed[allowed.length - 1];
+        if (requestedPlan.replace && requestedPlan.activate === "all" && allowed.length > 1) {
+          const viewport = measureHudViewport();
+          tileWidgetLayouts(allowed, viewport.width, viewport.height, 24);
+        }
         openWidgets(allowed, {
           focus: focusWidget,
           replace: requestedPlan.replace,

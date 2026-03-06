@@ -92,6 +92,12 @@ function credentialSourceClass(source: UserProviderCredentialRecord["source"]): 
   return "text-white/45 border-white/20 bg-white/5";
 }
 
+function formatEventTypes(eventTypes: string[]): string {
+  if (eventTypes.length === 0) return "none";
+  if (eventTypes.includes("*")) return "all";
+  return eventTypes.join(", ");
+}
+
 export function SettingsModule() {
   const role = useCurrentRole();
   const isAdmin = hasMinRole(role, "admin");
@@ -712,6 +718,9 @@ export function SettingsModule() {
     }
   };
 
+  const notificationRuntime = settingsOverview?.notification_runtime ?? null;
+  const notificationPolicy = settingsOverview?.notification_policy ?? null;
+
   return (
     <main className="w-full min-h-full bg-transparent text-white p-4 flex flex-col">
       <header className="mb-4 border-l-2 border-white/50 pl-3">
@@ -1086,6 +1095,70 @@ export function SettingsModule() {
             <span className="text-white/40">range 15-600s</span>
           </div>
           {hudRuntimeNotice && <p className="text-[10px] font-mono text-emerald-300">{hudRuntimeNotice}</p>}
+        </div>
+      </section>
+
+      <section className="mt-4 border border-white/10 rounded p-3 bg-black/30">
+        <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase mb-2 flex items-center gap-2">
+          <RadioTower size={12} /> Notification Channels
+        </h3>
+        <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+          {[
+            {
+              key: "in_app",
+              label: "In-App",
+              policy: notificationPolicy?.in_app ?? { enabled: true, min_severity: "info", event_types: ["*"] },
+              runtime: null,
+            },
+            {
+              key: "webhook",
+              label: "Webhook",
+              policy: notificationPolicy?.webhook ?? null,
+              runtime: notificationRuntime?.channels.find((channel) => channel.name === "webhook") ?? null,
+            },
+            {
+              key: "telegram",
+              label: "Telegram",
+              policy: notificationPolicy?.telegram ?? null,
+              runtime: notificationRuntime?.channels.find((channel) => channel.name === "telegram") ?? null,
+            },
+          ].map((channel) => (
+            <div key={channel.key} className="rounded border border-white/10 bg-black/25 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm text-white/90">{channel.label}</p>
+                <span
+                  className={`rounded-full border px-2 py-0.5 text-[10px] font-mono ${
+                    channel.policy?.enabled ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200" : "border-white/10 text-white/45"
+                  }`}
+                >
+                  {channel.policy?.enabled ? "enabled" : "disabled"}
+                </span>
+              </div>
+              <div className="mt-3 space-y-1 text-[11px] text-white/65">
+                <p>min severity: {channel.policy?.min_severity ?? "-"}</p>
+                <p>events: {channel.policy ? formatEventTypes(channel.policy.event_types) : "-"}</p>
+                {channel.runtime ? (
+                  <>
+                    <p>sent: {channel.runtime.sent}</p>
+                    <p>skipped: {channel.runtime.skipped}</p>
+                    <p>failed: {channel.runtime.failed}</p>
+                    <p>last success: {channel.runtime.lastSuccessAt ? new Date(channel.runtime.lastSuccessAt).toLocaleString() : "-"}</p>
+                    <p>last error: {channel.runtime.lastErrorAt ? new Date(channel.runtime.lastErrorAt).toLocaleString() : "-"}</p>
+                    {channel.runtime.lastError ? <p className="text-amber-300">{channel.runtime.lastError}</p> : null}
+                  </>
+                ) : channel.key === "in_app" ? (
+                  <>
+                    <p>listeners: {notificationRuntime?.listeners ?? 0}</p>
+                    <p>emitted: {notificationRuntime?.emitted ?? 0}</p>
+                    <p>suppressed: {notificationRuntime?.suppressed ?? 0}</p>
+                    <p>last event: {notificationRuntime?.lastEventAt ? new Date(notificationRuntime.lastEventAt).toLocaleString() : "-"}</p>
+                  </>
+                ) : (
+                  <p className="text-white/45">runtime inactive</p>
+                )}
+              </div>
+            </div>
+          ))}
         </div>
       </section>
 

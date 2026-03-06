@@ -28,9 +28,9 @@ function toWidgetFromRoute(route: string | undefined): HudWidgetId | null {
   const normalized = route.trim().toLowerCase();
 
   if (normalized.startsWith("/studio/code")) return "workbench";
-  if (normalized.startsWith("/studio/research")) return "council";
+  if (normalized.startsWith("/studio/research")) return "dossier";
   if (normalized.startsWith("/studio/finance")) return "reports";
-  if (normalized.startsWith("/studio/news")) return "assistant";
+  if (normalized.startsWith("/studio/news")) return "reports";
   if (normalized.startsWith("/approvals")) return "approvals";
   if (normalized.startsWith("/reports")) return "reports";
   if (normalized.startsWith("/settings")) return "settings";

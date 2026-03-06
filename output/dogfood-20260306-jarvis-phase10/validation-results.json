@@ -1,0 +1,63 @@
+{
+  "date": "2026-03-06",
+  "scope": [
+    "workbench_current_runtime_clickability",
+    "workbench_worktree_runtime_execution",
+    "workbench_devcontainer_runtime_execution"
+  ],
+  "open_issue_count": 0,
+  "validated": [
+    {
+      "id": "workbench_current_runtime_clickability",
+      "status": "passed_after_fix",
+      "evidence": [
+        "screenshots/issue-001-run-command-obscured.png",
+        "screenshots/phase10-current-runtime.png"
+      ],
+      "details": {
+        "liveClickBlockedBeforeFix": true,
+        "playwrightRegressionAdded": true,
+        "postFixCommand": "pwd",
+        "postFixOutput": "/Users/woody/ai/brain"
+      }
+    },
+    {
+      "id": "workbench_worktree_runtime_execution",
+      "status": "passed",
+      "evidence": [
+        "screenshots/phase10-worktree-runtime-success.png",
+        "phase10-runtime-sweep.json"
+      ],
+      "details": {
+        "workspaceKind": "worktree",
+        "command": "pwd",
+        "outputContains": "/Users/woody/ai/brain/.worktrees/code-worktree-"
+      }
+    },
+    {
+      "id": "workbench_devcontainer_runtime_execution",
+      "status": "passed",
+      "evidence": [
+        "screenshots/phase10-devcontainer-runtime-success.png",
+        "phase10-runtime-sweep.json"
+      ],
+      "details": {
+        "workspaceKind": "devcontainer",
+        "image": "alpine:3.20",
+        "command": "pwd",
+        "outputContains": "/workspace"
+      }
+    }
+  ],
+  "resolved": [
+    {
+      "id": "phase10-workbench-run-command-obscured-by-dock",
+      "severity": "high",
+      "status": "resolved",
+      "root_cause": [
+        "workbench_scroll_area_bottom_safe_padding_too_small",
+        "bottom_context_dock_overlapped_last_action_row"
+      ]
+    }
+  ]
+}

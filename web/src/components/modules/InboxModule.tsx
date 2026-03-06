@@ -4,9 +4,10 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Clock, AlertTriangle } from "lucide-react";
 
 import { ApiRequestError } from "@/lib/api/client";
-import { listRadarRecommendations, listTasks, listUpgradeProposals } from "@/lib/api/endpoints";
+import { listBriefings, listJarvisSessions, listRadarRecommendations, listTasks, listUpgradeProposals } from "@/lib/api/endpoints";
 import { hasMinRole, useCurrentRole } from "@/lib/auth/role";
-import type { TaskRecord } from "@/lib/api/types";
+import type { BriefingRecord, JarvisSessionRecord, TaskRecord } from "@/lib/api/types";
+import { subscribeJarvisDataRefresh } from "@/lib/hud/data-refresh";
 
 function formatRelativeTime(value: string): string {
   const target = new Date(value).getTime();
@@ -27,9 +28,18 @@ function mapSummaryStatus(status: TaskRecord["status"]): "done" | "running" | "q
   return "queued";
 }
 
+type SummaryRow = {
+  id: string;
+  title: string;
+  time: string;
+  status: "done" | "running" | "queued" | "failed" | "blocked";
+};
+
 export function InboxModule() {
   const role = useCurrentRole();
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
+  const [briefings, setBriefings] = useState<BriefingRecord[]>([]);
+  const [sessions, setSessions] = useState<JarvisSessionRecord[]>([]);
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
   const [adoptRecommendationCount, setAdoptRecommendationCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -40,12 +50,18 @@ export function InboxModule() {
     setLoadError(null);
 
     try {
-      const taskRows = await listTasks({ limit: 20 });
+      const [taskRows, briefingRows, sessionRows] = await Promise.all([
+        listTasks({ limit: 20 }),
+        listBriefings({ limit: 8 }).then((result) => result.briefings).catch(() => []),
+        listJarvisSessions({ limit: 12 }).then((result) => result.sessions).catch(() => []),
+      ]);
       setTasks(Array.isArray(taskRows) ? taskRows : []);
+      setBriefings(Array.isArray(briefingRows) ? briefingRows : []);
+      setSessions(Array.isArray(sessionRows) ? sessionRows : []);
 
       // Operator-only signal APIs should not break inbox for member users.
       if (!hasMinRole(role, "operator")) {
-        setPendingApprovalCount(0);
+        setPendingApprovalCount(sessionRows.filter((session) => session.status === "needs_approval").length);
         setAdoptRecommendationCount(0);
         return;
       }
@@ -56,9 +72,11 @@ export function InboxModule() {
       ]);
 
       if (proposalsResult.status === "fulfilled") {
-        setPendingApprovalCount(Array.isArray(proposalsResult.value.proposals) ? proposalsResult.value.proposals.length : 0);
+        const legacyCount = Array.isArray(proposalsResult.value.proposals) ? proposalsResult.value.proposals.length : 0;
+        const sessionCount = sessionRows.filter((session) => session.status === "needs_approval").length;
+        setPendingApprovalCount(legacyCount + sessionCount);
       } else {
-        setPendingApprovalCount(0);
+        setPendingApprovalCount(sessionRows.filter((session) => session.status === "needs_approval").length);
       }
 
       if (recommendationsResult.status === "fulfilled") {
@@ -77,6 +95,8 @@ export function InboxModule() {
         setLoadError("failed to load inbox data");
       }
       setTasks([]);
+      setBriefings([]);
+      setSessions([]);
       setPendingApprovalCount(0);
       setAdoptRecommendationCount(0);
     } finally {
@@ -88,14 +108,45 @@ export function InboxModule() {
     void refresh();
   }, [refresh]);
 
-  const summaryItems = useMemo(() => {
-    return tasks.slice(0, 8).map((task) => ({
+  useEffect(() => {
+    return subscribeJarvisDataRefresh((detail) => {
+      if (detail.scope === "all" || detail.scope === "approvals" || detail.scope === "sessions" || detail.scope === "tasks") {
+        void refresh();
+      }
+    });
+  }, [refresh]);
+
+  const summaryItems = useMemo<SummaryRow[]>(() => {
+    const sessionRows: SummaryRow[] = sessions.slice(0, 4).map((session) => ({
+      id: session.id,
+      title: session.title,
+      time: formatRelativeTime(session.updatedAt),
+      status: (() => {
+        const nextStatus: "done" | "running" | "queued" | "failed" | "blocked" =
+          session.status === "completed"
+            ? "done"
+            : session.status === "failed"
+              ? "failed"
+              : session.status === "blocked" || session.status === "needs_approval"
+                ? "blocked"
+                : "running";
+        return nextStatus;
+      })(),
+    }));
+    const briefingRows: SummaryRow[] = briefings.slice(0, 4).map((briefing) => ({
+      id: briefing.id,
+      title: briefing.title,
+      time: formatRelativeTime(briefing.updatedAt),
+      status: briefing.status === "failed" ? "failed" : "done" as const,
+    }));
+    const taskRows: SummaryRow[] = tasks.slice(0, 4).map((task) => ({
       id: task.id,
       title: task.title,
       time: formatRelativeTime(task.updatedAt),
       status: mapSummaryStatus(task.status),
     }));
-  }, [tasks]);
+    return [...sessionRows, ...briefingRows, ...taskRows].slice(0, 8);
+  }, [briefings, sessions, tasks]);
 
   const failedTaskCount = useMemo(() => tasks.filter((task) => task.status === "failed" || task.status === "cancelled").length, [tasks]);
 
@@ -104,7 +155,7 @@ export function InboxModule() {
       <div className="relative z-10 w-full h-full p-6 flex flex-col pointer-events-none">
         <header className="mb-4 pl-4 border-l-2 border-cyan-500">
           <h1 className="text-2xl font-mono font-bold tracking-widest text-cyan-400">INBOX</h1>
-          <p className="text-xs font-mono text-white/50 tracking-wide">SYSTEM DASHBOARD</p>
+          <p className="text-xs font-mono text-white/50 tracking-wide">JARVIS BRIEFING FEED</p>
         </header>
 
         <div className="flex-1 flex flex-col gap-4 overflow-y-auto pointer-events-auto pr-2">
@@ -136,12 +187,12 @@ export function InboxModule() {
 
               <div className="space-y-3">
                 <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded">
-                  <p className="text-xs font-mono text-amber-400 mb-1">Pending Approvals</p>
+                  <p className="text-xs font-mono text-amber-400 mb-1">Pending Actions</p>
                   <p className="text-xs text-white/70">{pendingApprovalCount} proposal(s) waiting.</p>
                 </div>
                 <div className="p-3 bg-white/5 border border-white/10 rounded">
-                  <p className="text-xs font-mono text-cyan-400 mb-1">Radar Signals</p>
-                  <p className="text-xs text-white/70">{adoptRecommendationCount} adopt recommendation(s).</p>
+                  <p className="text-xs font-mono text-cyan-400 mb-1">Briefings Ready</p>
+                  <p className="text-xs text-white/70">{briefings.length} briefing(s) in archive.</p>
                 </div>
                 <div className={`p-3 border rounded ${failedTaskCount > 0 ? "bg-red-950/30 border-red-500/20" : "bg-emerald-950/20 border-emerald-500/20"}`}>
                   <p className={`text-xs font-mono mb-1 ${failedTaskCount > 0 ? "text-red-300" : "text-emerald-300"}`}>Task Failures</p>

@@ -8,6 +8,7 @@ import { useHUD } from "@/components/providers/HUDProvider";
 import { buildMissionIntake, dispatchMissionIntake } from "@/lib/hud/mission-intake";
 import { inferHudIntent, resolveWorkspaceForIntent } from "@/lib/hud/intent-router";
 import type { HudWorkspacePreset } from "@/lib/hud/widget-presets";
+import { publishSkillPrefill } from "@/lib/skills/prefill";
 
 type IdeationQuestionType = "pick_one" | "pick_many" | "rank" | "ask_text";
 
@@ -386,6 +387,17 @@ export function IdeationModule() {
         }
     }, [synthesis.markdown]);
 
+    const sendToSkills = useCallback(() => {
+        publishSkillPrefill({
+            prompt: synthesis.assistantPrompt,
+        });
+        openWidgets(["ideation", "skills", "assistant"], {
+            focus: "skills",
+            replace: false,
+            activate: "all"
+        });
+    }, [openWidgets, synthesis.assistantPrompt]);
+
     return (
         <main className="h-full overflow-y-auto px-6 py-5 space-y-4 bg-[radial-gradient(circle_at_20%_10%,rgba(34,197,94,0.15),transparent_42%),radial-gradient(circle_at_80%_0%,rgba(14,165,233,0.12),transparent_44%)]">
             <section className="rounded-xl border border-emerald-500/30 bg-black/35 p-4 backdrop-blur-md">
@@ -596,8 +608,17 @@ export function IdeationModule() {
                             {copied ? <CheckCircle2 size={13} /> : <Copy size={13} />}
                             {copied ? "COPIED" : "COPY MARKDOWN"}
                         </button>
+                        <button
+                            type="button"
+                            onClick={sendToSkills}
+                            disabled={branches.length === 0}
+                            className="flex w-full items-center justify-center gap-2 rounded border border-cyan-500/35 bg-cyan-500/10 px-3 py-2 text-[11px] font-mono tracking-widest text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-40"
+                        >
+                            <Sparkles size={13} />
+                            SEND TO SKILLS
+                        </button>
                         <p className="pt-1 text-[11px] text-white/55">
-                            Branch exploration 기반으로 결과를 Assistant 실행 프롬프트로 전환합니다.
+                            Branch exploration 결과를 Assistant 또는 Skills 실행 프롬프트로 전환합니다.
                         </p>
                     </div>
 

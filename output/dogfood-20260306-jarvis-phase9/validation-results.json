@@ -1,0 +1,66 @@
+{
+  "date": "2026-03-06",
+  "scope": [
+    "watcher_hit_dedupe",
+    "council_reload_recovery",
+    "settings_notification_policy_visibility"
+  ],
+  "open_issue_count": 0,
+  "validated": [
+    {
+      "id": "watcher_hit_dedupe",
+      "status": "passed_after_fix",
+      "evidence": [
+        "screenshots/phase9-rerun-with-notifications-start.png",
+        "screenshots/phase9-after-rerun-with-notifications-fix.png"
+      ],
+      "details": {
+        "watcherName": "phase9-noise-1772793772956",
+        "duplicateWatcherHitCount": 1,
+        "matchingLines": [
+          "phase9-noise-1772793772956",
+          "Watcher Hit: phase9-noise-1772793772956"
+        ]
+      }
+    },
+    {
+      "id": "council_reload_recovery",
+      "status": "passed",
+      "evidence": [
+        "screenshots/phase9-council-before-reload.png",
+        "screenshots/phase9-council-after-reload.png"
+      ],
+      "details": {
+        "councilWidgetVisibleAfterReload": true,
+        "runningCouncilVisibleAfterReload": true,
+        "sessionNotFoundAfterReload": false,
+        "internalErrorAfterReload": false
+      }
+    },
+    {
+      "id": "settings_notification_policy_visibility",
+      "status": "passed",
+      "evidence": [
+        "screenshots/phase9-settings.png"
+      ],
+      "details": {
+        "settingsVisible": true,
+        "inAppVisible": true,
+        "webhookVisible": true,
+        "telegramVisible": true,
+        "exactNotificationChannelsHeadingRequired": false
+      }
+    }
+  ],
+  "resolved": [
+    {
+      "id": "phase9-watcher-hit-notification-duplication",
+      "severity": "medium",
+      "status": "resolved",
+      "root_cause": [
+        "watcher_hit_dedupe_window_too_short",
+        "manual_rerun_interval_exceeded_1_2s_default_window"
+      ]
+    }
+  ]
+}

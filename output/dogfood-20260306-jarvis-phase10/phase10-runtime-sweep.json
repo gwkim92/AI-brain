@@ -1,0 +1,16 @@
+{
+  "worktree": {
+    "created": {
+      "value": "b66c1a84-296e-4724-b577-13467d7ec8b0",
+      "text": "Code Worktree · worktree · ready"
+    },
+    "log": null,
+    "error": "Error: locator.innerText: Error: strict mode violation: getByRole('heading', { name: 'WORKBENCH', exact: true }).first().locator('xpath=ancestor::main[1]').locator('pre') resolved to 5 elements:\n    1) <pre>…</pre> aka locator('pre').filter({ hasText: '// Enter a code task prompt' })\n    2) <pre class=\"whitespace-pre-wrap\">No execution yet.</pre> aka getByText('No execution yet.').first()\n    3) <pre>…</pre> aka locator('pre').filter({ hasText: '{ \"mode\": \"code\", \"' })\n    4) <pre class=\"whitespace-pre-wrap\">No execution yet.</pre> aka getByText('No execution yet.').nth(1)\n    5) <pre class=\"max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-[11px] font-mono leading-5 text-cyan-50\">No workspace output yet.</pre> aka getByText('No workspace output yet.')\n\nCall log:\n\u001b[2m  - waiting for getByRole('heading', { name: 'WORKBENCH', exact: true }).first().locator('xpath=ancestor::main[1]').locator('pre')\u001b[22m\n"
+  },
+  "devcontainer": {
+    "created": null,
+    "log": null,
+    "error": "Error: workspace option count did not increase from 5"
+  },
+  "url": "http://127.0.0.1:3000/"
+}

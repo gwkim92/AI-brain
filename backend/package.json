@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
+    "postinstall": "node scripts/fix-node-pty-permissions.mjs",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -26,6 +27,7 @@
     "@fastify/cors": "^11.2.0",
     "@fastify/rate-limit": "^10.3.0",
     "fastify": "^5.7.4",
+    "node-pty": "^1.1.0",
     "pg": "^8.18.0",
     "zod": "^4.3.6"
   }

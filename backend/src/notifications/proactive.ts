@@ -7,7 +7,11 @@ export type NotificationEventType =
   | 'radar_new_item'
   | 'eval_gate_degradation'
   | 'idle_reminder'
-  | 'approval_required';
+  | 'approval_required'
+  | 'watcher_hit'
+  | 'briefing_ready'
+  | 'action_proposal_ready'
+  | 'session_stalled';
 
 export type SystemNotification = {
   id: string;
@@ -28,6 +32,8 @@ type EmitOptions = {
   dedupeWindowMs?: number;
 };
 
+type NotificationSeverity = SystemNotification['severity'];
+
 type LoggerLike = {
   info: (obj: Record<string, unknown>, msg?: string) => void;
   warn: (obj: Record<string, unknown>, msg?: string) => void;
@@ -37,6 +43,7 @@ type LoggerLike = {
 type NotificationChannelRuntime = {
   name: string;
   sent: number;
+  skipped: number;
   failed: number;
   lastSuccessAt: string | null;
   lastErrorAt: string | null;
@@ -53,6 +60,7 @@ export type NotificationRuntimeStatus = {
 };
 
 const DEFAULT_DEDUPE_WINDOW_MS = 1_200;
+const WATCHER_HIT_DEDUPE_WINDOW_MS = 60_000;
 
 export function createNotificationService(input?: {
   channels?: NotificationChannel[];
@@ -67,6 +75,7 @@ export function createNotificationService(input?: {
     channelRuntime.set(channel.name, {
       name: channel.name,
       sent: 0,
+      skipped: 0,
       failed: 0,
       lastSuccessAt: null,
       lastErrorAt: null,
@@ -130,9 +139,15 @@ export function createNotificationService(input?: {
       void Promise.all(
         channels.map(async (channel) => {
           const startedAt = Date.now();
+          const state = channelRuntime.get(channel.name);
+          if (channel.shouldSend && !channel.shouldSend(notification)) {
+            if (state) {
+              state.skipped += 1;
+            }
+            return;
+          }
           try {
             await channel.send(notification);
-            const state = channelRuntime.get(channel.name);
             if (state) {
               state.sent += 1;
               state.lastSuccessAt = new Date().toISOString();
@@ -149,7 +164,6 @@ export function createNotificationService(input?: {
             );
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            const state = channelRuntime.get(channel.name);
             if (state) {
               state.failed += 1;
               state.lastErrorAt = new Date().toISOString();
@@ -221,6 +235,79 @@ export function createNotificationService(input?: {
     }, { dedupeKey: `radar_new_item:${itemCount}` });
   }
 
+  function emitWatcherHit(
+    watcherId: string,
+    title: string,
+    summary: string,
+    dossierId?: string | null,
+    options?: { severity?: NotificationSeverity }
+  ): void {
+    emit({
+      id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: 'watcher_hit',
+      title: `Watcher Hit: ${title}`,
+      message: summary,
+      severity: options?.severity ?? 'info',
+      entityType: 'watcher',
+      entityId: watcherId,
+      actionUrl: dossierId ? `/?widget=dossier&focus=dossier&dossier=${dossierId}` : '/?widget=watchers&focus=watchers',
+      createdAt: new Date().toISOString()
+    }, { dedupeKey: `watcher_hit:${watcherId}:${summary}`, dedupeWindowMs: WATCHER_HIT_DEDUPE_WINDOW_MS });
+  }
+
+  function emitBriefingReady(
+    briefingId: string,
+    title: string,
+    sourceCount: number,
+    dossierId?: string | null,
+    options?: { severity?: NotificationSeverity; message?: string }
+  ): void {
+    emit({
+      id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: 'briefing_ready',
+      title: `Briefing Ready: ${title}`,
+      message: options?.message ?? `${sourceCount} source(s) compiled into a fresh briefing.`,
+      severity: options?.severity ?? 'info',
+      entityType: 'briefing',
+      entityId: briefingId,
+      actionUrl: dossierId ? `/?widget=dossier&focus=dossier&dossier=${dossierId}` : '/?widget=reports&focus=reports',
+      createdAt: new Date().toISOString()
+    }, { dedupeKey: `briefing_ready:${briefingId}` });
+  }
+
+  function emitActionProposalReady(
+    sessionId: string,
+    proposalId: string,
+    title: string,
+    options?: { severity?: NotificationSeverity; message?: string }
+  ): void {
+    emit({
+      id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: 'action_proposal_ready',
+      title: 'Action Proposal Ready',
+      message: options?.message ?? title,
+      severity: options?.severity ?? 'warning',
+      entityType: 'action_proposal',
+      entityId: proposalId,
+      actionUrl: `/?widget=action_center&focus=action_center&session=${sessionId}`,
+      createdAt: new Date().toISOString()
+    }, { dedupeKey: `action_proposal_ready:${proposalId}` });
+  }
+
+  function emitSessionStalled(sessionId: string, title: string): void {
+    emit({
+      id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: 'session_stalled',
+      title: 'Session Stalled',
+      message: `${title} is still waiting for progress.`,
+      severity: 'warning',
+      entityType: 'jarvis_session',
+      entityId: sessionId,
+      actionUrl: `/?widget=assistant&focus=assistant&session=${sessionId}`,
+      createdAt: new Date().toISOString()
+    }, { dedupeKey: `session_stalled:${sessionId}`, dedupeWindowMs: 60_000 });
+  }
+
   async function checkIdleReminder(store: JarvisStore, userId: string): Promise<void> {
     const missions = await store.listMissions({ userId, status: 'running', limit: 5 });
     if (missions.length > 0) {
@@ -253,6 +340,10 @@ export function createNotificationService(input?: {
     emitApprovalRequired,
     emitEvalGateDegradation,
     emitRadarNewItem,
+    emitWatcherHit,
+    emitBriefingReady,
+    emitActionProposalReady,
+    emitSessionStalled,
     checkIdleReminder,
     getRuntimeStatus
   };

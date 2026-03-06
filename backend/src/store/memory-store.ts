@@ -2,6 +2,7 @@ import { createMemoryAssistantContextRepository } from './memory/assistant-conte
 import { createMemoryAuthRepository } from './memory/auth-repository';
 import { createMemoryCouncilExecutionApprovalRepository } from './memory/council-execution-approval-repository';
 import { initializeMemoryStore } from './memory/initializer';
+import { createMemoryJarvisRepository } from './memory/jarvis-repository';
 import { createMemoryMemoryRepository } from './memory/memory-repository';
 import { createMemoryMissionRepository } from './memory/mission-repository';
 import { createMemoryRadarUpgradeRepository } from './memory/radar-upgrade-repository';
@@ -39,6 +40,11 @@ export function createMemoryStore(defaultUserId: string, defaultUserEmail = 'jar
     },
 
     ...createMemoryAuthRepository({
+      state,
+      nowIso
+    }),
+
+    ...createMemoryJarvisRepository({
       state,
       nowIso
     }),

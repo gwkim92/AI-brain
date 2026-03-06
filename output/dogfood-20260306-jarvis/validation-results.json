@@ -1,0 +1,22 @@
+[
+  {
+    "check": "watchers_form_guard",
+    "ok": true,
+    "evidence": "screenshots/validated/watchers-empty.png, screenshots/validated/watchers-filled.png"
+  },
+  {
+    "check": "notifications_state_transition",
+    "ok": true,
+    "evidence": "screenshots/validated/notifications-state.png"
+  },
+  {
+    "check": "dossier_archive_metadata",
+    "ok": true,
+    "evidence": "screenshots/validated/dossier-archive-meta.png"
+  },
+  {
+    "check": "rightpanel_approval_count",
+    "ok": true,
+    "evidence": "screenshots/validated/rightpanel-approval-count.png"
+  }
+]

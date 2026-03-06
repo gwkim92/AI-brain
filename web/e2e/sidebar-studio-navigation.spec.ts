@@ -99,6 +99,35 @@ async function installAppApiMocks(page: Page) {
     });
   });
 
+  await page.route(`${API_BASE}/api/v1/dossiers**`, async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/v1/dossiers") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(envelope({ dossiers: [] })),
+      });
+      return;
+    }
+
+    await route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({
+        request_id: "req-e2e",
+        error: { code: "NOT_FOUND", message: "dossier not found" },
+      }),
+    });
+  });
+
+  await page.route(`${API_BASE}/api/v1/skills**`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(envelope({ skills: [] })),
+    });
+  });
+
   await page.route(`${API_BASE}/api/v1/upgrades/proposals**`, async (route) => {
     await route.fulfill({
       status: 200,
@@ -470,10 +499,10 @@ test("sidebar mission/studio buttons open HUD widget workspaces without route na
   await installAppApiMocks(page);
 
   const navigationChecks: Array<{ ariaLabel: string; headings: string[] }> = [
-    { ariaLabel: "Mission Control", headings: ["TASK MANAGER"] },
-    { ariaLabel: "Code", headings: ["WORKBENCH"] },
-    { ariaLabel: "Research", headings: ["AGENT COUNCIL"] },
-    { ariaLabel: "Intelligence", headings: ["SYSTEM REPORTS"] },
+    { ariaLabel: "Mission Control", headings: ["ORCHESTRATION HUB", "AI ASSISTANT", "TASK MANAGER"] },
+    { ariaLabel: "Code", headings: ["AI ASSISTANT", "TASK MANAGER", "WORKBENCH"] },
+    { ariaLabel: "Research", headings: ["DOSSIER ARCHIVE", "WATCHERS", "AI ASSISTANT"] },
+    { ariaLabel: "Intelligence", headings: ["SYSTEM REPORTS", "ACTION CENTER", "NOTIFICATIONS"] },
   ];
 
   for (const item of navigationChecks) {
@@ -511,11 +540,11 @@ test("legacy mission/studio routes redirect to HUD widgets", async ({ page, cont
   await installAppApiMocks(page);
 
   const checks: Array<{ path: string; headings: string[] }> = [
-    { path: "/mission?mission=mid-1&step=sid-1", headings: ["TASK MANAGER"] },
-    { path: "/studio/code", headings: ["WORKBENCH"] },
-    { path: "/studio/research", headings: ["AGENT COUNCIL"] },
-    { path: "/studio/finance", headings: ["SYSTEM REPORTS"] },
-    { path: "/studio/news", headings: ["SYSTEM REPORTS"] },
+    { path: "/mission?mission=mid-1&step=sid-1", headings: ["ORCHESTRATION HUB", "AI ASSISTANT", "TASK MANAGER"] },
+    { path: "/studio/code", headings: ["AI ASSISTANT", "TASK MANAGER", "WORKBENCH"] },
+    { path: "/studio/research", headings: ["DOSSIER ARCHIVE", "WATCHERS", "AI ASSISTANT"] },
+    { path: "/studio/finance", headings: ["SYSTEM REPORTS", "ACTION CENTER", "NOTIFICATIONS"] },
+    { path: "/studio/news", headings: ["SYSTEM REPORTS", "ACTION CENTER", "NOTIFICATIONS"] },
   ];
 
   for (const item of checks) {
@@ -539,6 +568,141 @@ test("legacy mission/studio routes redirect to HUD widgets", async ({ page, cont
       await expect(page.getByRole("heading", { name: heading, exact: true }).first()).toBeVisible();
     }
   }
+});
+
+test("research preset keeps watcher create form clickable beside empty dossier state", async ({ page, context }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("jarvis.auth.role", "member");
+    window.localStorage.setItem("jarvis.auth.token", "e2e-token");
+  });
+
+  await context.addCookies([
+    {
+      name: "jarvis_auth_token",
+      value: "e2e-token",
+      domain: "127.0.0.1",
+      path: "/",
+      httpOnly: false,
+      secure: false,
+      sameSite: "Lax",
+    },
+  ]);
+
+  await installAppApiMocks(page);
+
+  const watchers: Array<{
+    id: string;
+    userId: string;
+    kind: string;
+    title: string;
+    query: string;
+    status: string;
+    lastRunAt: string | null;
+    createdAt: string;
+    updatedAt: string;
+  }> = [];
+
+  await page.route(`${API_BASE}/api/v1/watchers**`, async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    if (path === "/api/v1/watchers" && route.request().method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(envelope({ watchers })),
+      });
+      return;
+    }
+    if (path === "/api/v1/watchers" && route.request().method() === "POST") {
+      const body = route.request().postDataJSON() as { kind: string; title: string; query: string };
+      watchers.unshift({
+        id: "watcher-e2e-1",
+        userId: "00000000-0000-4000-8000-000000000000",
+        kind: body.kind,
+        title: body.title,
+        query: body.query,
+        status: "active",
+        lastRunAt: null,
+        createdAt: "2026-03-06T00:00:00.000Z",
+        updatedAt: "2026-03-06T00:00:00.000Z",
+      });
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify(envelope(watchers[0])),
+      });
+      return;
+    }
+    if (path === "/api/v1/watchers/watcher-e2e-1/run" && route.request().method() === "POST") {
+      watchers[0] = {
+        ...watchers[0],
+        lastRunAt: "2026-03-06T00:05:00.000Z",
+        updatedAt: "2026-03-06T00:05:00.000Z",
+      };
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          envelope({
+            watcher: watchers[0],
+            run: {
+              id: "watcher-run-e2e-1",
+              watcherId: watchers[0].id,
+              userId: watchers[0].userId,
+              status: "completed",
+              summary: "Synthetic watcher run completed",
+              briefingId: "briefing-e2e-1",
+              dossierId: "dossier-e2e-1",
+              error: null,
+              createdAt: "2026-03-06T00:05:00.000Z",
+              updatedAt: "2026-03-06T00:05:00.000Z",
+            },
+            briefing: {
+              id: "briefing-e2e-1",
+            },
+            dossier: {
+              id: "dossier-e2e-1",
+            },
+          })
+        ),
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.goto("/studio/research");
+  await expect(page).not.toHaveURL(/\/studio\//);
+  await expect(page.getByRole("heading", { name: "WATCHERS", exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "DOSSIERS", exact: true }).first()).toBeVisible();
+  await page
+    .locator("main")
+    .filter({ has: page.getByText("Grounded research archive") })
+    .first()
+    .getByRole("button", { name: "LIST", exact: true })
+    .click();
+
+  await page.getByPlaceholder("Watcher title").fill("Research lane watcher");
+  await page.getByPlaceholder("What should Jarvis monitor?").fill("world major news and war updates");
+  await page.getByRole("button", { name: "ADD", exact: true }).click();
+  await page
+    .locator("main")
+    .filter({ has: page.getByText("Proactive monitoring lanes") })
+    .first()
+    .locator("div.rounded.border")
+    .filter({ has: page.getByText("Research lane watcher") })
+    .first()
+    .getByRole("button", { name: "RUN", exact: true })
+    .click();
+  await page
+    .locator("main")
+    .filter({ has: page.getByText("Grounded research archive") })
+    .first()
+    .getByRole("button", { name: "LIST", exact: true })
+    .click();
+
+  await expect(page.getByText("Research lane watcher")).toBeVisible();
+  await expect(page.getByText("external_topic · world major news and war updates")).toBeVisible();
 });
 
 test("widget close remains closed and refresh does not reopen preset widgets", async ({ page, context }) => {
@@ -572,6 +736,348 @@ test("widget close remains closed and refresh does not reopen preset widgets", a
   await expect(page.getByRole("heading", { name: "WORKBENCH", exact: true })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "TASK MANAGER", exact: true }).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "AI ASSISTANT", exact: true }).first()).toBeVisible();
+});
+
+test("approving an action refreshes inbox pending actions", async ({ page, context }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("jarvis.auth.role", "member");
+    window.localStorage.setItem("jarvis.auth.token", "e2e-token");
+  });
+
+  await context.addCookies([
+    {
+      name: "jarvis_auth_token",
+      value: "e2e-token",
+      domain: "127.0.0.1",
+      path: "/",
+      httpOnly: false,
+      secure: false,
+      sameSite: "Lax",
+    },
+  ]);
+
+  await installAppApiMocks(page);
+
+  let pendingCount = 1;
+  const sessionRecord = {
+    id: "session-approval-1",
+    userId: "00000000-0000-4000-8000-000000000000",
+    title: "Approve process launch in Inbox Sync Runtime",
+    prompt: "node -p process.version",
+    source: "workspace_runtime",
+    intent: "code",
+    status: "needs_approval",
+    workspacePreset: "execution",
+    primaryTarget: "execution",
+    taskId: null,
+    missionId: null,
+    assistantContextId: null,
+    councilRunId: null,
+    executionRunId: null,
+    briefingId: null,
+    dossierId: null,
+    lastEventAt: "2026-03-06T00:01:00.000Z",
+    createdAt: "2026-03-06T00:01:00.000Z",
+    updatedAt: "2026-03-06T00:01:00.000Z",
+  };
+  const actionRecord = {
+    id: "action-approval-1",
+    userId: sessionRecord.userId,
+    sessionId: sessionRecord.id,
+    kind: "workspace_prepare",
+    title: sessionRecord.title,
+    summary: "A runtime or script process is expected to start.",
+    status: "pending",
+    payload: {
+      command: "node -p process.version",
+      cwd: "/workspace",
+      risk_level: "build",
+      policy_severity: "high",
+      impact_profile: "process_launch",
+      workspace_kind: "current",
+      policy_disposition: "approval_required",
+      policy_reason: "runtime or script launch on host or worktree runtimes requires approval",
+      impact: {
+        files: {
+          level: "possible",
+          summary: "Build artifacts, caches, or local outputs may be created.",
+          targets: ["process.version"],
+        },
+        network: {
+          level: "none",
+          summary: "No external network access expected unless the tool fetches dependencies implicitly.",
+          targets: [],
+        },
+        processes: {
+          level: "expected",
+          summary: "A runtime or script process is expected to start.",
+          targets: ["node -p", "process.version"],
+        },
+        notes: ["Targets the primary repository checkout on the host."],
+      },
+    },
+    decidedAt: null,
+    decidedBy: null,
+    createdAt: "2026-03-06T00:01:00.000Z",
+    updatedAt: "2026-03-06T00:01:00.000Z",
+  };
+
+  await page.route(`${API_BASE}/api/v1/jarvis/sessions**`, async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    if (path === "/api/v1/jarvis/sessions") {
+      const sessions = pendingCount > 0 ? [sessionRecord] : [];
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(envelope({ sessions })),
+      });
+      return;
+    }
+    if (path === `/api/v1/jarvis/sessions/${sessionRecord.id}`) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          envelope({
+            session: {
+              ...sessionRecord,
+              status: pendingCount > 0 ? "needs_approval" : "completed",
+            },
+            events: [],
+            actions: pendingCount > 0 ? [actionRecord] : [],
+            briefing: null,
+            dossier: null,
+          })
+        ),
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.route(`${API_BASE}/api/v1/jarvis/sessions/${sessionRecord.id}/actions/${actionRecord.id}/approve`, async (route) => {
+    pendingCount = 0;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        envelope({
+          session: { ...sessionRecord, status: "running" },
+          action: { ...actionRecord, status: "approved" },
+        })
+      ),
+    });
+  });
+
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "INBOX", exact: true }).first()).toBeVisible();
+  await expect(page.getByText("1 proposal(s) waiting.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Action Center", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "ACTION CENTER", exact: true }).first()).toBeVisible();
+  await page.getByRole("button", { name: "APPROVE", exact: true }).click();
+
+  await expect(page.getByText("0 proposal(s) waiting.")).toBeVisible();
+});
+
+test("approval-required workspace commands hide stale transcript until approval", async ({ page, context }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("jarvis.auth.role", "member");
+    window.localStorage.setItem("jarvis.auth.token", "e2e-token");
+  });
+
+  await context.addCookies([
+    {
+      name: "jarvis_auth_token",
+      value: "e2e-token",
+      domain: "127.0.0.1",
+      path: "/",
+      httpOnly: false,
+      secure: false,
+      sameSite: "Lax",
+    },
+  ]);
+
+  await installAppApiMocks(page);
+
+  const workspace = {
+    id: "workspace-e2e",
+    userId: "00000000-0000-4000-8000-000000000000",
+    name: "Approval Replay Runtime",
+    cwd: "/workspace",
+    kind: "current",
+    baseRef: null,
+    sourceWorkspaceId: null,
+    containerName: null,
+    containerImage: null,
+    containerSource: null,
+    containerImageManaged: false,
+    containerBuildContext: null,
+    containerDockerfile: null,
+    containerFeatures: [],
+    containerAppliedFeatures: [],
+    containerWorkdir: null,
+    containerConfigPath: null,
+    containerRunArgs: [],
+    containerWarnings: [],
+    status: "stopped",
+    approvalRequired: true,
+    createdAt: "2026-03-06T00:00:00.000Z",
+    updatedAt: "2026-03-06T00:00:00.000Z",
+    sessionId: "workspace-session-e2e",
+    activeCommand: null,
+    exitCode: 0,
+    lastError: null,
+  };
+
+  await page.route(`${API_BASE}/api/v1/workspaces`, async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(envelope({ workspaces: [workspace] })),
+    });
+  });
+
+  await page.route(`${API_BASE}/api/v1/workspaces/${workspace.id}/pty/read**`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        envelope({
+          workspace,
+          chunks: [
+            {
+              sequence: 1,
+              stream: "system",
+              text: "command started: printf PREVIOUS-OUTPUT",
+              createdAt: "2026-03-06T00:00:00.000Z",
+            },
+            {
+              sequence: 2,
+              stream: "stdout",
+              text: "PREVIOUS-OUTPUT\\n",
+              createdAt: "2026-03-06T00:00:00.100Z",
+            },
+            {
+              sequence: 3,
+              stream: "system",
+              text: "command exited with code 0",
+              createdAt: "2026-03-06T00:00:00.200Z",
+            },
+          ],
+          nextSequence: 4,
+        })
+      ),
+    });
+  });
+
+  await page.route(`${API_BASE}/api/v1/workspaces/${workspace.id}/pty/spawn`, async (route) => {
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify(
+        envelope({
+          workspace,
+          low_risk: false,
+          requires_approval: true,
+          policy: {
+            normalizedCommand: "node -p process.version",
+            riskLevel: "build",
+            impactProfile: "process_launch",
+            severity: "high",
+            disposition: "approval_required",
+            reason: "runtime or script launch on host or worktree runtimes requires approval",
+            impact: {
+              files: {
+                level: "possible",
+                summary: "Build artifacts, caches, or local outputs may be created.",
+                targets: ["process.version"],
+              },
+              network: {
+                level: "none",
+                summary: "No external network access expected unless the tool fetches dependencies implicitly.",
+                targets: [],
+              },
+              processes: {
+                level: "expected",
+                summary: "A runtime or script process is expected to start.",
+                targets: ["node -p", "process.version"],
+              },
+              notes: ["Targets the primary repository checkout on the host."],
+            },
+          },
+          session: {
+            id: "jarvis-session-e2e",
+            userId: workspace.userId,
+            title: "Approve process launch in Approval Replay Runtime",
+            prompt: "node -p process.version",
+            source: "workspace_runtime",
+            intent: "code",
+            status: "needs_approval",
+            workspacePreset: "execution",
+            primaryTarget: "execution",
+            taskId: null,
+            missionId: null,
+            assistantContextId: null,
+            councilRunId: null,
+            executionRunId: null,
+            briefingId: null,
+            dossierId: null,
+            lastEventAt: "2026-03-06T00:01:00.000Z",
+            createdAt: "2026-03-06T00:01:00.000Z",
+            updatedAt: "2026-03-06T00:01:00.000Z",
+          },
+          action: {
+            id: "action-e2e",
+            userId: workspace.userId,
+            sessionId: "jarvis-session-e2e",
+            kind: "workspace_prepare",
+            title: "Approve process launch in Approval Replay Runtime",
+            summary: "A runtime or script process is expected to start.",
+            status: "pending",
+            payload: {},
+            decidedAt: null,
+            decidedBy: null,
+            createdAt: "2026-03-06T00:01:00.000Z",
+            updatedAt: "2026-03-06T00:01:00.000Z",
+          },
+        })
+      ),
+    });
+  });
+
+  await page.goto("/studio/code");
+  await expect(page).not.toHaveURL(/\/studio\//);
+  await expect(page.getByRole("heading", { name: "WORKBENCH", exact: true }).first()).toBeVisible();
+  const dock = page.getByRole("region", { name: "Context Dock" });
+  await expect(dock).toBeVisible();
+  const runCommandButton = page.getByRole("button", { name: "RUN COMMAND" });
+  await runCommandButton.scrollIntoViewIfNeeded();
+  const [runButtonBox, dockBox] = await Promise.all([runCommandButton.boundingBox(), dock.boundingBox()]);
+  expect(runButtonBox).not.toBeNull();
+  expect(dockBox).not.toBeNull();
+  const runButtonBottom = (runButtonBox?.y ?? 0) + (runButtonBox?.height ?? 0);
+  expect(runButtonBottom < (dockBox?.y ?? Number.POSITIVE_INFINITY) - 4).toBe(true);
+  const workspaceRuntimePanel = page
+    .getByRole("button", { name: "RUN COMMAND" })
+    .locator('xpath=ancestor::div[contains(@class,"space-y-3")][1]');
+  const workspaceTranscript = workspaceRuntimePanel.locator("pre");
+
+  await expect(workspaceTranscript).toContainText("PREVIOUS-OUTPUT");
+
+  await page.getByPlaceholder("pwd | git status | rg TODO src").fill("node -p process.version");
+  await runCommandButton.click();
+
+  await expect(workspaceRuntimePanel).toContainText("Approval queued: Approve process launch in Approval Replay Runtime (build)");
+  await expect(workspaceTranscript).toContainText(
+    "Approval pending. Existing workspace output is hidden until this command is approved."
+  );
+  await expect(workspaceTranscript).not.toContainText("PREVIOUS-OUTPUT");
 });
 
 test("mission dock supports focus switch and recommendation controls", async ({ page, context }) => {

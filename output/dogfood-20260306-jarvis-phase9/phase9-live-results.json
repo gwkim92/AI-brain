@@ -1,0 +1,19 @@
+{
+  "settings": {
+    "hasSettings": true,
+    "hasNotificationChannels": false,
+    "hasTelegram": true,
+    "hasWebhook": true,
+    "hasInApp": true
+  },
+  "notificationNoise": {
+    "watcherName": "phase9-noise-1772793327692",
+    "duplicateWatcherHitCount": 2
+  },
+  "reloadRecovery": {
+    "councilWidgetVisibleAfterReload": true,
+    "runningCouncilVisibleAfterReload": true,
+    "sessionNotFoundAfterReload": false,
+    "internalErrorAfterReload": false
+  }
+}

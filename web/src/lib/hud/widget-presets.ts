@@ -4,7 +4,8 @@ export type HudWorkspacePreset =
   | "mission"
   | "studio_code"
   | "studio_research"
-  | "studio_intelligence";
+  | "studio_intelligence"
+  | "studio_council";
 
 type HudWorkspacePresetConfig = {
   primary: HudWidgetId;
@@ -14,24 +15,29 @@ type HudWorkspacePresetConfig = {
 
 export const HUD_WORKSPACE_PRESETS: Record<HudWorkspacePreset, HudWorkspacePresetConfig> = {
   mission: {
-    primary: "tasks",
-    widgets: ["tasks", "council", "workbench", "assistant"],
-    focus: "tasks",
+    primary: "assistant",
+    widgets: ["inbox", "assistant", "tasks", "action_center", "notifications", "skills"],
+    focus: "assistant",
   },
   studio_code: {
     primary: "workbench",
-    widgets: ["tasks", "workbench", "assistant"],
+    widgets: ["assistant", "tasks", "workbench", "skills", "action_center", "notifications"],
     focus: "workbench",
   },
   studio_research: {
-    primary: "council",
-    widgets: ["tasks", "council", "assistant"],
-    focus: "council",
+    primary: "watchers",
+    widgets: ["watchers", "dossier", "assistant", "notifications"],
+    focus: "watchers",
   },
   studio_intelligence: {
     primary: "reports",
-    widgets: ["tasks", "reports", "assistant"],
+    widgets: ["reports", "action_center", "notifications", "model_control", "skills", "tasks"],
     focus: "reports",
+  },
+  studio_council: {
+    primary: "council",
+    widgets: ["assistant", "council", "tasks", "notifications", "model_control"],
+    focus: "council",
   },
 };
 

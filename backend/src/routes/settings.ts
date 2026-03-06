@@ -1,8 +1,17 @@
 import type { FastifyInstance } from 'fastify';
+import { getJarvisWatcherWorkerStatus } from '../jarvis/watcher-worker';
 import { sendSuccess } from '../lib/http';
 import { getAiTraceCleanupWorkerStatus } from '../observability/ai-trace-worker';
 import { getProviderTokenRefreshWorkerStatus } from '../providers/token-refresh-worker';
+import { getWorkspaceRuntimeStatus } from '../workspaces/runtime-manager';
 import type { RouteContext } from './types';
+
+function parseChannelEventTypes(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
 
 export async function settingsRoutes(app: FastifyInstance, ctx: RouteContext) {
   const { store, env, providerRouter, resolveRequestProviderCredentials } = ctx;
@@ -15,6 +24,8 @@ export async function settingsRoutes(app: FastifyInstance, ctx: RouteContext) {
     const availabilityByProvider = new Map(scopedAvailability.map((item) => [item.provider, item] as const));
     const oauthWorker = getProviderTokenRefreshWorkerStatus();
     const aiTraceWorker = getAiTraceCleanupWorkerStatus();
+    const jarvisWatcherWorker = getJarvisWatcherWorkerStatus();
+    const workspaceRuntime = getWorkspaceRuntimeStatus();
     const notificationRuntime = ctx.notificationService?.getRuntimeStatus() ?? null;
 
     return sendSuccess(reply, request, 200, {
@@ -61,7 +72,30 @@ export async function settingsRoutes(app: FastifyInstance, ctx: RouteContext) {
         ...aiTraceWorker,
         history: aiTraceWorker.history.slice(0, 5)
       },
-      notification_runtime: notificationRuntime
+      jarvis_watcher_worker: {
+        ...jarvisWatcherWorker,
+        history: jarvisWatcherWorker.history.slice(0, 5)
+      },
+      workspace_runtime: workspaceRuntime,
+      jarvis_skills_enabled: env.JARVIS_SKILLS_ENABLED,
+      notification_runtime: notificationRuntime,
+      notification_policy: {
+        in_app: {
+          enabled: true,
+          min_severity: 'info',
+          event_types: ['*']
+        },
+        webhook: {
+          enabled: env.NOTIFICATION_WEBHOOK_ENABLED,
+          min_severity: env.NOTIFICATION_WEBHOOK_MIN_SEVERITY,
+          event_types: parseChannelEventTypes(env.NOTIFICATION_WEBHOOK_EVENT_TYPES)
+        },
+        telegram: {
+          enabled: env.NOTIFICATION_TELEGRAM_ENABLED,
+          min_severity: env.NOTIFICATION_TELEGRAM_MIN_SEVERITY,
+          event_types: parseChannelEventTypes(env.NOTIFICATION_TELEGRAM_EVENT_TYPES)
+        }
+      }
     });
   });
 }

@@ -4,6 +4,7 @@ import { createAssistantContextRepository } from './postgres/assistant-context-r
 import { createAuthRepository } from './postgres/auth-repository';
 import { createCouncilExecutionApprovalRepository } from './postgres/council-execution-approval-repository';
 import { initializePostgresStore } from './postgres/initializer';
+import { createJarvisRepository } from './postgres/jarvis-repository';
 import { createMemoryRepository } from './postgres/memory-repository';
 import { createMissionRepository } from './postgres/mission-repository';
 import { createRadarUpgradeRepository } from './postgres/radar-upgrade-repository';
@@ -48,6 +49,10 @@ export function createPostgresStore(options: PostgresStoreOptions): JarvisStore 
     },
 
     ...createAuthRepository({
+      pool
+    }),
+
+    ...createJarvisRepository({
       pool
     }),
 

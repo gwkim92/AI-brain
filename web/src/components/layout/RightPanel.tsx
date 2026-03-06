@@ -101,6 +101,8 @@ export function RightPanel() {
     const router = useRouter();
     const pathname = usePathname();
     const [pendingApprovals, setPendingApprovals] = useState<UpgradeProposalRecord[]>([]);
+    const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
+    const [pendingSessionApprovalCount, setPendingSessionApprovalCount] = useState(0);
     const [runningTasks, setRunningTasks] = useState<TaskRecord[]>([]);
     const [optimisticRunningTasks, setOptimisticRunningTasks] = useState<RunningTaskCard[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -125,6 +127,10 @@ export function RightPanel() {
 
     const applyOverviewSnapshot = useCallback(
         (snapshot: {
+            signals?: {
+                pending_approval_count?: number;
+                pending_session_approval_count?: number;
+            } | null;
             pending_approvals?: UpgradeProposalRecord[] | null;
             running_tasks?: TaskRecord[] | null;
         } | null | undefined) => {
@@ -135,6 +141,10 @@ export function RightPanel() {
                 ? snapshot.running_tasks
                 : [];
             setPendingApprovals(nextPendingApprovals);
+            setPendingApprovalCount(typeof snapshot?.signals?.pending_approval_count === "number" ? snapshot.signals.pending_approval_count : nextPendingApprovals.length);
+            setPendingSessionApprovalCount(
+                typeof snapshot?.signals?.pending_session_approval_count === "number" ? snapshot.signals.pending_session_approval_count : 0
+            );
             setRunningTasks(nextRunningTasks);
             setError(null);
             setIsLoading(false);
@@ -238,6 +248,10 @@ export function RightPanel() {
     const reasonHint = reasonMeta?.operatorHint ?? "Waiting for first scene resolution.";
     const reasonSeverityClass = getReasonSeverityClass(reasonMeta?.severity);
   const approvalCards = useMemo(() => pendingApprovals.slice(0, MAX_APPROVALS), [pendingApprovals]);
+  const extraSessionApprovals = useMemo(
+      () => Math.max(0, pendingApprovalCount - pendingApprovals.length),
+      [pendingApprovalCount, pendingApprovals.length]
+  );
   const activeTaskCards = useMemo(() => {
       const cards: RunningTaskCard[] = runningTasks.map((task) => ({
           id: task.id,
@@ -719,13 +733,21 @@ export function RightPanel() {
                         <span className="w-2 h-2 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.6)]"></span>
                         <h3 className="font-bold tracking-widest text-sm text-white/90">PENDING APPROVALS</h3>
                     </div>
-                    <span className="text-xs data-mono text-white/50">{isLoading ? "..." : `${pendingApprovals.length} Req`}</span>
+                    <span className="text-xs data-mono text-white/50">{isLoading ? "..." : `${pendingApprovalCount} Req`}</span>
                 </div>
 
                 <div className="space-y-3">
                     {isLoading && <div className="text-xs font-mono text-white/50 p-3 border border-white/10 rounded-md bg-white/5">Loading approvals...</div>}
-                    {!isLoading && approvalCards.length === 0 && (
+                    {!isLoading && approvalCards.length === 0 && extraSessionApprovals === 0 && (
                         <div className="text-xs font-mono text-white/50 p-3 border border-white/10 rounded-md bg-white/5">No pending approvals.</div>
+                    )}
+                    {!isLoading && extraSessionApprovals > 0 && (
+                        <Link
+                            href="/?widget=action_center"
+                            className="block p-3 rounded-md border border-amber-500/20 bg-amber-950/20 text-xs font-mono text-amber-100/85 hover:bg-amber-900/25"
+                        >
+                            {extraSessionApprovals} session approval{extraSessionApprovals === 1 ? "" : "s"} waiting in Action Center.
+                        </Link>
                     )}
                     {!isLoading &&
                         approvalCards.map((proposal) => {
@@ -749,6 +771,14 @@ export function RightPanel() {
                                 </Link>
                             );
                         })}
+                    {!isLoading && pendingSessionApprovalCount > 0 && approvalCards.length > 0 && (
+                        <Link
+                            href="/?widget=action_center"
+                            className="block p-3 rounded-md border border-white/10 bg-white/5 text-[10px] font-mono text-white/60 hover:bg-white/10"
+                        >
+                            Open Action Center for {pendingSessionApprovalCount} session approval{pendingSessionApprovalCount === 1 ? "" : "s"}.
+                        </Link>
+                    )}
                 </div>
             </div>
 

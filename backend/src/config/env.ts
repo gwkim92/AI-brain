@@ -58,6 +58,13 @@ const EnvSchema = z.object({
   AI_TRACE_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
   MODEL_RECOMMENDER_PROVIDER: z.enum(['openai']).default('openai'),
   MODEL_RECOMMENDER_MODEL: z.string().default('gpt-4.1-mini'),
+  JARVIS_SKILLS_ENABLED: EnvBooleanSchema.default(true),
+  JARVIS_WATCHER_WORKER_ENABLED: EnvBooleanSchema.default(true),
+  JARVIS_WATCHER_WORKER_POLL_MS: z.coerce.number().int().min(1000).default(120000),
+  JARVIS_WATCHER_WORKER_BATCH: z.coerce.number().int().min(1).max(200).default(20),
+  WORKSPACE_DEVCONTAINER_ENABLED: EnvBooleanSchema.default(true),
+  WORKSPACE_DEVCONTAINER_IMAGE: z.string().default('node:24-alpine'),
+  WORKSPACE_DEVCONTAINER_WORKDIR: z.string().default('/workspace'),
 
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_BASE_URL: z.string().url().default('https://api.openai.com/v1'),
@@ -105,6 +112,11 @@ const EnvSchema = z.object({
   NOTIFICATION_WEBHOOK_TIMEOUT_MS: z.coerce.number().int().min(250).max(30000).default(4000),
   NOTIFICATION_WEBHOOK_BEARER_TOKEN: z.string().optional(),
   NOTIFICATION_WEBHOOK_EVENT_TYPES: z.string().default('*'),
+  NOTIFICATION_WEBHOOK_MIN_SEVERITY: z.enum(['info', 'warning', 'critical']).default('critical'),
+  NOTIFICATION_TELEGRAM_ENABLED: EnvBooleanSchema.default(false),
+  NOTIFICATION_TELEGRAM_CHAT_ID: z.string().optional(),
+  NOTIFICATION_TELEGRAM_EVENT_TYPES: z.string().default('*'),
+  NOTIFICATION_TELEGRAM_MIN_SEVERITY: z.enum(['info', 'warning', 'critical']).default('critical'),
 
   MODEL_REGISTRY_REFRESH_MS: z.coerce.number().int().min(10000).default(300000),
   ROUTING_EXPLORATION_RATE: z.coerce.number().min(0).max(1).default(0.05)

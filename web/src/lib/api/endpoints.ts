@@ -30,6 +30,26 @@ import type {
   ExecutionRunRequest,
   ExecutionRunStreamEnvelope,
   HealthPayload,
+  JarvisRequest,
+  JarvisRequestResult,
+  JarvisSessionDetail,
+  JarvisSessionEventRecord,
+  JarvisSessionRecord,
+  SkillFindResult,
+  SkillId,
+  SkillRecord,
+  SkillResourceDetail,
+  SkillUseResult,
+  WorkspaceChunkRecord,
+  WorkspaceRecord,
+  WorkspaceSpawnResult,
+  BriefingRecord,
+  DossierDetail,
+  DossierRecord,
+  SystemNotification,
+  WatcherKind,
+  WatcherRecord,
+  WatcherRunRecord,
   MemorySnapshotData,
   MissionCreateRequest,
   MissionRecord,
@@ -141,8 +161,36 @@ export type DashboardOverviewEventsStream = {
   close: () => void;
 };
 
+export type NotificationsStream = {
+  close: () => void;
+};
+
 function createApiEventSource(pathname: string): EventSource {
   return new EventSource(buildApiUrl(pathname), { withCredentials: true });
+}
+
+export function streamNotifications(handlers: {
+  onOpen?: () => void;
+  onMessage?: (notification: SystemNotification) => void;
+  onError?: (error: unknown) => void;
+}): NotificationsStream {
+  const source = createApiEventSource("/api/v1/notifications/stream");
+
+  source.onopen = () => {
+    handlers.onOpen?.();
+  };
+
+  source.onmessage = (event) => {
+    handlers.onMessage?.(tryParseSseData((event as MessageEvent).data) as SystemNotification);
+  };
+
+  source.onerror = (error) => {
+    handlers.onError?.(error);
+  };
+
+  return {
+    close: () => source.close(),
+  };
 }
 
 export function streamDashboardOverviewEvents(
@@ -236,6 +284,246 @@ export async function testAdminProviderConnection(
 
 export async function listUserProviderCredentials(): Promise<{ providers: UserProviderCredentialRecord[] }> {
   return apiRequest<{ providers: UserProviderCredentialRecord[] }>("/api/v1/providers/credentials", { method: "GET" });
+}
+
+export async function createJarvisRequest(payload: JarvisRequest): Promise<JarvisRequestResult> {
+  return apiRequest<JarvisRequestResult>("/api/v1/jarvis/requests", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listJarvisSessions(query: { status?: JarvisSessionRecord["status"]; limit?: number } = {}): Promise<{ sessions: JarvisSessionRecord[] }> {
+  return apiRequest<{ sessions: JarvisSessionRecord[] }>("/api/v1/jarvis/sessions", {
+    method: "GET",
+    query,
+  });
+}
+
+export async function getJarvisSession(sessionId: string): Promise<JarvisSessionDetail> {
+  return apiRequest<JarvisSessionDetail>(`/api/v1/jarvis/sessions/${sessionId}`, { method: "GET" });
+}
+
+export async function listJarvisSessionEvents(
+  sessionId: string,
+  query: { since_sequence?: number; limit?: number } = {}
+): Promise<{ events: JarvisSessionEventRecord[] }> {
+  return apiRequest<{ events: JarvisSessionEventRecord[] }>(`/api/v1/jarvis/sessions/${sessionId}/events`, {
+    method: "GET",
+    query,
+  });
+}
+
+export async function approveJarvisAction(sessionId: string, actionId: string): Promise<{ session: JarvisSessionRecord; action: unknown }> {
+  return apiRequest<{ session: JarvisSessionRecord; action: unknown }>(
+    `/api/v1/jarvis/sessions/${sessionId}/actions/${actionId}/approve`,
+    { method: "POST" }
+  );
+}
+
+export async function rejectJarvisAction(sessionId: string, actionId: string): Promise<{ session: JarvisSessionRecord; action: unknown }> {
+  return apiRequest<{ session: JarvisSessionRecord; action: unknown }>(
+    `/api/v1/jarvis/sessions/${sessionId}/actions/${actionId}/reject`,
+    { method: "POST" }
+  );
+}
+
+export async function listWatchers(query: { kind?: WatcherKind; status?: WatcherRecord["status"]; limit?: number } = {}): Promise<{ watchers: WatcherRecord[] }> {
+  return apiRequest<{ watchers: WatcherRecord[] }>("/api/v1/watchers", {
+    method: "GET",
+    query,
+  });
+}
+
+export async function listSkills(): Promise<{ skills: SkillRecord[] }> {
+  return apiRequest<{ skills: SkillRecord[] }>("/api/v1/skills", {
+    method: "GET",
+  });
+}
+
+export async function findSkills(payload: { prompt: string; limit?: number }): Promise<SkillFindResult> {
+  return apiRequest<SkillFindResult>("/api/v1/skills/find", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getSkillResource(skillId: SkillId, resourceId: string): Promise<SkillResourceDetail> {
+  return apiRequest<SkillResourceDetail>(`/api/v1/skills/${skillId}/resources/${resourceId}`, {
+    method: "GET",
+  });
+}
+
+export async function useSkill(payload: {
+  skill_id: SkillId;
+  prompt: string;
+  execute?: boolean;
+  provider?: ProviderName | "auto";
+  strict_provider?: boolean;
+  model?: string;
+  feature_key?: ModelControlFeatureKey;
+  task_type?: string;
+}): Promise<SkillUseResult> {
+  return apiRequest<SkillUseResult>("/api/v1/skills/use", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listWorkspaces(): Promise<{ workspaces: WorkspaceRecord[] }> {
+  return apiRequest<{ workspaces: WorkspaceRecord[] }>("/api/v1/workspaces", {
+    method: "GET",
+  });
+}
+
+export async function createWorkspace(payload: {
+  name?: string;
+  cwd?: string;
+  kind?: "current" | "worktree" | "devcontainer";
+  base_ref?: string;
+  source_workspace_id?: string;
+  image?: string;
+  approval_required?: boolean;
+}): Promise<WorkspaceRecord> {
+  return apiRequest<WorkspaceRecord>("/api/v1/workspaces", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function spawnWorkspaceSession(
+  workspaceId: string,
+  payload: { command: string; shell?: string }
+): Promise<WorkspaceSpawnResult> {
+  return apiRequest<WorkspaceSpawnResult>(`/api/v1/workspaces/${workspaceId}/pty/spawn`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function writeWorkspaceSession(
+  workspaceId: string,
+  payload: { data: string }
+): Promise<{ workspace: WorkspaceRecord }> {
+  return apiRequest<{ workspace: WorkspaceRecord }>(`/api/v1/workspaces/${workspaceId}/pty/write`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function readWorkspaceSession(
+  workspaceId: string,
+  query: { after_sequence?: number; limit?: number } = {}
+): Promise<{ workspace: WorkspaceRecord; chunks: WorkspaceChunkRecord[]; nextSequence: number }> {
+  return apiRequest<{ workspace: WorkspaceRecord; chunks: WorkspaceChunkRecord[]; nextSequence: number }>(
+    `/api/v1/workspaces/${workspaceId}/pty/read`,
+    {
+      method: "GET",
+      query,
+    }
+  );
+}
+
+export async function shutdownWorkspace(workspaceId: string): Promise<{ workspace: WorkspaceRecord; shutdown: boolean }> {
+  return apiRequest<{ workspace: WorkspaceRecord; shutdown: boolean }>(`/api/v1/workspaces/${workspaceId}/shutdown`, {
+    method: "POST",
+  });
+}
+
+export async function deleteWorkspace(workspaceId: string): Promise<{ workspace: WorkspaceRecord; deleted: boolean }> {
+  return apiRequest<{ workspace: WorkspaceRecord; deleted: boolean }>(`/api/v1/workspaces/${workspaceId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function createWatcher(payload: {
+  kind: WatcherKind;
+  title: string;
+  query: string;
+  status?: WatcherRecord["status"];
+  config_json?: Record<string, unknown>;
+}): Promise<WatcherRecord> {
+  return apiRequest<WatcherRecord>("/api/v1/watchers", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateWatcher(
+  watcherId: string,
+  payload: Partial<{
+    kind: WatcherKind;
+    title: string;
+    query: string;
+    status: WatcherRecord["status"];
+    config_json: Record<string, unknown>;
+  }>
+): Promise<WatcherRecord> {
+  return apiRequest<WatcherRecord>(`/api/v1/watchers/${watcherId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteWatcher(watcherId: string): Promise<{ deleted: boolean; watcher_id: string }> {
+  return apiRequest<{ deleted: boolean; watcher_id: string }>(`/api/v1/watchers/${watcherId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function runWatcher(watcherId: string): Promise<{
+  watcher: WatcherRecord;
+  run: WatcherRunRecord | null;
+  briefing: BriefingRecord;
+  dossier: DossierRecord;
+}> {
+  return apiRequest<{
+    watcher: WatcherRecord;
+    run: WatcherRunRecord | null;
+    briefing: BriefingRecord;
+    dossier: DossierRecord;
+  }>(`/api/v1/watchers/${watcherId}/run`, {
+    method: "POST",
+  });
+}
+
+export async function listBriefings(query: { type?: BriefingRecord["type"]; status?: BriefingRecord["status"]; limit?: number } = {}): Promise<{ briefings: BriefingRecord[] }> {
+  return apiRequest<{ briefings: BriefingRecord[] }>("/api/v1/briefings", {
+    method: "GET",
+    query,
+  });
+}
+
+export async function generateBriefing(payload: { query: string; title?: string; type?: BriefingRecord["type"] }): Promise<BriefingRecord> {
+  return apiRequest<BriefingRecord>("/api/v1/briefings/generate", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listDossiers(query: { status?: DossierRecord["status"]; limit?: number } = {}): Promise<{ dossiers: DossierRecord[] }> {
+  return apiRequest<{ dossiers: DossierRecord[] }>("/api/v1/dossiers", {
+    method: "GET",
+    query,
+  });
+}
+
+export async function getDossier(dossierId: string): Promise<DossierDetail> {
+  return apiRequest<DossierDetail>(`/api/v1/dossiers/${dossierId}`, { method: "GET" });
+}
+
+export async function refreshDossier(dossierId: string, payload: { query?: string; title?: string } = {}): Promise<DossierRecord> {
+  return apiRequest<DossierRecord>(`/api/v1/dossiers/${dossierId}/refresh`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function exportDossier(dossierId: string): Promise<{ dossier_id: string; title: string; format: string; content: string }> {
+  return apiRequest<{ dossier_id: string; title: string; format: string; content: string }>(
+    `/api/v1/dossiers/${dossierId}/export`,
+    { method: "POST" }
+  );
 }
 
 export async function getUserProviderCredential(provider: ProviderName): Promise<UserProviderCredentialRecord> {

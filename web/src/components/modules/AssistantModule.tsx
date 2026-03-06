@@ -12,6 +12,7 @@ import {
     createAssistantContext,
     getAssistantContext,
     getAssistantContextGroundingEvidence,
+    getJarvisSession,
     listTasks,
     listAssistantContexts,
     listAssistantContextEvents,
@@ -53,6 +54,7 @@ import type {
     AssistantContextGroundingClaimRecord,
     AssistantContextGroundingSourceRecord,
     AssistantContextRecord,
+    JarvisSessionDetail,
     ProviderAttempt,
     ProviderAvailability,
     ProviderModelCatalogEntry,
@@ -492,6 +494,8 @@ export function AssistantModule() {
     const [modelOverride, setModelOverride] = useState("");
     const [parallelRuns, setParallelRuns] = useState(1);
     const [showDebugView, setShowDebugView] = useState(false);
+    const [jarvisSessionDetail, setJarvisSessionDetail] = useState<JarvisSessionDetail | null>(null);
+    const [jarvisSessionError, setJarvisSessionError] = useState<string | null>(null);
     const renderMode: AssistantRenderMode = showDebugView ? "debug_mode" : "user_mode";
     const [autoContexts, setAutoContexts] = useState<AutoMissionContext[]>([]);
     const [autoContextEvents, setAutoContextEvents] = useState<Record<string, AutoMissionEvent[]>>({});
@@ -602,6 +606,43 @@ export function AssistantModule() {
 
         void loadProviders();
     }, []);
+
+    useEffect(() => {
+        if (!activeSessionId) {
+            setJarvisSessionDetail(null);
+            setJarvisSessionError(null);
+            return;
+        }
+
+        let cancelled = false;
+        const loadSessionDetail = async () => {
+            try {
+                const detail = await getJarvisSession(activeSessionId);
+                if (!cancelled) {
+                    setJarvisSessionDetail(detail);
+                    setJarvisSessionError(null);
+                }
+            } catch (error) {
+                if (cancelled) return;
+                if (error instanceof ApiRequestError) {
+                    setJarvisSessionError(`${error.code}: ${error.message}`);
+                } else {
+                    setJarvisSessionError("failed to load jarvis session detail");
+                }
+                setJarvisSessionDetail(null);
+            }
+        };
+
+        void loadSessionDetail();
+        const intervalId = window.setInterval(() => {
+            void loadSessionDetail();
+        }, 8000);
+
+        return () => {
+            cancelled = true;
+            window.clearInterval(intervalId);
+        };
+    }, [activeSessionId]);
 
     const syncAutoContexts = useCallback(async () => {
         try {
@@ -2023,15 +2064,15 @@ export function AssistantModule() {
     }, [autoContexts]);
 
     const userStageTimeline = useMemo<{ context: AutoMissionContext; rows: AssistantStageTimelineRow[] } | null>(() => {
-        if (!stageTimelineEnabled) {
+        if (!stageTimelineEnabled || !activeSessionId) {
             return null;
         }
-        const activeSession = activeSessionId ? sessions.find((session) => session.id === activeSessionId) : null;
+        const activeSession = sessions.find((session) => session.id === activeSessionId);
+        if (!activeSession) {
+            return null;
+        }
         const candidateContexts = autoContexts
             .filter((context) => {
-                if (!activeSession) {
-                    return true;
-                }
                 return context.id === activeSession.id || (activeSession.taskId && context.taskId === activeSession.taskId);
             })
             .sort((left, right) => {
@@ -2917,6 +2958,73 @@ export function AssistantModule() {
                                     grounded answers enabled for dynamic factual prompts
                                 </span>
                             </div>
+                            {(jarvisSessionDetail || jarvisSessionError) && (
+                                <div className="px-4 pb-3">
+                                    <div className="rounded border border-cyan-500/20 bg-cyan-500/5 px-3 py-3">
+                                        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                                            <div className="rounded border border-white/10 bg-black/30 p-3">
+                                                <p className="text-[10px] font-mono tracking-widest text-cyan-300">GOAL</p>
+                                                {jarvisSessionError ? (
+                                                    <p className="mt-2 text-xs font-mono text-rose-300">{jarvisSessionError}</p>
+                                                ) : (
+                                                    <>
+                                                        <p className="mt-2 text-sm text-white/90">
+                                                            {jarvisSessionDetail?.session.title}
+                                                        </p>
+                                                        <p className="mt-1 text-[11px] text-white/60">
+                                                            {jarvisSessionDetail?.session.prompt}
+                                                        </p>
+                                                    </>
+                                                )}
+                                            </div>
+                                            <div className="rounded border border-white/10 bg-black/30 p-3">
+                                                <p className="text-[10px] font-mono tracking-widest text-cyan-300">PROGRESS</p>
+                                                <p className="mt-2 text-sm text-white/90">
+                                                    {jarvisSessionDetail?.session.status ?? "idle"} · {jarvisSessionDetail?.session.primaryTarget ?? "n/a"}
+                                                </p>
+                                                <div className="mt-2 space-y-1">
+                                                    {(jarvisSessionDetail?.events ?? []).slice(-3).map((event) => (
+                                                        <p key={event.id} className="text-[10px] font-mono text-white/55">
+                                                            {event.eventType}: {event.summary ?? "updated"}
+                                                        </p>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                            <div className="rounded border border-white/10 bg-black/30 p-3">
+                                                <p className="text-[10px] font-mono tracking-widest text-cyan-300">EVIDENCE</p>
+                                                {jarvisSessionDetail?.dossier ? (
+                                                    <>
+                                                        <p className="mt-2 text-sm text-white/90">{jarvisSessionDetail.dossier.title}</p>
+                                                        <p className="mt-1 text-[10px] font-mono text-white/55">
+                                                            sources: {Number(jarvisSessionDetail.briefing?.sourceCount ?? 0)} · conflicts: {Number(jarvisSessionDetail.dossier.conflictsJson?.count ?? 0)}
+                                                        </p>
+                                                    </>
+                                                ) : jarvisSessionDetail?.briefing ? (
+                                                    <p className="mt-2 text-sm text-white/80">{jarvisSessionDetail.briefing.summary}</p>
+                                                ) : (
+                                                    <p className="mt-2 text-xs text-white/45">No grounded dossier attached yet.</p>
+                                                )}
+                                            </div>
+                                            <div className="rounded border border-white/10 bg-black/30 p-3">
+                                                <p className="text-[10px] font-mono tracking-widest text-cyan-300">ACTION NEEDED</p>
+                                                {(jarvisSessionDetail?.actions ?? []).filter((item) => item.status === "pending").length > 0 ? (
+                                                    <div className="mt-2 space-y-1">
+                                                        {jarvisSessionDetail?.actions
+                                                            .filter((item) => item.status === "pending")
+                                                            .map((action) => (
+                                                                <p key={action.id} className="text-xs text-amber-200">
+                                                                    {action.title} - {action.summary}
+                                                                </p>
+                                                            ))}
+                                                    </div>
+                                                ) : (
+                                                    <p className="mt-2 text-xs text-white/45">No approval currently required.</p>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                             {stageTimelineEnabled && userStageTimeline && (
                                 <div className="px-4 pb-3">
                                     <div className="rounded border border-cyan-500/20 bg-cyan-500/5 px-3 py-2">

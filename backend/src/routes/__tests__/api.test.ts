@@ -1,10 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createHmac } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { createHmac, randomUUID } from 'node:crypto';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 
 import { createTelegramApprovalCallbackData, validateTelegramApprovalCallbackData } from '../../integrations/telegram/commands';
 import { buildServer } from '../../server';
 
 const ENV_SNAPSHOT = { ...process.env };
+const dockerAvailable = (() => {
+  try {
+    execFileSync('docker', ['version'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 describe('API routes', () => {
   const waitFor = async <T>(
@@ -266,14 +277,43 @@ describe('API routes', () => {
       }
     });
 
+    const workspace = await app.inject({
+      method: 'POST',
+      url: '/api/v1/workspaces',
+      headers: { 'x-user-id': userA, 'x-user-role': 'member' },
+      payload: {
+        name: 'Dashboard Approval Runtime',
+        cwd: '.'
+      }
+    });
+    expect(workspace.statusCode).toBe(201);
+    const workspaceId = (workspace.json() as { data: { id: string } }).data.id;
+
+    const queuedApproval = await app.inject({
+      method: 'POST',
+      url: `/api/v1/workspaces/${workspaceId}/pty/spawn`,
+      headers: { 'x-user-id': userA, 'x-user-role': 'member' },
+      payload: {
+        command: 'node -p process.version'
+      }
+    });
+    expect(queuedApproval.statusCode).toBe(202);
+
     const mine = await app.inject({
       method: 'GET',
       url: '/api/v1/dashboard/overview?task_limit=120&pending_approval_limit=30&running_task_limit=40',
       headers: { 'x-user-id': userA, 'x-user-role': 'member' }
     });
     expect(mine.statusCode).toBe(200);
-    const mineBody = mine.json() as { data: { signals: { task_count: number }; tasks: Array<{ userId: string }> } };
+    const mineBody = mine.json() as {
+      data: {
+        signals: { task_count: number; pending_approval_count: number; pending_session_approval_count: number };
+        tasks: Array<{ userId: string }>;
+      };
+    };
     expect(mineBody.data.signals.task_count).toBe(1);
+    expect(mineBody.data.signals.pending_approval_count).toBe(1);
+    expect(mineBody.data.signals.pending_session_approval_count).toBe(1);
     expect(new Set(mineBody.data.tasks.map((task) => task.userId))).toEqual(new Set([userA]));
 
     const allDenied = await app.inject({
@@ -1851,6 +1891,26 @@ describe('API routes', () => {
           auth_allow_signup: boolean;
           auth_token_configured: boolean;
         };
+        notification_runtime?: {
+          channels: Array<{
+            name: string;
+            skipped: number;
+          }>;
+        } | null;
+        notification_policy?: {
+          in_app: {
+            enabled: boolean;
+            min_severity: string;
+          };
+          webhook: {
+            enabled: boolean;
+            event_types: string[];
+          };
+          telegram: {
+            enabled: boolean;
+            event_types: string[];
+          };
+        };
       };
     };
 
@@ -1862,6 +1922,13 @@ describe('API routes', () => {
     expect(typeof body.data.policies.approval_max_age_hours).toBe('number');
     expect(typeof body.data.policies.auth_allow_signup).toBe('boolean');
     expect(typeof body.data.policies.auth_token_configured).toBe('boolean');
+    expect(body.data.notification_policy?.in_app.enabled).toBe(true);
+    expect(body.data.notification_policy?.in_app.min_severity).toBe('info');
+    expect(Array.isArray(body.data.notification_policy?.webhook.event_types)).toBe(true);
+    expect(Array.isArray(body.data.notification_policy?.telegram.event_types)).toBe(true);
+    expect(
+      (body.data.notification_runtime?.channels ?? []).every((channel) => typeof channel.skipped === 'number')
+    ).toBe(true);
 
     await app.close();
   });
@@ -3975,4 +4042,1049 @@ describe('API routes', () => {
 
     await app.close();
   });
+
+  it('creates grounded jarvis dossier session for factual prompts', async () => {
+    const { app } = await buildServer();
+    const userId = '22222222-2222-4222-8222-222222222222';
+    const rss = `
+      <rss><channel>
+        <item>
+          <title>Major diplomatic talks continue</title>
+          <link>https://example.com/world/diplomatic-talks</link>
+          <description>Leaders confirmed new talks and sanctions review.</description>
+          <pubDate>Thu, 05 Mar 2026 12:00:00 GMT</pubDate>
+        </item>
+        <item>
+          <title>Global markets react to security tensions</title>
+          <link>https://example.org/markets/security-tensions</link>
+          <description>Markets moved as investors priced in geopolitical risk.</description>
+          <pubDate>Thu, 05 Mar 2026 10:00:00 GMT</pubDate>
+        </item>
+      </channel></rss>
+    `;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        text: async () => rss
+      }))
+    );
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/jarvis/requests',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        prompt: '오늘 세계 주요 뉴스와 전쟁 관련 최신 동향을 근거와 함께 브리핑해줘',
+        client_session_id: '7a267773-fdc4-4f4d-b9b4-ebf09b0d2d74'
+      }
+    });
+
+    expect(create.statusCode).toBe(201);
+    const createBody = create.json() as {
+      data: {
+        session: { id: string; primaryTarget: string; dossierId: string | null; briefingId: string | null; status: string };
+        delegation: { primary_target: string; dossier_id?: string; briefing_id?: string };
+      };
+    };
+    expect(createBody.data.delegation.primary_target).toBe('dossier');
+    expect(createBody.data.session.status).toBe('completed');
+    expect(createBody.data.session.dossierId).toBeTruthy();
+    expect(createBody.data.session.briefingId).toBeTruthy();
+
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/v1/jarvis/sessions/${createBody.data.session.id}`,
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(detail.statusCode).toBe(200);
+    const detailBody = detail.json() as {
+      data: {
+        dossier: { id: string };
+        briefing: { id: string };
+        events: Array<{ eventType: string }>;
+      };
+    };
+    expect(detailBody.data.dossier.id).toBe(createBody.data.session.dossierId);
+    expect(detailBody.data.briefing.id).toBe(createBody.data.session.briefingId);
+    expect(detailBody.data.events.some((event) => event.eventType === 'dossier.compiled')).toBe(true);
+
+    await app.close();
+  });
+
+  it('creates approval-gated mission session and watcher runs', async () => {
+    const { app } = await buildServer();
+    const userId = '33333333-3333-4333-8333-333333333333';
+    const rss = `
+      <rss><channel>
+        <item>
+          <title>Repo health issue discovered</title>
+          <link>https://example.com/engineering/repo-health</link>
+          <description>CI instability and flaky test incidents are rising.</description>
+          <pubDate>Thu, 05 Mar 2026 09:00:00 GMT</pubDate>
+        </item>
+      </channel></rss>
+    `;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        text: async () => rss
+      }))
+    );
+
+    const sessionCreate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/jarvis/requests',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        prompt: '먼저 이슈를 조사하고 그 다음 계획을 세우고 마지막으로 승인 후 실행해줘',
+        client_session_id: '24dc58c4-4ad5-4b16-95b9-b37ade421b7f'
+      }
+    });
+    expect(sessionCreate.statusCode).toBe(201);
+    const sessionBody = sessionCreate.json() as {
+      data: {
+        session: { id: string; status: string; missionId: string | null };
+        delegation: { primary_target: string; action_proposal_id?: string };
+      };
+    };
+    expect(sessionBody.data.delegation.primary_target).toBe('mission');
+    expect(sessionBody.data.session.status).toBe('needs_approval');
+    expect(sessionBody.data.session.missionId).toBeTruthy();
+    expect(sessionBody.data.delegation.action_proposal_id).toBeTruthy();
+
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/v1/jarvis/sessions/${sessionBody.data.session.id}`,
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(detail.statusCode).toBe(200);
+    const detailBody = detail.json() as { data: { actions: Array<{ id: string; status: string }> } };
+    expect(detailBody.data.actions[0]?.status).toBe('pending');
+
+    const watcherCreate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/watchers',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        kind: 'repo',
+        title: 'Repo Health',
+        query: 'CI failures and flaky tests latest updates'
+      }
+    });
+    expect(watcherCreate.statusCode).toBe(201);
+    const watcherBody = watcherCreate.json() as { data: { id: string } };
+
+    const watcherRun = await app.inject({
+      method: 'POST',
+      url: `/api/v1/watchers/${watcherBody.data.id}/run`,
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(watcherRun.statusCode).toBe(200);
+    const watcherRunBody = watcherRun.json() as {
+      data: {
+        run: { status: string };
+        briefing: { id: string };
+        dossier: { id: string };
+      };
+    };
+    expect(watcherRunBody.data.run.status).toBe('completed');
+    expect(watcherRunBody.data.briefing.id).toBeTruthy();
+    expect(watcherRunBody.data.dossier.id).toBeTruthy();
+
+    await app.close();
+  });
+
+  it('routes explicit council jarvis requests into council runs', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      return new Response(
+        JSON.stringify({
+          output_text: 'Council synthesis output',
+          usage: {
+            input_tokens: 12,
+            output_tokens: 24
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            'content-type': 'application/json'
+          }
+        }
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app } = await buildServer();
+    const userId = '34343434-3434-4343-8434-343434343434';
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/jarvis/requests',
+      headers: {
+        'x-user-id': userId,
+        'x-trace-id': 'trace-jarvis-council-001'
+      },
+      payload: {
+        prompt: '이 문제를 Agent Council로 보내서 찬성, 반대, 리스크 관점으로 토론하고 최종 결론을 내줘',
+        client_session_id: '6f1964fb-6a9d-4751-b295-7b54bc2be0bb'
+      }
+    });
+
+    expect(create.statusCode).toBe(201);
+    const createBody = create.json() as {
+      data: {
+        session: {
+          id: string;
+          intent: string;
+          primaryTarget: string;
+          councilRunId: string | null;
+          taskId: string | null;
+          status: string;
+        };
+        delegation: {
+          intent: string;
+          primary_target: string;
+          council_run_id?: string;
+          task_id?: string;
+        };
+      };
+    };
+
+    expect(createBody.data.session.intent).toBe('council');
+    expect(createBody.data.session.primaryTarget).toBe('council');
+    expect(createBody.data.session.councilRunId).toBeTruthy();
+    expect(createBody.data.session.taskId).toBeTruthy();
+    expect(createBody.data.delegation.intent).toBe('council');
+    expect(createBody.data.delegation.primary_target).toBe('council');
+    expect(createBody.data.delegation.council_run_id).toBe(createBody.data.session.councilRunId);
+    expect(createBody.data.delegation.task_id).toBe(createBody.data.session.taskId);
+
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/v1/jarvis/sessions/${createBody.data.session.id}`,
+      headers: {
+        'x-user-id': userId
+      }
+    });
+
+    expect(detail.statusCode).toBe(200);
+    const detailBody = detail.json() as {
+      data: {
+        session: { councilRunId: string | null; status: string };
+        events: Array<{ eventType: string }>;
+      };
+    };
+    expect(detailBody.data.session.councilRunId).toBe(createBody.data.session.councilRunId);
+    expect(detailBody.data.events.some((event) => event.eventType === 'council.run.created')).toBe(true);
+
+    await app.close();
+  });
+
+  it('lists, finds, previews, and executes skills', async () => {
+    const { app } = await buildServer();
+    const userId = '44444444-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const rss = `
+      <rss><channel>
+        <item>
+          <title>Global headlines remain volatile</title>
+          <link>https://example.com/world/global-headlines</link>
+          <description>Diplomatic pressure and battlefield updates continued overnight.</description>
+          <pubDate>Thu, 05 Mar 2026 13:00:00 GMT</pubDate>
+        </item>
+        <item>
+          <title>Markets respond to war risk</title>
+          <link>https://example.org/markets/war-risk</link>
+          <description>Investors repriced energy and defense-linked assets.</description>
+          <pubDate>Thu, 05 Mar 2026 11:00:00 GMT</pubDate>
+        </item>
+      </channel></rss>
+    `;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        text: async () => rss
+      }))
+    );
+
+    const list = await app.inject({
+      method: 'GET',
+      url: '/api/v1/skills',
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(list.statusCode).toBe(200);
+    const listBody = list.json() as { data: { skills: Array<{ id: string }> } };
+    expect(listBody.data.skills.some((skill) => skill.id === 'deep_research')).toBe(true);
+
+    const find = await app.inject({
+      method: 'POST',
+      url: '/api/v1/skills/find',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        prompt: '오늘 세계 주요 뉴스와 전쟁 관련 동향을 브리핑해줘'
+      }
+    });
+    expect(find.statusCode).toBe(200);
+    const findBody = find.json() as { data: { recommended_skill_id: string | null; matches: Array<{ skill: { id: string } }> } };
+    expect(findBody.data.recommended_skill_id).toBe('news_briefing');
+    expect(findBody.data.matches.length).toBeGreaterThan(0);
+
+    const resource = await app.inject({
+      method: 'GET',
+      url: '/api/v1/skills/deep_research/resources/playbook',
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(resource.statusCode).toBe(200);
+    const resourceBody = resource.json() as { data: { resource: { title: string; content: string } } };
+    expect(resourceBody.data.resource.title).toBe('Research Playbook');
+    expect(resourceBody.data.resource.content).toContain('Deep Research Playbook');
+
+    const preview = await app.inject({
+      method: 'POST',
+      url: '/api/v1/skills/use',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        skill_id: 'deep_research',
+        prompt: '세계 뉴스와 전쟁 동향을 최신 근거로 정리해줘'
+      }
+    });
+    expect(preview.statusCode).toBe(200);
+    const previewBody = preview.json() as {
+      data: {
+        dry_run: boolean;
+        result_type: string;
+        preview: { suggestedWidgets: string[] };
+      };
+    };
+    expect(previewBody.data.dry_run).toBe(true);
+    expect(previewBody.data.result_type).toBe('preview');
+    expect(previewBody.data.preview.suggestedWidgets).toContain('dossier');
+
+    const executeResearch = await app.inject({
+      method: 'POST',
+      url: '/api/v1/skills/use',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        skill_id: 'deep_research',
+        prompt: '세계 뉴스와 전쟁 동향을 최신 근거로 정리해줘',
+        execute: true
+      }
+    });
+    expect(executeResearch.statusCode).toBe(200);
+    const executeResearchBody = executeResearch.json() as {
+      data: {
+        result_type: string;
+        session: { id: string; status: string; dossierId: string | null };
+      };
+    };
+    expect(executeResearchBody.data.result_type).toBe('jarvis_request');
+    expect(executeResearchBody.data.session.status).toBe('completed');
+    expect(executeResearchBody.data.session.dossierId).toBeTruthy();
+
+    const executeRecommendation = await app.inject({
+      method: 'POST',
+      url: '/api/v1/skills/use',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        skill_id: 'model_recommendation_reasoner',
+        prompt: '코드 수정 작업에 적합한 모델을 추천해줘',
+        execute: true,
+        feature_key: 'execution_code'
+      }
+    });
+    expect(executeRecommendation.statusCode).toBe(200);
+    const executeRecommendationBody = executeRecommendation.json() as {
+      data: {
+        result_type: string;
+        recommendation: { featureKey: string; recommendedProvider: string; recommendedModelId: string };
+      };
+    };
+    expect(executeRecommendationBody.data.result_type).toBe('model_recommendation');
+    expect(executeRecommendationBody.data.recommendation.featureKey).toBe('execution_code');
+    expect(executeRecommendationBody.data.recommendation.recommendedProvider).toBeTruthy();
+    expect(executeRecommendationBody.data.recommendation.recommendedModelId).toBeTruthy();
+
+    await app.close();
+  });
+
+  it('creates safe workspaces, runs low-risk commands, and routes high-risk member commands through approval proposals', async () => {
+    const { app } = await buildServer();
+    const userId = '55555555-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+    const createWorkspace = await app.inject({
+      method: 'POST',
+      url: '/api/v1/workspaces',
+      headers: {
+        'x-user-id': userId,
+        'x-user-role': 'member'
+      },
+      payload: {
+        name: 'E2E Runtime',
+        cwd: '.'
+      }
+    });
+    expect(createWorkspace.statusCode).toBe(201);
+    const workspaceId = (createWorkspace.json() as { data: { id: string } }).data.id;
+
+    const approvalQueued = await app.inject({
+      method: 'POST',
+      url: `/api/v1/workspaces/${workspaceId}/pty/spawn`,
+      headers: {
+        'x-user-id': userId,
+        'x-user-role': 'member'
+      },
+      payload: {
+        command: 'node -p process.version'
+      }
+    });
+    expect(approvalQueued.statusCode).toBe(202);
+    const approvalBody = approvalQueued.json() as {
+      data: {
+        low_risk: boolean;
+        requires_approval: boolean;
+        policy: {
+          riskLevel: string;
+          impactProfile: string;
+          severity: string;
+          impact: {
+            files: { level: string };
+            network: { level: string };
+            processes: { level: string };
+            notes: string[];
+          };
+        };
+        session: { id: string; status: string };
+        action: { id: string; kind: string; status: string; title: string; summary: string };
+      };
+    };
+    expect(approvalBody.data.low_risk).toBe(false);
+    expect(approvalBody.data.requires_approval).toBe(true);
+    expect(approvalBody.data.policy.riskLevel).toBe('build');
+    expect(approvalBody.data.policy.impactProfile).toBe('process_launch');
+    expect(approvalBody.data.policy.severity).toBe('high');
+    expect(approvalBody.data.policy.impact.files.level).toBe('possible');
+    expect(approvalBody.data.policy.impact.processes.level).toBe('expected');
+    expect(approvalBody.data.policy.impact.notes[0]).toContain('primary repository checkout');
+    expect(approvalBody.data.session.status).toBe('needs_approval');
+    expect(approvalBody.data.action.kind).toBe('workspace_prepare');
+    expect(approvalBody.data.action.status).toBe('pending');
+    expect(approvalBody.data.action.title).toBe('Approve process launch in E2E Runtime');
+    expect(approvalBody.data.action.summary).toContain('runtime or script process');
+    expect(approvalBody.data.action.summary).toContain('node -p');
+
+    const queuedSessionDetail = await app.inject({
+      method: 'GET',
+      url: `/api/v1/jarvis/sessions/${approvalBody.data.session.id}`,
+      headers: {
+        'x-user-id': userId,
+        'x-user-role': 'member'
+      }
+    });
+    expect(queuedSessionDetail.statusCode).toBe(200);
+    const queuedSessionBody = queuedSessionDetail.json() as {
+      data: {
+        actions: Array<{
+          id: string;
+          title: string;
+          summary: string;
+          payload: {
+            impact_profile?: string;
+            policy_severity?: string;
+            impact?: {
+              files?: { level?: string };
+              processes?: { level?: string };
+            };
+          };
+        }>;
+      };
+    };
+    expect(queuedSessionBody.data.actions[0]?.id).toBe(approvalBody.data.action.id);
+    expect(queuedSessionBody.data.actions[0]?.title).toBe('Approve process launch in E2E Runtime');
+    expect(queuedSessionBody.data.actions[0]?.summary).toContain('runtime or script process');
+    expect(queuedSessionBody.data.actions[0]?.payload.impact_profile).toBe('process_launch');
+    expect(queuedSessionBody.data.actions[0]?.payload.policy_severity).toBe('high');
+    expect(queuedSessionBody.data.actions[0]?.payload.impact?.files?.level).toBe('possible');
+    expect(queuedSessionBody.data.actions[0]?.payload.impact?.processes?.level).toBe('expected');
+
+    const approve = await app.inject({
+      method: 'POST',
+      url: `/api/v1/jarvis/sessions/${approvalBody.data.session.id}/actions/${approvalBody.data.action.id}/approve`,
+      headers: {
+        'x-user-id': userId,
+        'x-user-role': 'member'
+      }
+    });
+    expect(approve.statusCode).toBe(200);
+
+    const approvedRunSettled = await waitFor(
+      async () =>
+        app.inject({
+          method: 'GET',
+          url: `/api/v1/workspaces/${workspaceId}/pty/read?after_sequence=0&limit=50`,
+          headers: {
+            'x-user-id': userId,
+            'x-user-role': 'member'
+          }
+        }),
+      {
+        until: (response) => {
+          if (response.statusCode !== 200) return false;
+          const body = response.json() as { data: { workspace: { status: string }; chunks: Array<{ text: string }> } };
+          return body.data.workspace.status !== 'running' && body.data.chunks.some((chunk) => chunk.text.includes('command exited'));
+        }
+      }
+    );
+    expect(approvedRunSettled.statusCode).toBe(200);
+
+    const spawn = await app.inject({
+      method: 'POST',
+      url: `/api/v1/workspaces/${workspaceId}/pty/spawn`,
+      headers: {
+        'x-user-id': userId,
+        'x-user-role': 'member'
+      },
+      payload: {
+        command: 'pwd'
+      }
+    });
+    expect(spawn.statusCode).toBe(202);
+
+    const settledRead = await waitFor(
+      async () =>
+        app.inject({
+          method: 'GET',
+          url: `/api/v1/workspaces/${workspaceId}/pty/read?after_sequence=0&limit=50`,
+          headers: {
+            'x-user-id': userId,
+            'x-user-role': 'member'
+          }
+        }),
+      {
+        until: (response) => {
+          if (response.statusCode !== 200) return false;
+          const body = response.json() as { data: { workspace: { status: string }; chunks: Array<{ text: string }> } };
+          return body.data.workspace.status !== 'running' && body.data.chunks.some((chunk) => chunk.text.includes('/Users/woody/ai/brain'));
+        }
+      }
+    );
+    expect(settledRead.statusCode).toBe(200);
+    const readBody = settledRead.json() as {
+      data: {
+        workspace: { status: string };
+        chunks: Array<{ stream: string; text: string }>;
+      };
+    };
+    expect(readBody.data.workspace.status).toBe('stopped');
+    expect(readBody.data.chunks.some((chunk) => chunk.stream === 'stdout')).toBe(true);
+
+    const approvedSession = await waitFor(
+      async () =>
+        app.inject({
+          method: 'GET',
+          url: `/api/v1/jarvis/sessions/${approvalBody.data.session.id}`,
+          headers: {
+            'x-user-id': userId,
+            'x-user-role': 'member'
+          }
+        }),
+      {
+        until: (response) => {
+          if (response.statusCode !== 200) return false;
+          const body = response.json() as { data: { session: { status: string } } };
+          return body.data.session.status === 'completed';
+        }
+      }
+    );
+    expect(approvedSession.statusCode).toBe(200);
+
+    const shutdown = await app.inject({
+      method: 'POST',
+      url: `/api/v1/workspaces/${workspaceId}/shutdown`,
+      headers: {
+        'x-user-id': userId,
+        'x-user-role': 'member'
+      }
+    });
+    expect(shutdown.statusCode).toBe(200);
+
+    await app.close();
+  });
+
+  it('creates and deletes isolated git worktree workspaces for operators', async () => {
+    const { app } = await buildServer();
+    const userId = '66666666-cccc-4ccc-8ccc-cccccccccccc';
+
+    const createWorktree = await app.inject({
+      method: 'POST',
+      url: '/api/v1/workspaces',
+      headers: {
+        'x-user-id': userId,
+        'x-user-role': 'operator'
+      },
+      payload: {
+        kind: 'worktree',
+        name: 'Review Sandbox',
+        base_ref: 'HEAD'
+      }
+    });
+    expect(createWorktree.statusCode).toBe(201);
+    const worktreeBody = createWorktree.json() as {
+      data: {
+        id: string;
+        kind: string;
+        cwd: string;
+        baseRef: string | null;
+      };
+    };
+    expect(worktreeBody.data.kind).toBe('worktree');
+    expect(worktreeBody.data.baseRef).toBe('HEAD');
+    expect(worktreeBody.data.cwd).toContain('/.worktrees/');
+
+    const listWorkspaces = await app.inject({
+      method: 'GET',
+      url: '/api/v1/workspaces',
+      headers: {
+        'x-user-id': userId,
+        'x-user-role': 'operator'
+      }
+    });
+    expect(listWorkspaces.statusCode).toBe(200);
+    const listBody = listWorkspaces.json() as { data: { workspaces: Array<{ id: string; kind: string }> } };
+    expect(listBody.data.workspaces.some((workspace) => workspace.id === worktreeBody.data.id && workspace.kind === 'worktree')).toBe(
+      true
+    );
+
+    const deleteWorktree = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/workspaces/${worktreeBody.data.id}`,
+      headers: {
+        'x-user-id': userId,
+        'x-user-role': 'operator'
+      }
+    });
+    expect(deleteWorktree.statusCode).toBe(200);
+
+    await app.close();
+  });
+
+  it('blocks host process-control workspace commands for members without routing them through approval', async () => {
+    const { app } = await buildServer();
+    const userId = '67676767-cccc-4ccc-8ccc-cccccccccccc';
+
+    const createWorkspace = await app.inject({
+      method: 'POST',
+      url: '/api/v1/workspaces',
+      headers: {
+        'x-user-id': userId,
+        'x-user-role': 'member'
+      },
+      payload: {
+        name: 'Host Runtime',
+        cwd: '.'
+      }
+    });
+    expect(createWorkspace.statusCode).toBe(201);
+    const workspaceId = (createWorkspace.json() as { data: { id: string } }).data.id;
+
+    const spawn = await app.inject({
+      method: 'POST',
+      url: `/api/v1/workspaces/${workspaceId}/pty/spawn`,
+      headers: {
+        'x-user-id': userId,
+        'x-user-role': 'member'
+      },
+      payload: {
+        command: 'kill 123'
+      }
+    });
+
+    expect(spawn.statusCode).toBe(403);
+    const body = spawn.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('FORBIDDEN');
+    expect(body.error.message).toContain('requires operator or admin role');
+
+    await app.close();
+  });
+
+  it.skipIf(!dockerAvailable)('creates and deletes docker devcontainer workspaces for operators', async () => {
+    const { app } = await buildServer();
+    const userId = '77777777-dddd-4ddd-8ddd-dddddddddddd';
+
+    const createDevcontainer = await app.inject({
+      method: 'POST',
+      url: '/api/v1/workspaces',
+      headers: {
+        'x-user-id': userId,
+        'x-user-role': 'operator'
+      },
+      payload: {
+        kind: 'devcontainer',
+        name: 'Docker Sandbox',
+        image: 'brain-backend:latest'
+      }
+    });
+    expect(createDevcontainer.statusCode).toBe(201);
+    const devcontainerBody = createDevcontainer.json() as {
+      data: {
+        id: string;
+        kind: string;
+        containerName: string | null;
+        containerImage: string | null;
+      };
+    };
+    expect(devcontainerBody.data.kind).toBe('devcontainer');
+    expect(devcontainerBody.data.containerName).toBeTruthy();
+    expect(devcontainerBody.data.containerImage).toBe('brain-backend:latest');
+
+    const spawn = await app.inject({
+      method: 'POST',
+      url: `/api/v1/workspaces/${devcontainerBody.data.id}/pty/spawn`,
+      headers: {
+        'x-user-id': userId,
+        'x-user-role': 'operator'
+      },
+      payload: {
+        command: 'node -p process.version'
+      }
+    });
+    expect(spawn.statusCode).toBe(202);
+    const spawnBody = spawn.json() as {
+      data: {
+        requires_approval?: boolean;
+        policy: { riskLevel: string; disposition: string };
+      };
+    };
+    expect(spawnBody.data.requires_approval).not.toBe(true);
+    expect(spawnBody.data.policy.riskLevel).toBe('build');
+    expect(spawnBody.data.policy.disposition).toBe('auto_run');
+
+    const settledRead = await waitFor(
+      async () =>
+        app.inject({
+          method: 'GET',
+          url: `/api/v1/workspaces/${devcontainerBody.data.id}/pty/read?after_sequence=0&limit=50`,
+          headers: {
+            'x-user-id': userId,
+            'x-user-role': 'operator'
+          }
+        }),
+      {
+        until: (response) => {
+          if (response.statusCode !== 200) return false;
+          const body = response.json() as { data: { workspace: { status: string }; chunks: Array<{ text: string }> } };
+          return body.data.workspace.status !== 'running' && body.data.chunks.some((chunk) => chunk.text.includes('command exited'));
+        }
+      }
+    );
+    expect(settledRead.statusCode).toBe(200);
+
+    const deleteDevcontainer = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/workspaces/${devcontainerBody.data.id}`,
+      headers: {
+        'x-user-id': userId,
+        'x-user-role': 'operator'
+      }
+    });
+    expect(deleteDevcontainer.statusCode).toBe(200);
+
+    await app.close();
+  }, 30_000);
+
+  it.skipIf(!dockerAvailable)('builds dockerfile-based devcontainer runtimes from detected config', async () => {
+    const { app } = await buildServer();
+    const userId = '88888888-eeee-4eee-8eee-eeeeeeeeeeee';
+    const repoRoot = path.resolve(process.cwd(), '..');
+    const fixtureRelative = `.tmp-devcontainer-fixture-${randomUUID().slice(0, 8)}`;
+    const fixturePath = path.join(repoRoot, fixtureRelative);
+    mkdirSync(path.join(fixturePath, '.devcontainer'), { recursive: true });
+    writeFileSync(
+      path.join(fixturePath, '.devcontainer', 'Dockerfile'),
+      'FROM brain-backend:latest\nWORKDIR /workspace\nRUN node --version >/tmp/node-version\n'
+    );
+    writeFileSync(
+      path.join(fixturePath, '.devcontainer', 'devcontainer.json'),
+      JSON.stringify(
+        {
+          build: {
+            context: '..',
+            dockerfile: 'Dockerfile',
+            args: {
+              NODE_ENV: 'test'
+            }
+          },
+          workspaceFolder: '/workspace',
+          runArgs: ['--init'],
+          features: {
+            'ghcr.io/devcontainers/features/git:1': {}
+          }
+        },
+        null,
+        2
+      )
+    );
+
+    try {
+      const sourceWorkspace = await app.inject({
+        method: 'POST',
+        url: '/api/v1/workspaces',
+        headers: {
+          'x-user-id': userId,
+          'x-user-role': 'operator'
+        },
+        payload: {
+          name: 'Fixture Source',
+          cwd: fixtureRelative
+        }
+      });
+      expect(sourceWorkspace.statusCode).toBe(201);
+      const sourceWorkspaceId = (sourceWorkspace.json() as { data: { id: string } }).data.id;
+
+      const createDevcontainer = await app.inject({
+        method: 'POST',
+        url: '/api/v1/workspaces',
+        headers: {
+          'x-user-id': userId,
+          'x-user-role': 'operator'
+        },
+        payload: {
+          kind: 'devcontainer',
+          name: 'Built Sandbox',
+          source_workspace_id: sourceWorkspaceId
+        }
+      });
+
+      expect(createDevcontainer.statusCode).toBe(201);
+      const devcontainerBody = createDevcontainer.json() as {
+      data: {
+        id: string;
+        kind: string;
+        containerSource: string | null;
+        containerImage: string | null;
+        containerAppliedFeatures: string[];
+        containerDockerfile: string | null;
+        containerBuildContext: string | null;
+        containerFeatures: string[];
+        containerWarnings: string[];
+      };
+      };
+      expect(devcontainerBody.data.kind).toBe('devcontainer');
+      expect(devcontainerBody.data.containerSource).toBe('dockerfile');
+      expect(devcontainerBody.data.containerImage).toContain('jarvis-devcontainer-feature-');
+      expect(devcontainerBody.data.containerDockerfile).toContain('.devcontainer/Dockerfile');
+      expect(devcontainerBody.data.containerBuildContext).toBe(fixturePath);
+      expect(devcontainerBody.data.containerFeatures).toContain('ghcr.io/devcontainers/features/git:1');
+      expect(devcontainerBody.data.containerAppliedFeatures).toContain('ghcr.io/devcontainers/features/git:1');
+      expect(devcontainerBody.data.containerWarnings).not.toContain('devcontainer features detected but not applied in raw docker runtime');
+
+      const spawn = await app.inject({
+        method: 'POST',
+        url: `/api/v1/workspaces/${devcontainerBody.data.id}/pty/spawn`,
+        headers: {
+          'x-user-id': userId,
+          'x-user-role': 'operator'
+        },
+        payload: {
+          command: 'node -p process.version'
+        }
+      });
+      expect(spawn.statusCode).toBe(202);
+      const spawnBody = spawn.json() as {
+        data: {
+          policy: { riskLevel: string; disposition: string };
+        };
+      };
+      expect(spawnBody.data.policy.riskLevel).toBe('build');
+      expect(spawnBody.data.policy.disposition).toBe('auto_run');
+
+      const settledRead = await waitFor(
+        async () =>
+          app.inject({
+            method: 'GET',
+            url: `/api/v1/workspaces/${devcontainerBody.data.id}/pty/read?after_sequence=0&limit=50`,
+            headers: {
+              'x-user-id': userId,
+              'x-user-role': 'operator'
+            }
+          }),
+        {
+          until: (response) => {
+            if (response.statusCode !== 200) return false;
+            const body = response.json() as { data: { workspace: { status: string }; chunks: Array<{ text: string }> } };
+            return body.data.workspace.status !== 'running' && body.data.chunks.some((chunk) => chunk.text.includes('command exited'));
+          }
+        }
+      );
+      expect(settledRead.statusCode).toBe(200);
+
+      const deleteDevcontainer = await app.inject({
+        method: 'DELETE',
+        url: `/api/v1/workspaces/${devcontainerBody.data.id}`,
+        headers: {
+          'x-user-id': userId,
+          'x-user-role': 'operator'
+        }
+      });
+      expect(deleteDevcontainer.statusCode).toBe(200);
+
+      const deleteSource = await app.inject({
+        method: 'DELETE',
+        url: `/api/v1/workspaces/${sourceWorkspaceId}`,
+        headers: {
+          'x-user-id': userId,
+          'x-user-role': 'operator'
+        }
+      });
+      expect(deleteSource.statusCode).toBe(200);
+    } finally {
+      rmSync(fixturePath, { recursive: true, force: true });
+      await app.close();
+    }
+  }, 90_000);
+
+  it.skipIf(!dockerAvailable)('materializes allowlisted git feature for image-based devcontainers', async () => {
+    const { app } = await buildServer();
+    const userId = '99999999-ffff-4fff-8fff-ffffffffffff';
+    const repoRoot = path.resolve(process.cwd(), '..');
+    const fixtureRelative = `.tmp-devcontainer-image-fixture-${randomUUID().slice(0, 8)}`;
+    const fixturePath = path.join(repoRoot, fixtureRelative);
+    mkdirSync(path.join(fixturePath, '.devcontainer'), { recursive: true });
+    writeFileSync(
+      path.join(fixturePath, '.devcontainer', 'devcontainer.json'),
+      JSON.stringify(
+        {
+          image: 'node:24-alpine',
+          workspaceFolder: '/workspace',
+          features: {
+            'ghcr.io/devcontainers/features/git:1': {}
+          }
+        },
+        null,
+        2
+      )
+    );
+
+    try {
+      const sourceWorkspace = await app.inject({
+        method: 'POST',
+        url: '/api/v1/workspaces',
+        headers: {
+          'x-user-id': userId,
+          'x-user-role': 'operator'
+        },
+        payload: {
+          name: 'Image Feature Source',
+          cwd: fixtureRelative
+        }
+      });
+      expect(sourceWorkspace.statusCode).toBe(201);
+      const sourceWorkspaceId = (sourceWorkspace.json() as { data: { id: string } }).data.id;
+
+      const createDevcontainer = await app.inject({
+        method: 'POST',
+        url: '/api/v1/workspaces',
+        headers: {
+          'x-user-id': userId,
+          'x-user-role': 'operator'
+        },
+        payload: {
+          kind: 'devcontainer',
+          name: 'Feature Sandbox',
+          source_workspace_id: sourceWorkspaceId
+        }
+      });
+      expect(createDevcontainer.statusCode).toBe(201);
+      const devcontainerBody = createDevcontainer.json() as {
+        data: {
+          id: string;
+          containerSource: string | null;
+          containerAppliedFeatures: string[];
+          containerImage: string | null;
+        };
+      };
+      expect(devcontainerBody.data.containerSource).toBe('image');
+      expect(devcontainerBody.data.containerAppliedFeatures).toEqual(['ghcr.io/devcontainers/features/git:1']);
+      expect(devcontainerBody.data.containerImage).toContain('jarvis-devcontainer-feature-');
+
+      const spawn = await app.inject({
+        method: 'POST',
+        url: `/api/v1/workspaces/${devcontainerBody.data.id}/pty/spawn`,
+        headers: {
+          'x-user-id': userId,
+          'x-user-role': 'operator'
+        },
+        payload: {
+          command: 'git --version'
+        }
+      });
+      expect(spawn.statusCode).toBe(202);
+
+      const settledRead = await waitFor(
+        async () =>
+          app.inject({
+            method: 'GET',
+            url: `/api/v1/workspaces/${devcontainerBody.data.id}/pty/read?after_sequence=0&limit=50`,
+            headers: {
+              'x-user-id': userId,
+              'x-user-role': 'operator'
+            }
+          }),
+        {
+          until: (response) => {
+            if (response.statusCode !== 200) return false;
+            const body = response.json() as { data: { workspace: { status: string }; chunks: Array<{ text: string }> } };
+            return body.data.workspace.status !== 'running' && body.data.chunks.some((chunk) => chunk.text.toLowerCase().includes('git version'));
+          }
+        }
+      );
+      expect(settledRead.statusCode).toBe(200);
+
+      await app.inject({
+        method: 'DELETE',
+        url: `/api/v1/workspaces/${devcontainerBody.data.id}`,
+        headers: {
+          'x-user-id': userId,
+          'x-user-role': 'operator'
+        }
+      });
+      await app.inject({
+        method: 'DELETE',
+        url: `/api/v1/workspaces/${sourceWorkspaceId}`,
+        headers: {
+          'x-user-id': userId,
+          'x-user-role': 'operator'
+        }
+      });
+    } finally {
+      rmSync(fixturePath, { recursive: true, force: true });
+      await app.close();
+    }
+  }, 60_000);
 });

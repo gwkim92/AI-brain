@@ -41,6 +41,38 @@ export const AUTH_REPOSITORY_METHOD_KEYS = [
   'cleanupExpiredAiInvocationTraces'
 ] as const satisfies readonly (keyof JarvisStore)[];
 
+export const JARVIS_REPOSITORY_METHOD_KEYS = [
+  'createJarvisSession',
+  'listJarvisSessions',
+  'getJarvisSessionById',
+  'updateJarvisSession',
+  'appendJarvisSessionEvent',
+  'listJarvisSessionEvents',
+  'createActionProposal',
+  'listActionProposals',
+  'decideActionProposal',
+  'createWatcher',
+  'listWatchers',
+  'listActiveWatchers',
+  'getWatcherById',
+  'updateWatcher',
+  'deleteWatcher',
+  'createWatcherRun',
+  'listWatcherRuns',
+  'updateWatcherRun',
+  'createBriefing',
+  'listBriefings',
+  'getBriefingById',
+  'createDossier',
+  'listDossiers',
+  'getDossierById',
+  'updateDossier',
+  'replaceDossierSources',
+  'listDossierSources',
+  'replaceDossierClaims',
+  'listDossierClaims'
+] as const satisfies readonly (keyof JarvisStore)[];
+
 export const MISSION_REPOSITORY_METHOD_KEYS = [
   'createMission',
   'listMissions',
@@ -117,6 +149,7 @@ export const MEMORY_REPOSITORY_METHOD_KEYS = [
 export const STORE_METHOD_KEY_GROUPS = {
   core: CORE_STORE_METHOD_KEYS,
   auth: AUTH_REPOSITORY_METHOD_KEYS,
+  jarvis: JARVIS_REPOSITORY_METHOD_KEYS,
   mission: MISSION_REPOSITORY_METHOD_KEYS,
   assistant_context: ASSISTANT_CONTEXT_REPOSITORY_METHOD_KEYS,
   task: TASK_REPOSITORY_METHOD_KEYS,
@@ -165,6 +198,39 @@ export type AuthRepositoryContract = Pick<
   | 'listAiInvocationTraces'
   | 'getAiInvocationMetrics'
   | 'cleanupExpiredAiInvocationTraces'
+>;
+
+export type JarvisRepositoryContract = Pick<
+  JarvisStore,
+  | 'createJarvisSession'
+  | 'listJarvisSessions'
+  | 'getJarvisSessionById'
+  | 'updateJarvisSession'
+  | 'appendJarvisSessionEvent'
+  | 'listJarvisSessionEvents'
+  | 'createActionProposal'
+  | 'listActionProposals'
+  | 'decideActionProposal'
+  | 'createWatcher'
+  | 'listWatchers'
+  | 'listActiveWatchers'
+  | 'getWatcherById'
+  | 'updateWatcher'
+  | 'deleteWatcher'
+  | 'createWatcherRun'
+  | 'listWatcherRuns'
+  | 'updateWatcherRun'
+  | 'createBriefing'
+  | 'listBriefings'
+  | 'getBriefingById'
+  | 'createDossier'
+  | 'listDossiers'
+  | 'getDossierById'
+  | 'updateDossier'
+  | 'replaceDossierSources'
+  | 'listDossierSources'
+  | 'replaceDossierClaims'
+  | 'listDossierClaims'
 >;
 
 export type MissionRepositoryContract = Pick<

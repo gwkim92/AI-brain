@@ -160,6 +160,328 @@ export type AiInvocationMetrics = {
   providerDistribution: Array<{ provider: ProviderName; count: number }>;
   credentialSourceDistribution: Array<{ source: UserProviderCredentialSource; count: number }>;
 };
+export type JarvisSessionIntent = "general" | "code" | "research" | "finance" | "news" | "council";
+export type JarvisSessionStatus = "queued" | "running" | "blocked" | "needs_approval" | "completed" | "failed" | "stale";
+export type JarvisWorkspacePreset = "jarvis" | "research" | "execution" | "control";
+export type JarvisSessionPrimaryTarget = "assistant" | "mission" | "council" | "execution" | "briefing" | "dossier";
+export type JarvisSessionRecord = {
+  id: string;
+  userId: string;
+  title: string;
+  prompt: string;
+  source: string;
+  intent: JarvisSessionIntent;
+  status: JarvisSessionStatus;
+  workspacePreset: JarvisWorkspacePreset | null;
+  primaryTarget: JarvisSessionPrimaryTarget;
+  taskId: string | null;
+  missionId: string | null;
+  assistantContextId: string | null;
+  councilRunId: string | null;
+  executionRunId: string | null;
+  briefingId: string | null;
+  dossierId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lastEventAt: string;
+};
+export type JarvisSessionEventRecord = {
+  id: string;
+  sessionId: string;
+  sequence: number;
+  eventType: string;
+  status: JarvisSessionStatus | null;
+  summary: string | null;
+  data: Record<string, unknown>;
+  createdAt: string;
+};
+export type ActionProposalKind = "mission_execute" | "council_run" | "execution_run" | "workspace_prepare" | "notify" | "custom";
+export type ActionProposalStatus = "pending" | "approved" | "rejected";
+export type ActionProposalRecord = {
+  id: string;
+  userId: string;
+  sessionId: string;
+  kind: ActionProposalKind;
+  title: string;
+  summary: string;
+  status: ActionProposalStatus;
+  payload: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  decidedAt: string | null;
+  decidedBy: string | null;
+};
+export type JarvisRequest = {
+  prompt: string;
+  source?: string;
+  client_session_id?: string;
+  provider?: ProviderName | "auto";
+  strict_provider?: boolean;
+  model?: string;
+};
+export type JarvisRequestResult = {
+  session: JarvisSessionRecord;
+  delegation: {
+    intent: JarvisSessionIntent;
+    complexity: "simple" | "moderate" | "complex";
+    primary_target: JarvisSessionPrimaryTarget;
+    task_id?: string;
+    mission_id?: string;
+    assistant_context_id?: string;
+    council_run_id?: string;
+    briefing_id?: string;
+    dossier_id?: string;
+    action_proposal_id?: string;
+    planner_mode?: "llm" | "fallback";
+    error?: string;
+  };
+};
+export type JarvisSessionDetail = {
+  session: JarvisSessionRecord;
+  events: JarvisSessionEventRecord[];
+  actions: ActionProposalRecord[];
+  briefing: BriefingRecord | null;
+  dossier: DossierRecord | null;
+};
+export type WatcherKind =
+  | "external_topic"
+  | "company"
+  | "market"
+  | "war_region"
+  | "repo"
+  | "task_health"
+  | "mission_health"
+  | "approval_backlog";
+export type WatcherStatus = "active" | "paused" | "error";
+export type WatcherRunStatus = "running" | "completed" | "failed";
+export type WatcherRecord = {
+  id: string;
+  userId: string;
+  kind: WatcherKind;
+  status: WatcherStatus;
+  title: string;
+  query: string;
+  configJson: Record<string, unknown>;
+  lastRunAt: string | null;
+  lastHitAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+export type WatcherRunRecord = {
+  id: string;
+  watcherId: string;
+  userId: string;
+  status: WatcherRunStatus;
+  summary: string;
+  briefingId: string | null;
+  dossierId: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+export type BriefingType = "daily" | "on_change" | "on_demand";
+export type BriefingStatus = "draft" | "completed" | "failed";
+export type BriefingRecord = {
+  id: string;
+  userId: string;
+  watcherId: string | null;
+  sessionId: string | null;
+  type: BriefingType;
+  status: BriefingStatus;
+  title: string;
+  query: string;
+  summary: string;
+  answerMarkdown: string;
+  sourceCount: number;
+  qualityJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+export type DossierStatus = "draft" | "ready" | "failed";
+export type DossierRecord = {
+  id: string;
+  userId: string;
+  sessionId: string | null;
+  briefingId: string | null;
+  title: string;
+  query: string;
+  status: DossierStatus;
+  summary: string;
+  answerMarkdown: string;
+  qualityJson: Record<string, unknown>;
+  conflictsJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+export type DossierSourceRecord = {
+  id: string;
+  dossierId: string;
+  url: string;
+  title: string;
+  domain: string;
+  snippet: string;
+  publishedAt: string | null;
+  sourceOrder: number;
+  createdAt: string;
+};
+export type DossierClaimRecord = {
+  id: string;
+  dossierId: string;
+  claimText: string;
+  claimOrder: number;
+  sourceUrls: string[];
+  createdAt: string;
+};
+export type DossierDetail = {
+  dossier: DossierRecord;
+  sources: DossierSourceRecord[];
+  claims: DossierClaimRecord[];
+};
+export type SkillId =
+  | "deep_research"
+  | "news_briefing"
+  | "repo_health_review"
+  | "incident_triage"
+  | "model_recommendation_reasoner";
+export type SkillCategory = "research" | "operations" | "code" | "routing";
+export type SkillExecutionKind = "jarvis_request" | "model_recommendation";
+export type SkillResourceKind = "guide" | "checklist" | "template";
+export type SkillResourceRecord = {
+  id: string;
+  title: string;
+  kind: SkillResourceKind;
+  contentType: "text/markdown";
+  content: string;
+};
+export type SkillRecord = {
+  id: SkillId;
+  title: string;
+  summary: string;
+  category: SkillCategory;
+  executionKind: SkillExecutionKind;
+  defaultFeatureKey?: ModelControlFeatureKey;
+  suggestedWorkspacePreset: "jarvis" | "research" | "execution" | "control";
+  suggestedWidgets: string[];
+  keywords: string[];
+  resources: SkillResourceRecord[];
+};
+export type SkillMatchRecord = {
+  skill: SkillRecord;
+  score: number;
+  reason: string;
+  matchedTerms: string[];
+};
+export type SkillUsePreview = {
+  skillId: SkillId;
+  title: string;
+  summary: string;
+  executionKind: SkillExecutionKind;
+  normalizedPrompt: string;
+  suggestedPrompt: string;
+  suggestedTitle: string;
+  suggestedWorkspacePreset: "jarvis" | "research" | "execution" | "control";
+  suggestedWidgets: string[];
+  featureKey?: ModelControlFeatureKey;
+  taskType?: string;
+  providerOverride?: ProviderName | "auto";
+  modelOverride?: string;
+  rationale: string;
+};
+export type SkillFindResult = {
+  normalized_prompt: string;
+  recommended_skill_id: SkillId | null;
+  matches: SkillMatchRecord[];
+};
+export type SkillResourceDetail = {
+  skill_id: SkillId;
+  resource: SkillResourceRecord;
+};
+export type SkillUseResult = {
+  dry_run: boolean;
+  result_type: "preview" | "jarvis_request" | "model_recommendation";
+  preview: SkillUsePreview;
+  session?: JarvisSessionRecord;
+  delegation?: JarvisRequestResult["delegation"];
+  recommendation?: ModelRecommendationRun;
+};
+export type WorkspaceStatus = "ready" | "running" | "stopped" | "error";
+export type WorkspaceKind = "current" | "worktree" | "devcontainer";
+export type WorkspaceCommandRiskLevel = "read_only" | "write" | "build" | "network" | "process_control" | "unknown";
+export type WorkspaceCommandImpactProfile =
+  | "read_only"
+  | "file_mutation"
+  | "artifact_build"
+  | "dependency_install"
+  | "process_launch"
+  | "external_access"
+  | "external_sync"
+  | "process_control"
+  | "unclassified";
+export type WorkspaceCommandSeverity = "low" | "medium" | "high" | "critical";
+export type WorkspaceCommandImpactLevel = "none" | "possible" | "expected";
+export type WorkspaceCommandImpactDimension = {
+  level: WorkspaceCommandImpactLevel;
+  summary: string;
+  targets: string[];
+};
+export type WorkspaceCommandImpact = {
+  files: WorkspaceCommandImpactDimension;
+  network: WorkspaceCommandImpactDimension;
+  processes: WorkspaceCommandImpactDimension;
+  notes: string[];
+};
+export type WorkspaceCommandPolicy = {
+  normalizedCommand: string;
+  riskLevel: WorkspaceCommandRiskLevel;
+  impactProfile: WorkspaceCommandImpactProfile;
+  severity: WorkspaceCommandSeverity;
+  disposition: "auto_run" | "approval_required" | "role_required";
+  reason: string;
+  impact: WorkspaceCommandImpact;
+};
+export type WorkspaceRecord = {
+  id: string;
+  userId: string;
+  name: string;
+  cwd: string;
+  kind: WorkspaceKind;
+  baseRef: string | null;
+  sourceWorkspaceId: string | null;
+  containerName: string | null;
+  containerImage: string | null;
+  containerSource: "image" | "dockerfile" | null;
+  containerImageManaged: boolean;
+  containerBuildContext: string | null;
+  containerDockerfile: string | null;
+  containerFeatures: string[];
+  containerAppliedFeatures: string[];
+  containerWorkdir: string | null;
+  containerConfigPath: string | null;
+  containerRunArgs: string[];
+  containerWarnings: string[];
+  status: WorkspaceStatus;
+  approvalRequired: boolean;
+  createdAt: string;
+  updatedAt: string;
+  sessionId: string | null;
+  activeCommand: string | null;
+  exitCode: number | null;
+  lastError: string | null;
+};
+export type WorkspaceSpawnResult = {
+  workspace: WorkspaceRecord;
+  low_risk: boolean;
+  policy: WorkspaceCommandPolicy;
+  requires_approval?: boolean;
+  session?: JarvisSessionRecord;
+  action?: ActionProposalRecord;
+};
+export type WorkspaceChunkRecord = {
+  sequence: number;
+  stream: "stdout" | "stderr" | "system";
+  text: string;
+  createdAt: string;
+};
 export type ProviderConnectionTestResult = {
   provider: ProviderName;
   ok: boolean;
@@ -483,6 +805,19 @@ export type SettingsOverviewData = {
     history: Array<Record<string, unknown>>;
     lastRun?: Record<string, unknown> | null;
   };
+  jarvis_watcher_worker?: {
+    enabled: boolean;
+    inflight: boolean;
+    history: Array<Record<string, unknown>>;
+    lastRun?: Record<string, unknown> | null;
+  };
+  workspace_runtime?: {
+    total: number;
+    running: number;
+    worktrees?: number;
+    rootPath: string;
+  };
+  jarvis_skills_enabled?: boolean;
   notification_runtime?: {
     listeners: number;
     emitted: number;
@@ -492,12 +827,53 @@ export type SettingsOverviewData = {
     channels: Array<{
       name: string;
       sent: number;
+      skipped: number;
       failed: number;
       lastSuccessAt: string | null;
       lastErrorAt: string | null;
       lastError: string | null;
     }>;
   } | null;
+  notification_policy?: {
+    in_app: {
+      enabled: boolean;
+      min_severity: SystemNotification["severity"];
+      event_types: string[];
+    };
+    webhook: {
+      enabled: boolean;
+      min_severity: SystemNotification["severity"];
+      event_types: string[];
+    };
+    telegram: {
+      enabled: boolean;
+      min_severity: SystemNotification["severity"];
+      event_types: string[];
+    };
+  };
+};
+
+export type NotificationEventType =
+  | "mission_step_completed"
+  | "radar_new_item"
+  | "eval_gate_degradation"
+  | "idle_reminder"
+  | "approval_required"
+  | "watcher_hit"
+  | "briefing_ready"
+  | "action_proposal_ready"
+  | "session_stalled";
+
+export type SystemNotification = {
+  id: string;
+  type: NotificationEventType;
+  title: string;
+  message: string;
+  severity: "info" | "warning" | "critical";
+  actionUrl?: string;
+  entityType?: string;
+  entityId?: string;
+  createdAt: string;
 };
 
 export type DashboardOverviewData = {
@@ -508,6 +884,7 @@ export type DashboardOverviewData = {
     failed_count: number;
     blocked_count: number;
     pending_approval_count: number;
+    pending_session_approval_count: number;
   };
   tasks: TaskRecord[];
   running_tasks: TaskRecord[];

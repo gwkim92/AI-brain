@@ -5,7 +5,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { useHUD } from "@/components/providers/HUDProvider";
 import { canAccessWidget, useCurrentRole } from "@/lib/auth/role";
 import { ApiRequestError } from "@/lib/api/client";
-import { createAssistantContext, createTask, generateMissionPlan, runAssistantContextWithMeta } from "@/lib/api/endpoints";
+import { createJarvisRequest, runAssistantContextWithMeta } from "@/lib/api/endpoints";
+import { dispatchCouncilIntake } from "@/lib/hud/council-intake";
 import { buildMissionIntake, dispatchMissionIntake, dispatchMissionIntakeTaskLink } from "@/lib/hud/mission-intake";
 import { classifyPromptComplexity } from "@/lib/hud/complexity";
 import { resolveWorkspaceForIntent } from "@/lib/hud/intent-router";
@@ -83,6 +84,7 @@ export function useQuickCommand() {
       requestNonce,
     });
     const complexity = classifyPromptComplexity(trimmed);
+    const forceIntentWorkspace = intake.intent === "council";
     emitRuntimeEvent("quick_command_started", {
       intakeId: intake.id,
       sessionId: intake.id,
@@ -94,7 +96,9 @@ export function useQuickCommand() {
       singleFlightEnabled,
     });
 
-    const workspacePreset = complexity !== "simple"
+    const workspacePreset = forceIntentWorkspace
+      ? resolveWorkspaceForIntent(intake.intent)
+      : complexity !== "simple"
       ? ("mission" as const)
       : resolveWorkspaceForIntent(intake.intent);
 
@@ -104,13 +108,14 @@ export function useQuickCommand() {
     let focusWidgetForSession: string | null = null;
 
     const shouldShowApprovals = intake.widgetPlan.includes("approvals");
-    const desiredWidgetIds = complexity !== "simple"
+    const desiredWidgetIds = !forceIntentWorkspace && complexity !== "simple"
       ? ["assistant", "tasks", ...(canAccessWidget(role, primaryWidget) ? [primaryWidget] : []), ...(shouldShowApprovals ? ["approvals"] : [])]
       : Array.from(
           new Set([
             "assistant",
             "tasks",
             primaryWidget,
+            ...intake.widgetPlan,
             ...(shouldShowApprovals ? ["approvals"] : []),
           ])
         );
@@ -153,78 +158,70 @@ export function useQuickCommand() {
       let linkedTaskId: string | null = null;
       let linkedMissionId: string | null = null;
       let linkedContextId: string | null = null;
-      if (complexity !== "simple") {
-        const result = await generateMissionPlan({
-          prompt: trimmed,
-          auto_create: true,
-          complexity_hint: complexity,
-        });
+      const result = await createJarvisRequest({
+        prompt: trimmed,
+        source: "inbox_quick_command",
+        client_session_id: intake.id,
+      });
 
-        setTimeout(() => {
-          dispatchMissionIntake(intake);
-        }, 0);
-
-        if (result.mission) {
-          linkSessionTask(sessionId, undefined, result.mission.id);
-          linkedMissionId = result.mission.id;
-        }
-      } else {
-        const task = await createTask({
-          mode: intake.taskMode,
-          title: trimmed.slice(0, 180),
-          input: {
-            prompt: trimmed,
-            source: "inbox_quick_command",
-            intent: intake.intent,
-            widget_plan: intake.widgetPlan,
-            mission_intake_id: intake.id,
-          },
-        }, {
-          idempotencyKey: `quick-command:${intake.id}`,
-        });
+      if (result.delegation.task_id) {
         dispatchMissionIntakeTaskLink({
           id: intake.id,
-          taskId: task.id,
+          taskId: result.delegation.task_id,
         });
-        linkSessionTask(sessionId, task.id);
-        linkedTaskId = task.id;
+        linkedTaskId = result.delegation.task_id;
+      }
+      if (result.delegation.mission_id) {
+        linkedMissionId = result.delegation.mission_id;
+      }
+      if (result.delegation.assistant_context_id) {
+        linkedContextId = result.delegation.assistant_context_id;
+      }
 
+      if (linkedTaskId || linkedMissionId) {
+        linkSessionTask(sessionId, linkedTaskId ?? undefined, linkedMissionId ?? undefined);
+      }
+
+      if (result.delegation.primary_target === "assistant" && result.delegation.assistant_context_id) {
         try {
-          const context = await createAssistantContext({
-            client_context_id: intake.id,
-            source: "inbox_quick_command",
-            intent: intake.intent,
-            prompt: trimmed,
-            widget_plan: intake.widgetPlan,
-            task_id: task.id,
-          });
-          const runResult = await runAssistantContextWithMeta(context.id, {
+          const runResult = await runAssistantContextWithMeta(result.delegation.assistant_context_id, {
             task_type: intake.taskMode,
             client_run_nonce: requestNonce,
           });
           emitRuntimeEvent("assistant_stage_updated", {
-            contextId: context.id,
+            contextId: result.delegation.assistant_context_id,
             stage: runResult.meta.stage?.current ?? "accepted",
             stageSeq: runResult.meta.stage?.seq ?? null,
             accepted: runResult.meta.run?.accepted ?? runResult.meta.accepted ?? true,
             replayed: runResult.meta.run?.replayed ?? false,
             nonce: runResult.meta.run?.nonce ?? requestNonce,
           });
-          linkedContextId = context.id;
-
           setTimeout(() => {
             dispatchMissionIntake({
               ...intake,
               prestarted: true,
-              prestartedContextId: context.id,
+              prestartedContextId: result.delegation.assistant_context_id,
             });
           }, 0);
         } catch {
-          // Fallback: keep legacy client-side intake orchestration when prestart fails.
           setTimeout(() => {
             dispatchMissionIntake(intake);
           }, 0);
         }
+      } else if (result.delegation.primary_target === "mission" && linkedMissionId) {
+        setTimeout(() => {
+          dispatchMissionIntake(intake);
+        }, 0);
+      } else if (result.delegation.primary_target === "council" && result.delegation.council_run_id) {
+        setTimeout(() => {
+          dispatchCouncilIntake({
+            id: intake.id,
+            prompt: trimmed,
+            runId: result.delegation.council_run_id!,
+            taskId: linkedTaskId ?? undefined,
+            createdAt: new Date().toISOString(),
+          });
+        }, 0);
       }
 
       setCommandInput("");
