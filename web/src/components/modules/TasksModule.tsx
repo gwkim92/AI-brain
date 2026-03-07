@@ -54,6 +54,7 @@ export function TasksModule() {
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<TaskStatus | "all">("all");
   const [hasMore, setHasMore] = useState(true);
+  const [showRecentSessions, setShowRecentSessions] = useState(false);
 
   const staleSessionByTaskId = useMemo(() => {
     const map = new Map<string, boolean>();
@@ -193,6 +194,31 @@ export function TasksModule() {
     });
   }, [tasks, searchTerm]);
 
+  const sessionGroups = useMemo(() => {
+    const now = mergedJarvisSessions
+      .filter((session) => session.status === "running" || session.status === "queued")
+      .slice(0, 3);
+    const needsAttention = mergedJarvisSessions.filter((session) =>
+      session.status === "failed" ||
+      session.status === "blocked" ||
+      session.status === "needs_approval" ||
+      session.status === "stale"
+    );
+    const recent = mergedJarvisSessions
+      .filter((session) => !now.some((row) => row.id === session.id) && !needsAttention.some((row) => row.id === session.id))
+      .slice(0, showRecentSessions ? 8 : 3);
+    return { now, needsAttention, recent };
+  }, [mergedJarvisSessions, showRecentSessions]);
+
+  const sessionStatusTone = (status: JarvisSessionRecord["status"]) => {
+    if (status === "completed") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+    if (status === "failed") return "border-rose-500/30 bg-rose-500/10 text-rose-200";
+    if (status === "blocked" || status === "needs_approval" || status === "stale") {
+      return "border-amber-500/30 bg-amber-500/10 text-amber-200";
+    }
+    return "border-cyan-500/30 bg-cyan-500/10 text-cyan-200";
+  };
+
   return (
     <main className="w-full h-full bg-transparent text-white p-4 flex flex-col">
       <header className="mb-4 border-l-2 border-cyan-500 pl-3">
@@ -247,22 +273,43 @@ export function TasksModule() {
           <p className="text-[10px] font-mono tracking-widest text-cyan-300 uppercase">{t("tasks.actionQueue")}</p>
           <span className="text-[10px] font-mono text-white/45">{t("tasks.sessionsCount", { value: mergedJarvisSessions.length })}</span>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {mergedJarvisSessions.length === 0 && <span className="text-xs text-white/45">{t("tasks.noActiveSessions")}</span>}
-          {mergedJarvisSessions.map((session) => (
-            <span key={session.id} className={`rounded border px-2 py-1 text-[10px] font-mono ${
-              session.status === "completed"
-                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
-                : session.status === "failed"
-                  ? "border-rose-500/30 bg-rose-500/10 text-rose-200"
-                  : session.status === "needs_approval"
-                    ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
-                    : session.status === "stale"
-                      ? "border-amber-400/30 bg-amber-500/10 text-amber-100"
-                    : "border-cyan-500/30 bg-cyan-500/10 text-cyan-200"
-            }`}>
-              {session.primaryTarget} · {session.title}
-            </span>
+        <div className="space-y-3">
+          {([
+            ["tasks.queue.now", sessionGroups.now, "tasks.queue.emptyNow"],
+            ["tasks.queue.needsAttention", sessionGroups.needsAttention, "tasks.queue.emptyNeedsAttention"],
+            ["tasks.queue.recent", sessionGroups.recent, "tasks.queue.emptyRecent"],
+          ] as const).map(([labelKey, rows, emptyKey]) => (
+            <div key={labelKey}>
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-[10px] font-mono uppercase tracking-[0.22em] text-white/45">{t(labelKey)}</p>
+                {labelKey === "tasks.queue.recent" && mergedJarvisSessions.length > sessionGroups.now.length + sessionGroups.needsAttention.length + 3 ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowRecentSessions((prev) => !prev)}
+                    className="text-[10px] font-mono text-cyan-300 hover:text-cyan-100"
+                  >
+                    {showRecentSessions ? t("tasks.queue.hideRecent") : t("tasks.queue.viewRecent")}
+                  </button>
+                ) : null}
+              </div>
+              {rows.length === 0 ? (
+                <p className="text-xs text-white/40">{t(emptyKey)}</p>
+              ) : (
+                <div className="grid grid-cols-1 gap-2">
+                  {rows.map((session) => (
+                    <div key={session.id} className={`rounded-lg border px-3 py-2 ${sessionStatusTone(session.status)}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] font-mono uppercase tracking-[0.18em]">
+                          {session.primaryTarget} · {session.status}
+                        </span>
+                        <span className="text-[10px] font-mono text-white/60">{formatRelativeTime(session.updatedAt, t)}</span>
+                      </div>
+                      <p className="mt-1 truncate text-sm text-white/90">{session.title}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           ))}
         </div>
       </div>

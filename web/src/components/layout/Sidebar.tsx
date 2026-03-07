@@ -63,6 +63,7 @@ type NavItemDescriptor = {
   alert?: boolean;
   active?: boolean;
   onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  secondaryShortcut?: () => void;
   secondaryAction?: {
     icon: React.ReactNode;
     label: string;
@@ -333,6 +334,7 @@ function SidebarContent() {
           actionHint={t("sidebar.item.jarvis.hint")}
           active={activeWorkspacePreset === "mission"}
           onClick={(event) => handleWorkspaceClick("mission", event)}
+          secondaryShortcut={() => openWorkspacePreset("mission", "full")}
           secondaryAction={{
             icon: <LayoutGrid size={12} />,
             label: t("sidebar.tooltip.fullStack"),
@@ -349,6 +351,7 @@ function SidebarContent() {
           actionHint={t("sidebar.item.execution.hint")}
           active={activeWorkspacePreset === "studio_code"}
           onClick={(event) => handleWorkspaceClick("studio_code", event)}
+          secondaryShortcut={() => openWorkspacePreset("studio_code", "full")}
           secondaryAction={{
             icon: <LayoutGrid size={12} />,
             label: t("sidebar.tooltip.fullStack"),
@@ -365,6 +368,7 @@ function SidebarContent() {
           actionHint={t("sidebar.item.research.hint")}
           active={activeWorkspacePreset === "studio_research"}
           onClick={(event) => handleWorkspaceClick("studio_research", event)}
+          secondaryShortcut={() => openWorkspacePreset("studio_research", "full")}
           secondaryAction={{
             icon: <LayoutGrid size={12} />,
             label: t("sidebar.tooltip.fullStack"),
@@ -381,6 +385,7 @@ function SidebarContent() {
           actionHint={t("sidebar.item.control.hint")}
           active={activeWorkspacePreset === "studio_intelligence"}
           onClick={(event) => handleWorkspaceClick("studio_intelligence", event)}
+          secondaryShortcut={() => openWorkspacePreset("studio_intelligence", "full")}
           secondaryAction={{
             icon: <LayoutGrid size={12} />,
             label: t("sidebar.tooltip.fullStack"),
@@ -564,6 +569,7 @@ function NavItem({
   alert,
   active,
   onClick,
+  secondaryShortcut,
   secondaryAction,
   tone = "default",
   disabled = false,
@@ -598,6 +604,13 @@ function NavItem({
           disabled={disabled}
           aria-label={label}
           aria-describedby={hintId}
+          aria-keyshortcuts={secondaryAction ? "Enter Shift+Enter" : undefined}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && event.shiftKey && secondaryShortcut) {
+              event.preventDefault();
+              secondaryShortcut();
+            }
+          }}
           className={`${compact ? "w-10 h-10 justify-center" : "flex-1 min-h-[44px] px-2.5 py-2 justify-start gap-2.5"} flex items-center rounded-xl transition-all ${
             active
               ? "bg-cyan-500/10 text-cyan-300 border border-cyan-500/25 shadow-[0_0_18px_rgba(0,255,255,0.12)]"
@@ -632,7 +645,7 @@ function NavItem({
               })
             }
             onMouseLeave={() => onTooltipChange?.(null)}
-            className="h-[44px] w-10 shrink-0 rounded-xl border border-white/10 bg-white/[0.03] text-white/55 hover:text-cyan-200 hover:border-cyan-500/35 transition-colors flex items-center justify-center"
+            className="pointer-events-none h-[44px] w-10 shrink-0 rounded-xl border border-white/10 bg-white/[0.03] text-white/55 opacity-0 transition-all duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 hover:text-cyan-200 hover:border-cyan-500/35 flex items-center justify-center"
           >
             {secondaryAction.icon}
           </button>

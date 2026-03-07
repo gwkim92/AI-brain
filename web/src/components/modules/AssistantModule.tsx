@@ -514,6 +514,13 @@ function describePrimaryTarget(
     return t("assistant.target.default");
 }
 
+function inferHudSessionTarget(intent?: string | null): JarvisSessionDetail["session"]["primaryTarget"] {
+    if (intent === "council") return "council";
+    if (intent === "code") return "execution";
+    if (intent === "research" || intent === "news" || intent === "finance") return "dossier";
+    return "assistant";
+}
+
 function inferWatcherKindFromPrompt(prompt: string): WatcherKind {
     if (/(전쟁|war|분쟁|중동|우크라|가자|iran|israel|lebanon)/iu.test(prompt)) {
         return "war_region";
@@ -595,21 +602,49 @@ export function AssistantModule() {
         () => isFeatureEnabled("assistant.exactly_once_delivery", true),
         []
     );
+    const activeHudSession = useMemo(
+        () => (activeSessionId ? sessions.find((session) => session.id === activeSessionId) ?? null : null),
+        [activeSessionId, sessions]
+    );
+    const [jarvisSessionFallbackNotice, setJarvisSessionFallbackNotice] = useState<string | null>(null);
     const sessionLaunchCard = useMemo(() => {
         const session = jarvisSessionDetail?.session;
-        if (!session) return null;
-        const ageLabel = formatElapsedShort(session.createdAt, Date.now());
-        const isFresh = Date.now() - Date.parse(session.createdAt) <= SESSION_LAUNCH_HIGHLIGHT_MS;
+        const fallbackTarget = inferHudSessionTarget(activeHudSession?.intent);
+        const fallbackEntry = describeSessionEntry(t, activeHudSession?.intent === "code" ? "workspace_runtime" : "assistant_manual");
+        const fallbackLane = describePrimaryTarget(t, fallbackTarget);
+        const fallbackStatus = activeHudSession?.status === "background" ? "background" : "running";
+        const baseSession = session
+            ? {
+                  id: session.id.slice(0, 8),
+                  entry: describeSessionEntry(t, session.source),
+                  lane: describePrimaryTarget(t, session.primaryTarget),
+                  status: session.status,
+                  target: session.primaryTarget,
+                  createdAt: session.createdAt,
+              }
+            : activeHudSession
+              ? {
+                    id: activeHudSession.id.slice(0, 8),
+                    entry: fallbackEntry,
+                    lane: fallbackLane,
+                    status: fallbackStatus,
+                    target: fallbackTarget,
+                    createdAt: activeHudSession.createdAt,
+                }
+              : null;
+        if (!baseSession) return null;
+        const ageLabel = formatElapsedShort(baseSession.createdAt, Date.now());
+        const isFresh = Date.now() - Date.parse(baseSession.createdAt) <= SESSION_LAUNCH_HIGHLIGHT_MS;
         return {
-            id: session.id.slice(0, 8),
-            entry: describeSessionEntry(t, session.source),
-            lane: describePrimaryTarget(t, session.primaryTarget),
-            status: session.status,
-            target: session.primaryTarget,
+            id: baseSession.id,
+            entry: baseSession.entry,
+            lane: baseSession.lane,
+            status: baseSession.status,
+            target: baseSession.target,
             ageLabel,
             isFresh,
         };
-    }, [jarvisSessionDetail, t]);
+    }, [activeHudSession, jarvisSessionDetail, t]);
     const qualitySoftGateEnabled = useMemo(
         () => isFeatureEnabled("assistant.quality_soft_gate_v2", true),
         []
@@ -685,38 +720,70 @@ export function AssistantModule() {
         if (!activeSessionId) {
             setJarvisSessionDetail(null);
             setJarvisSessionError(null);
+            setJarvisSessionFallbackNotice(null);
             return;
         }
 
         let cancelled = false;
+        let timerId: number | null = null;
+        let notFoundAttempts = 0;
+
+        const schedule = (delayMs: number) => {
+            if (cancelled) return;
+            if (timerId !== null) {
+                window.clearTimeout(timerId);
+            }
+            timerId = window.setTimeout(() => {
+                void loadSessionDetail();
+            }, delayMs);
+        };
+
         const loadSessionDetail = async () => {
             try {
                 const detail = await getJarvisSession(activeSessionId);
                 if (!cancelled) {
                     setJarvisSessionDetail(detail);
                     setJarvisSessionError(null);
+                    setJarvisSessionFallbackNotice(null);
+                    notFoundAttempts = 0;
+                    schedule(8000);
                 }
             } catch (error) {
                 if (cancelled) return;
                 if (error instanceof ApiRequestError) {
+                    if (error.status === 404 && activeHudSession) {
+                        notFoundAttempts += 1;
+                        setJarvisSessionDetail(null);
+                        setJarvisSessionError(null);
+                        setJarvisSessionFallbackNotice(
+                            t(
+                                notFoundAttempts >= 3
+                                    ? "assistant.error.runtimeSessionUnavailable"
+                                    : "assistant.error.runtimeSessionPending"
+                            )
+                        );
+                        schedule(notFoundAttempts >= 3 ? 2500 : 600);
+                        return;
+                    }
                     setJarvisSessionError(`${error.code}: ${error.message}`);
                 } else {
                     setJarvisSessionError(t("assistant.error.loadSession"));
                 }
                 setJarvisSessionDetail(null);
+                setJarvisSessionFallbackNotice(null);
+                schedule(8000);
             }
         };
 
         void loadSessionDetail();
-        const intervalId = window.setInterval(() => {
-            void loadSessionDetail();
-        }, 8000);
 
         return () => {
             cancelled = true;
-            window.clearInterval(intervalId);
+            if (timerId !== null) {
+                window.clearTimeout(timerId);
+            }
         };
-    }, [activeSessionId, t]);
+    }, [activeHudSession, activeSessionId, t]);
 
     const syncAutoContexts = useCallback(async () => {
         try {
@@ -3132,7 +3199,7 @@ export function AssistantModule() {
                                     {t("assistant.groundedAnswers")}
                                 </span>
                             </div>
-                            {(jarvisSessionDetail || jarvisSessionError) && (
+                            {(sessionLaunchCard || jarvisSessionDetail || jarvisSessionError || jarvisSessionFallbackNotice) && (
                                 <div className="px-4 pb-3">
                                     <div className="rounded border border-cyan-500/20 bg-cyan-500/5 px-3 py-3">
                                         {sessionLaunchCard && (
@@ -3166,25 +3233,33 @@ export function AssistantModule() {
                                                 ) : (
                                                     <>
                                                         <p className="mt-2 text-sm text-white/90">
-                                                            {jarvisSessionDetail?.session.title}
+                                                            {jarvisSessionDetail?.session.title ?? activeHudSession?.prompt ?? t("common.loading")}
                                                         </p>
                                                         <p className="mt-1 text-[11px] text-white/60">
-                                                            {jarvisSessionDetail?.session.prompt}
+                                                            {jarvisSessionDetail?.session.prompt ?? activeHudSession?.prompt}
                                                         </p>
+                                                        {jarvisSessionFallbackNotice ? (
+                                                            <p className="mt-2 text-[11px] text-amber-200/85">{jarvisSessionFallbackNotice}</p>
+                                                        ) : null}
                                                     </>
                                                 )}
                                             </div>
                                             <div className="rounded border border-white/10 bg-black/30 p-3">
                                                 <p className="text-[10px] font-mono tracking-widest text-cyan-300">{t("assistant.progress")}</p>
                                                 <p className="mt-2 text-sm text-white/90">
-                                                    {jarvisSessionDetail?.session.status ?? "idle"} · {jarvisSessionDetail?.session.primaryTarget ?? "n/a"}
+                                                    {jarvisSessionDetail?.session.status ?? (activeHudSession ? "running" : "idle")} ·{" "}
+                                                    {jarvisSessionDetail?.session.primaryTarget ?? inferHudSessionTarget(activeHudSession?.intent)}
                                                 </p>
                                                 <div className="mt-2 space-y-1">
-                                                    {(jarvisSessionDetail?.events ?? []).slice(-3).map((event) => (
-                                                        <p key={event.id} className="text-[10px] font-mono text-white/55">
-                                                            {event.eventType}: {event.summary ?? t("assistant.event.updated")}
-                                                        </p>
-                                                    ))}
+                                                    {jarvisSessionDetail
+                                                        ? (jarvisSessionDetail.events ?? []).slice(-3).map((event) => (
+                                                              <p key={event.id} className="text-[10px] font-mono text-white/55">
+                                                                  {event.eventType}: {event.summary ?? t("assistant.event.updated")}
+                                                              </p>
+                                                          ))
+                                                        : activeHudSession && (
+                                                              <p className="text-[10px] font-mono text-white/55">{t("assistant.event.updated")}</p>
+                                                          )}
                                                 </div>
                                             </div>
                                             <div className="rounded border border-white/10 bg-black/30 p-3">

@@ -90,7 +90,7 @@ function parseRoundLogCount(summary: string): number | null {
 
 export function CouncilModule() {
   const { t } = useLocale();
-  const { startSession, linkSessionTask } = useHUD();
+  const { startSession, linkSessionTask, openWidgets, sessions } = useHUD();
   const defaultCards = React.useMemo<CouncilCard[]>(
     () =>
       ROLES.map((role) => ({
@@ -110,6 +110,7 @@ export function CouncilModule() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastTaskId, setLastTaskId] = useState<string | null>(null);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [idempotentReplay, setIdempotentReplay] = useState(false);
   const [providerAttempts, setProviderAttempts] = useState<ProviderAttempt[]>([]);
   const [lastExcludedProviders, setLastExcludedProviders] = useState<ProviderAttempt["provider"][]>([]);
@@ -130,6 +131,77 @@ export function CouncilModule() {
     [providerFailures]
   );
   const canRetryExcludingFailures = useMemo(() => retryExcludedProviders.length > 0 && retryExcludedProviders.length < 4, [retryExcludedProviders]);
+  const currentSession = useMemo(
+    () => (currentSessionId ? sessions.find((session) => session.id === currentSessionId) ?? null : null),
+    [currentSessionId, sessions]
+  );
+  const sessionAgeLabel = useMemo(() => {
+    if (!currentSession) return null;
+    const startedAtMs = Date.parse(currentSession.createdAt);
+    if (Number.isNaN(startedAtMs)) return null;
+    const elapsedSec = Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000));
+    if (elapsedSec < 60) return `${elapsedSec}s`;
+    const minutes = Math.floor(elapsedSec / 60);
+    const seconds = elapsedSec % 60;
+    return `${minutes}m ${seconds}s`;
+  }, [currentSession]);
+  const sessionIsFresh = useMemo(() => {
+    if (!currentSession) return false;
+    const startedAtMs = Date.parse(currentSession.createdAt);
+    if (Number.isNaN(startedAtMs)) return false;
+    return Date.now() - startedAtMs <= 2 * 60 * 1000;
+  }, [currentSession]);
+  const councilSessionStateLabel = useMemo(() => {
+    if (error) return t("council.session.state.failed");
+    if (running) return t("council.session.state.running");
+    if (rounds > 0) return t("council.session.state.ready");
+    return t("council.session.state.ready");
+  }, [error, rounds, running, t]);
+  const councilPhase = useMemo(() => {
+    if (!running && rounds === 0 && providerAttempts.length === 0 && !hasResult) {
+      return null;
+    }
+    if (!running && hasResult) {
+      return "synthesis" as const;
+    }
+    if (providerAttempts.length === 0 && rounds <= 1) {
+      return "framing" as const;
+    }
+    if (rounds <= 1) {
+      return "pros" as const;
+    }
+    if (providerFailures.length > 0 || rounds === 2) {
+      return "risks" as const;
+    }
+    return "synthesis" as const;
+  }, [hasResult, providerAttempts.length, providerFailures.length, rounds, running]);
+  const councilStages = useMemo(
+    () =>
+      (["framing", "pros", "risks", "synthesis"] as const).map((phase) => {
+        const index = ["framing", "pros", "risks", "synthesis"].indexOf(phase);
+        const currentIndex = councilPhase ? ["framing", "pros", "risks", "synthesis"].indexOf(councilPhase) : -1;
+        return {
+          phase,
+          complete: currentIndex > index || (!running && hasResult && phase === "synthesis"),
+          active: councilPhase === phase,
+        };
+      }),
+    [councilPhase, hasResult, running]
+  );
+  const councilLatestNote = useMemo(() => {
+    if (providerFailures.length > 0) {
+      const latestFailure = providerFailures[providerFailures.length - 1];
+      return latestFailure?.error ?? `${latestFailure?.provider ?? "provider"} ${latestFailure?.status ?? "update"}`;
+    }
+    return summary;
+  }, [providerFailures, summary]);
+  const councilNextStep = useMemo(() => {
+    if (councilPhase === "framing") return t("council.phase.next.framing");
+    if (councilPhase === "pros") return t("council.phase.next.pros");
+    if (councilPhase === "risks") return t("council.phase.next.risks");
+    if (councilPhase === "synthesis") return t("council.phase.next.synthesis");
+    return null;
+  }, [councilPhase, t]);
   const providerOptions = useMemo(
     () => [
       { provider: "auto" as const, enabled: true, label: t("common.auto").toUpperCase() },
@@ -376,6 +448,7 @@ export function CouncilModule() {
       intent: "council",
       restoreMode: "full",
     });
+    setCurrentSessionId(clientSessionId);
     dispatchJarvisDataRefresh({ scope: "sessions", source: "council" });
 
     try {
@@ -395,6 +468,9 @@ export function CouncilModule() {
       }
 
       const result = await startCouncilRun(payload);
+      if (result.session?.id) {
+        setCurrentSessionId(result.session.id);
+      }
       setIdempotentReplay(result.idempotent_replay === true);
 
       if (result.task_id) {
@@ -440,7 +516,65 @@ export function CouncilModule() {
           <p className="text-sm font-mono text-white/50 tracking-wide mt-1">{t("council.subtitle").toUpperCase()}</p>
         </header>
 
+        {currentSession && (
+          <div className="mb-4 rounded-lg border border-cyan-500/25 bg-cyan-500/10 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-full border border-cyan-400/35 bg-cyan-400/10 px-2 py-1 text-[10px] font-mono uppercase tracking-[0.24em] text-cyan-200">
+                    {sessionIsFresh ? t("assistant.newSession") : t("assistant.activeSession")}
+                  </span>
+                  <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[10px] font-mono uppercase tracking-[0.24em] text-white/65">
+                    {currentSession.status === "active" ? t("common.active") : t("common.background")}
+                  </span>
+                  <span className="rounded-full border border-purple-500/25 bg-purple-500/10 px-2 py-1 text-[10px] font-mono uppercase tracking-[0.24em] text-purple-200">
+                    {councilSessionStateLabel}
+                  </span>
+                </div>
+                <p className="mt-2 text-sm font-mono text-cyan-100">{truncate(currentSession.prompt, 180)}</p>
+                <p className="mt-1 text-[11px] font-mono text-white/60">
+                  {t("common.session")} {currentSession.id.slice(0, 8)}
+                  {sessionAgeLabel ? ` · ${t("assistant.startedAgo", { value: sessionAgeLabel })}` : ""}
+                  {lastTaskId ? ` · ${t("council.session.taskLinked", { value: lastTaskId.slice(0, 8) })}` : ""}
+                </p>
+                <p className="mt-2 text-[11px] text-white/55">{t("council.session.mirrored")}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => openWidgets(["council", "tasks"], { focus: "tasks", replace: false, activate: "focus_only" })}
+                  className="rounded border border-white/15 px-3 py-1.5 text-[11px] font-mono text-white/80 transition hover:border-cyan-400/40 hover:text-cyan-200"
+                >
+                  {t("common.openTaskManager")}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="bg-black/40 border border-white/10 p-4 rounded-lg mb-6 font-mono text-sm border-l-4 border-l-cyan-500">
+          {councilPhase && (
+            <div className="mb-4 rounded border border-white/10 bg-black/35 p-3">
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                {councilStages.map((stage) => (
+                  <div
+                    key={stage.phase}
+                    className={`rounded border px-3 py-2 text-[10px] uppercase tracking-[0.24em] ${
+                      stage.active
+                        ? "border-cyan-400/40 bg-cyan-500/10 text-cyan-100"
+                        : stage.complete
+                          ? "border-emerald-400/35 bg-emerald-500/10 text-emerald-100"
+                          : "border-white/10 bg-black/20 text-white/40"
+                    }`}
+                  >
+                    {t(`council.phase.${stage.phase}` as const)}
+                  </div>
+                ))}
+              </div>
+              <p className="mt-3 text-[11px] text-white/65">{t("council.phase.latestNote")}: {councilLatestNote}</p>
+              {councilNextStep ? <p className="mt-1 text-[11px] text-cyan-200/80">{councilNextStep}</p> : null}
+            </div>
+          )}
           <span className="text-white/40 mr-2">{t("council.query")}:</span>
           <textarea
             className="mt-3 w-full bg-black/50 border border-white/10 rounded p-3 text-sm text-white resize-none h-24"

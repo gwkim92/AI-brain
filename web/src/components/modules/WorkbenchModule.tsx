@@ -95,7 +95,7 @@ function mergeWorkspaceRows(current: WorkspaceRecord[], nextRow: WorkspaceRecord
 
 export function WorkbenchModule() {
   const { t } = useLocale();
-  const { openWidgets, startSession, linkSessionTask } = useHUD();
+  const { openWidgets, startSession, linkSessionTask, sessions } = useHUD();
   const streamRef = useRef<ReturnType<typeof streamExecutionRunEvents> | null>(null);
   const runtimePollRef = useRef<number | null>(null);
   const workspaceCursorRef = useRef(0);
@@ -132,6 +132,8 @@ export function WorkbenchModule() {
   const [workspaceBaseRef, setWorkspaceBaseRef] = useState("HEAD");
   const [workspaceImage, setWorkspaceImage] = useState("brain-backend:latest");
   const [workspacePolicy, setWorkspacePolicy] = useState<WorkspaceCommandPolicy | null>(null);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [currentSessionKind, setCurrentSessionKind] = useState<"execution" | "runtime" | null>(null);
 
   const syncWorkspaceCursor = useCallback((nextSequence: number) => {
     workspaceCursorRef.current = nextSequence;
@@ -319,6 +321,34 @@ export function WorkbenchModule() {
     }
     return providerModelCatalog.find((row) => row.provider === selectedProvider)?.models ?? [];
   }, [providerModelCatalog, selectedProvider]);
+  const currentSession = useMemo(
+    () => (currentSessionId ? sessions.find((session) => session.id === currentSessionId) ?? null : null),
+    [currentSessionId, sessions]
+  );
+  const sessionAgeLabel = useMemo(() => {
+    if (!currentSession) return null;
+    const startedAtMs = Date.parse(currentSession.createdAt);
+    if (Number.isNaN(startedAtMs)) return null;
+    const elapsedSec = Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000));
+    if (elapsedSec < 60) return `${elapsedSec}s`;
+    const minutes = Math.floor(elapsedSec / 60);
+    const seconds = elapsedSec % 60;
+    return `${minutes}m ${seconds}s`;
+  }, [currentSession]);
+  const sessionIsFresh = useMemo(() => {
+    if (!currentSession) return false;
+    const startedAtMs = Date.parse(currentSession.createdAt);
+    if (Number.isNaN(startedAtMs)) return false;
+    return Date.now() - startedAtMs <= 2 * 60 * 1000;
+  }, [currentSession]);
+  const workbenchSessionStateLabel = useMemo(() => {
+    if (currentSessionKind === "runtime" && workspacePolicy?.disposition === "approval_required") {
+      return t("workbench.session.state.awaitingApproval");
+    }
+    if (status === "running" || workspaceBusy) return t("workbench.session.state.running");
+    if (status === "error" || workspaceError) return t("workbench.session.state.failed");
+    return t("workbench.session.state.completed");
+  }, [currentSessionKind, status, t, workspaceBusy, workspaceError, workspacePolicy?.disposition]);
 
   const runExecution = async () => {
     const trimmed = prompt.trim();
@@ -337,6 +367,8 @@ export function WorkbenchModule() {
       workspacePreset: "studio_code",
       restoreMode: "full",
     });
+    setCurrentSessionId(clientSessionId);
+    setCurrentSessionKind("execution");
     dispatchJarvisDataRefresh({ scope: "sessions", source: "workbench" });
 
     try {
@@ -357,6 +389,9 @@ export function WorkbenchModule() {
       }
 
       const run = await startExecutionRun(payload);
+      if (run.session?.id) {
+        setCurrentSessionId(run.session.id);
+      }
       setIdempotentReplay(run.idempotent_replay === true);
 
       setRunId(run.id);
@@ -569,12 +604,17 @@ export function WorkbenchModule() {
         workspacePreset: "studio_code",
         restoreMode: "full",
       });
+      setCurrentSessionId(clientSessionId);
+      setCurrentSessionKind("runtime");
       dispatchJarvisDataRefresh({ scope: "sessions", source: "workbench" });
       const result = await spawnWorkspaceSession(workspaceId, {
         command: trimmed,
         client_session_id: clientSessionId,
         shell: workspaceShell.trim() || undefined,
       });
+      if (result.session?.id) {
+        setCurrentSessionId(result.session.id);
+      }
       setWorkspacePolicy(result.policy);
       setWorkspaces((current) => mergeWorkspaceRows(current, result.workspace));
       setSelectedWorkspaceId(result.workspace.id);
@@ -707,6 +747,57 @@ export function WorkbenchModule() {
           <Cpu size={14} /> {t("workbench.tab.compute").toUpperCase()}
         </button>
       </div>
+
+      {currentSession && (
+        <div className="mb-4 rounded-lg border border-cyan-500/25 bg-cyan-500/10 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-full border border-cyan-400/35 bg-cyan-400/10 px-2 py-1 text-[10px] font-mono uppercase tracking-[0.24em] text-cyan-200">
+                  {sessionIsFresh ? t("assistant.newSession") : t("assistant.activeSession")}
+                </span>
+                <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[10px] font-mono uppercase tracking-[0.24em] text-white/65">
+                  {currentSession.status === "active" ? t("common.active") : t("common.background")}
+                </span>
+                <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-mono uppercase tracking-[0.24em] text-emerald-200">
+                  {currentSessionKind === "runtime" ? t("workbench.session.kind.runtime") : t("workbench.session.kind.execution")}
+                </span>
+                <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[10px] font-mono uppercase tracking-[0.24em] text-white/65">
+                  {workbenchSessionStateLabel}
+                </span>
+              </div>
+              <p className="mt-2 text-sm font-mono text-cyan-100">
+                {truncate(currentSessionKind === "runtime" ? workspaceCommand.trim() || currentSession.prompt : currentSession.prompt, 180)}
+              </p>
+              <p className="mt-1 text-[11px] font-mono text-white/60">
+                {t("common.session")} {currentSession.id.slice(0, 8)}
+                {sessionAgeLabel ? ` · ${t("assistant.startedAgo", { value: sessionAgeLabel })}` : ""}
+                {taskId !== "-" ? ` · ${t("workbench.task")} ${taskId.slice(0, 8)}` : ""}
+                {runId !== "-" ? ` · ${t("workbench.runId")} ${runId.slice(0, 8)}` : ""}
+              </p>
+              <p className="mt-2 text-[11px] text-white/55">{t("workbench.session.mirrored")}</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => openWidgets(["workbench", "tasks"], { focus: "tasks", replace: false, activate: "focus_only" })}
+                className="rounded border border-white/15 px-3 py-1.5 text-[11px] font-mono text-white/80 transition hover:border-cyan-400/40 hover:text-cyan-200"
+              >
+                {t("common.openTaskManager")}
+              </button>
+              {currentSessionKind === "runtime" && workspacePolicy?.disposition === "approval_required" && (
+                <button
+                  type="button"
+                  onClick={() => openWidgets(["workbench", "action_center"], { focus: "action_center", replace: false, activate: "focus_only" })}
+                  className="rounded border border-amber-500/25 px-3 py-1.5 text-[11px] font-mono text-amber-200 transition hover:border-amber-400/40"
+                >
+                  {t("common.openActionCenter")}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="mb-6 p-4 rounded-lg bg-white/5 border border-white/10">
         <p className="text-[10px] font-mono tracking-widest text-white/40 mb-2 uppercase">{t("workbench.prompt")}</p>

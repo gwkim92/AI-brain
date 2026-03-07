@@ -51,6 +51,7 @@ import {
 } from "@/lib/hud/preferences";
 
 const PROVIDER_ORDER: ProviderName[] = ["openai", "gemini", "anthropic", "local"];
+type SettingsTab = "interface" | "personal" | "workspace" | "policies";
 
 function toErrorMessage(err: unknown, fallback: string): string {
   if (err instanceof ApiRequestError) {
@@ -147,6 +148,8 @@ export function SettingsModule() {
   const [hudRuntimeNotice, setHudRuntimeNotice] = useState<string | null>(null);
   const [visualCoreEnabled, setVisualCoreEnabled] = useState(true);
   const [languageNotice, setLanguageNotice] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<SettingsTab>("interface");
+  const [showAdvancedRuntime, setShowAdvancedRuntime] = useState(false);
 
   const [registryModels, setRegistryModels] = useState<ModelRegistryEntry[]>([]);
   const [registryLoading, setRegistryLoading] = useState(false);
@@ -340,6 +343,38 @@ export function SettingsModule() {
   }, [settingsOverview, formatTime, t]);
 
   const activeLocaleLabel = locale === "ko" ? t("common.korean") : t("common.english");
+  const connectedProvidersCount = useMemo(
+    () => userProviderRows.filter((row) => row.has_user_credential).length,
+    [userProviderRows]
+  );
+  const workspaceKeyCount = useMemo(
+    () => providerCredentialRows.filter((row) => row.has_key).length,
+    [providerCredentialRows]
+  );
+  const runtimeHealthyCount = useMemo(
+    () => cards.filter((card) => card.status === "healthy").length,
+    [cards]
+  );
+  const runtimeSummaryLabel = useMemo(
+    () => t("settings.summary.runtimeHealthValue", { healthy: runtimeHealthyCount, total: cards.length }),
+    [cards.length, runtimeHealthyCount, t]
+  );
+  const settingsTabs = useMemo(
+    () =>
+      [
+        { id: "interface", label: t("settings.tab.interface") },
+        { id: "personal", label: t("settings.tab.personal") },
+        ...(isAdmin ? [{ id: "workspace", label: t("settings.tab.workspace") }] : []),
+        { id: "policies", label: t("settings.tab.policies") },
+      ] as Array<{ id: SettingsTab; label: string }>,
+    [isAdmin, t]
+  );
+
+  useEffect(() => {
+    if (!isAdmin && activeTab === "workspace") {
+      setActiveTab("interface");
+    }
+  }, [activeTab, isAdmin]);
 
   const onLanguagePreferenceChange = (nextPreference: "auto" | "ko" | "en") => {
     setPreference(nextPreference);
@@ -833,6 +868,43 @@ export function SettingsModule() {
         className="mb-3"
       />
 
+      <section className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-xl border border-white/12 bg-black/30 p-3">
+          <p className="text-[10px] font-mono uppercase tracking-[0.28em] text-white/45">{t("settings.summary.language")}</p>
+          <p className="mt-2 text-sm font-semibold text-white">{activeLocaleLabel}</p>
+        </div>
+        <div className="rounded-xl border border-white/12 bg-black/30 p-3">
+          <p className="text-[10px] font-mono uppercase tracking-[0.28em] text-white/45">{t("settings.summary.personalConnections")}</p>
+          <p className="mt-2 text-sm font-semibold text-white">{t("settings.summary.personalConnectionsValue", { value: connectedProvidersCount })}</p>
+        </div>
+        <div className="rounded-xl border border-white/12 bg-black/30 p-3">
+          <p className="text-[10px] font-mono uppercase tracking-[0.28em] text-white/45">{t("settings.summary.workspaceKeys")}</p>
+          <p className="mt-2 text-sm font-semibold text-white">{t("settings.summary.workspaceKeysValue", { value: workspaceKeyCount })}</p>
+        </div>
+        <div className="rounded-xl border border-white/12 bg-black/30 p-3">
+          <p className="text-[10px] font-mono uppercase tracking-[0.28em] text-white/45">{t("settings.summary.runtimeHealth")}</p>
+          <p className="mt-2 text-sm font-semibold text-white">{runtimeSummaryLabel}</p>
+        </div>
+      </section>
+
+      <div className="mb-4 flex flex-wrap gap-2">
+        {settingsTabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveTab(tab.id)}
+            className={`rounded-full border px-3 py-1.5 text-[11px] font-mono uppercase tracking-[0.22em] transition-colors ${
+              activeTab === tab.id
+                ? "border-cyan-400/50 bg-cyan-500/12 text-cyan-100"
+                : "border-white/15 bg-black/30 text-white/55 hover:border-white/30 hover:text-white/85"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === "interface" && (
       <section className="mb-4 rounded-xl border border-cyan-400/20 bg-gradient-to-br from-cyan-950/20 via-black/40 to-black/30 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -861,7 +933,9 @@ export function SettingsModule() {
         <p className="mt-2 text-[11px] text-white/45">{t("settings.language.autoHint")}</p>
         {languageNotice ? <p className="mt-2 text-xs text-emerald-300">{languageNotice}</p> : null}
       </section>
+      )}
 
+      {activeTab === "policies" && (
       <section className="mb-4">
         <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase mb-2 flex items-center gap-2">
           <RadioTower size={12} /> {t("settings.connectors")}
@@ -882,7 +956,9 @@ export function SettingsModule() {
           )}
         </div>
       </section>
+      )}
 
+      {activeTab === "personal" && (
       <section className="mb-4 rounded-xl border border-cyan-400/20 bg-gradient-to-br from-cyan-950/20 via-black/40 to-black/30 p-4">
         <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -1054,7 +1130,9 @@ export function SettingsModule() {
           {userCredentialNotice && <p className="text-xs text-emerald-300">{userCredentialNotice}</p>}
         </div>
       </section>
+      )}
 
+      {activeTab === "workspace" && isAdmin && (
       <section className="mb-4 border border-white/10 rounded p-3 bg-black/30">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase flex items-center gap-2">
@@ -1165,7 +1243,9 @@ export function SettingsModule() {
           </p>
         )}
       </section>
+      )}
 
+      {activeTab === "interface" && (
       <section className="border border-white/10 rounded p-3 bg-black/30">
         <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase mb-2 flex items-center gap-2">
           <Clock3 size={12} /> {t("settings.hudRuntime")}
@@ -1223,7 +1303,9 @@ export function SettingsModule() {
           {hudRuntimeNotice && <p className="text-[10px] font-mono text-emerald-300">{hudRuntimeNotice}</p>}
         </div>
       </section>
+      )}
 
+      {activeTab === "policies" && (
       <section className="mt-4 border border-white/10 rounded p-3 bg-black/30">
         <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase mb-2 flex items-center gap-2">
           <RadioTower size={12} /> {t("settings.notificationChannels")}
@@ -1268,7 +1350,9 @@ export function SettingsModule() {
           ))}
         </div>
       </section>
+      )}
 
+      {activeTab === "policies" && (
       <section className="border border-white/10 rounded p-3 bg-black/30">
         <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase mb-2 flex items-center gap-2">
           <Shield size={12} /> {t("settings.policy.title")}
@@ -1279,40 +1363,60 @@ export function SettingsModule() {
           ))}
         </ul>
       </section>
+      )}
 
-      {/* Model Registry */}
+      {activeTab === "policies" && (
       <section className="mt-4 border border-white/10 rounded p-3 bg-black/30">
         <div className="flex items-center justify-between mb-2">
-          <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase flex items-center gap-2">
-            <Database size={12} /> {t("settings.modelRegistry.title")}
-          </h3>
-          <span className="text-[10px] font-mono text-white/40">
-            {registryLoading ? "..." : t("settings.modelRegistry.count", { value: registryModels.length })}
-          </span>
-        </div>
-        {registryModels.length === 0 && !registryLoading && (
-          <p className="text-xs font-mono text-white/40">{t("settings.modelRegistry.empty")}</p>
-        )}
-        {registryModels.length > 0 && (
-          <div className="max-h-48 overflow-y-auto space-y-1">
-            {registryModels.map((m) => (
-              <div key={m.id} className="flex items-center justify-between px-2 py-1.5 rounded border border-white/5 hover:bg-white/5 text-[11px] font-mono">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${m.is_available ? "bg-green-400" : "bg-white/20"}`} />
-                  <span className="text-white/70 truncate">{m.display_name || m.model_id}</span>
-                </div>
-                <div className="flex items-center gap-2 shrink-0 text-[10px] text-white/40">
-                  <span className="uppercase">{m.provider}</span>
-                  {m.context_window && <span>{(m.context_window / 1000).toFixed(0)}k</span>}
-                </div>
-              </div>
-            ))}
+          <div>
+            <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase flex items-center gap-2">
+              <Route size={12} /> {t("settings.policiesRuntime.title")}
+            </h3>
+            <p className="mt-1 text-[11px] text-white/45">{t("settings.policiesRuntime.subtitle")}</p>
           </div>
-        )}
-      </section>
+          <button
+            type="button"
+            onClick={() => setShowAdvancedRuntime((prev) => !prev)}
+            className="inline-flex items-center gap-1 h-7 px-2 rounded border border-white/15 text-[10px] font-mono text-white/70 hover:text-white hover:border-white/30"
+          >
+            {showAdvancedRuntime ? t("settings.advanced.hide") : t("settings.advanced.show")}
+          </button>
+        </div>
 
-      {/* Routing Policies */}
-      <section className="mt-4 border border-white/10 rounded p-3 bg-black/30">
+        {!showAdvancedRuntime ? (
+          <p className="text-xs text-white/55">{t("settings.advanced.hiddenHint")}</p>
+        ) : (
+          <>
+        <section className="mb-4 border border-white/10 rounded p-3 bg-black/20">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase flex items-center gap-2">
+              <Database size={12} /> {t("settings.modelRegistry.title")}
+            </h3>
+            <span className="text-[10px] font-mono text-white/40">
+              {registryLoading ? "..." : t("settings.modelRegistry.count", { value: registryModels.length })}
+            </span>
+          </div>
+          {registryModels.length === 0 && !registryLoading && (
+            <p className="text-xs font-mono text-white/40">{t("settings.modelRegistry.empty")}</p>
+          )}
+          {registryModels.length > 0 && (
+            <div className="max-h-48 overflow-y-auto space-y-1">
+              {registryModels.map((m) => (
+                <div key={m.id} className="flex items-center justify-between px-2 py-1.5 rounded border border-white/5 hover:bg-white/5 text-[11px] font-mono">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${m.is_available ? "bg-green-400" : "bg-white/20"}`} />
+                    <span className="text-white/70 truncate">{m.display_name || m.model_id}</span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 text-[10px] text-white/40">
+                    <span className="uppercase">{m.provider}</span>
+                    {m.context_window && <span>{(m.context_window / 1000).toFixed(0)}k</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase flex items-center gap-2">
             <Route size={12} /> {t("settings.routingPolicies.title")}
@@ -1406,7 +1510,10 @@ export function SettingsModule() {
             ))}
           </div>
         )}
+          </>
+        )}
       </section>
+      )}
     </main>
   );
 }

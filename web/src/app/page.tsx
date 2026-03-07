@@ -703,6 +703,14 @@ export default function JarvisHUD() {
     writeVisualCoreEnabledPreference(true);
     setVisualCoreEnabled(true);
   }, []);
+  const openVisualDiagnostics = useCallback(() => {
+    openWidgets(["settings"], {
+      focus: "settings",
+      replace: false,
+      activate: "focus_only",
+      workspacePreset: null,
+    });
+  }, [openWidgets]);
 
   const visualCoreBadge = useMemo(() => {
     const runtimeMeta = `ENG:${visualCoreEngine.toUpperCase()} SW:${visualCoreSwitchCount}`;
@@ -943,17 +951,16 @@ export default function JarvisHUD() {
   return (
     <main className="w-full h-full relative overflow-hidden bg-transparent flex">
       <div className="absolute top-16 right-72 z-[65] pointer-events-auto">
-        <div className={`rounded-md border px-3 py-2 text-[10px] font-mono tracking-widest ${visualCoreBadge.className}`}>
-          {visualCoreBadge.label}
-          <span className="ml-2 text-[9px] text-white/85">{visualCoreBadge.detail}</span>
-          <span className="ml-2 text-[9px] text-white/60">{visualCoreBadge.meta}</span>
-          {visualCoreBadge.showEnable && (
+        <div className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-[10px] font-mono tracking-[0.18em] ${visualCoreBadge.className}`}>
+          <span>{visualCoreBadge.label}</span>
+          <span className="max-w-[220px] truncate text-[9px] text-white/75">{visualCoreBadge.detail}</span>
+          {(visualCoreRuntimeStatus !== "ready" || !visualCoreEnabled) && (
             <button
               type="button"
-              onClick={handleEnableVisualCore}
-              className="ml-2 rounded border border-amber-300/60 px-2 py-0.5 text-[9px] text-amber-100 hover:bg-amber-300/15 transition-colors"
+              onClick={visualCoreBadge.showEnable ? handleEnableVisualCore : openVisualDiagnostics}
+              className="rounded-full border border-white/15 px-2 py-0.5 text-[9px] text-white/75 transition-colors hover:border-cyan-400/35 hover:text-cyan-100"
             >
-              ENABLE
+              {visualCoreBadge.showEnable ? t("visualCore.enable") : t("visualCore.diagnostics")}
             </button>
           )}
         </div>
