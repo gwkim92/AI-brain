@@ -1,5 +1,6 @@
 import React from "react";
 import { TerminalSquare, RefreshCw, AlertCircle } from "lucide-react";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
 interface CodeExecutionPanelProps {
     code: string;
@@ -10,6 +11,7 @@ interface CodeExecutionPanelProps {
 }
 
 export function CodeExecutionPanel({ code, language, status, output, executionTimeMs }: CodeExecutionPanelProps) {
+    const { t } = useLocale();
     const isRunning = status === "running";
 
     return (
@@ -19,13 +21,13 @@ export function CodeExecutionPanel({ code, language, status, output, executionTi
             <div className="flex items-center justify-between px-4 py-2 bg-white/5 border-b border-white/5 text-xs">
                 <div className="flex items-center gap-2 text-white/50">
                     <TerminalSquare size={14} />
-                    <span className="tracking-widest capitalize">{language} SANDBOX</span>
+                    <span className="tracking-widest capitalize">{t("workbench.code.sandbox", { value: language })}</span>
                 </div>
 
                 <div className="flex items-center gap-4">
                     {isRunning && (
                         <span className="flex items-center gap-2 text-cyan-400">
-                            <RefreshCw size={12} className="animate-spin" /> EXECUTING
+                            <RefreshCw size={12} className="animate-spin" /> {t("workbench.executing").toUpperCase()}
                         </span>
                     )}
                     {executionTimeMs && !isRunning && (
@@ -45,7 +47,7 @@ export function CodeExecutionPanel({ code, language, status, output, executionTi
                     {status === "error" && (
                         <div className="flex items-center gap-2 mb-2 font-bold tracking-widest text-red-500 text-[10px]">
                             <AlertCircle size={12} />
-                            RUNTIME ERROR
+                            {t("workbench.runtimeError").toUpperCase()}
                         </div>
                     )}
                     <pre className="whitespace-pre-wrap">{output}</pre>

@@ -8,16 +8,17 @@ import { listBriefings, listJarvisSessions, listRadarRecommendations, listTasks,
 import { hasMinRole, useCurrentRole } from "@/lib/auth/role";
 import type { BriefingRecord, JarvisSessionRecord, TaskRecord } from "@/lib/api/types";
 import { subscribeJarvisDataRefresh } from "@/lib/hud/data-refresh";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
-function formatRelativeTime(value: string): string {
+function formatRelativeTime(value: string, t: ReturnType<typeof useLocale>["t"]): string {
   const target = new Date(value).getTime();
   if (Number.isNaN(target)) return value;
 
   const diffSec = Math.max(0, Math.floor((Date.now() - target) / 1000));
-  if (diffSec < 60) return `${diffSec}s ago`;
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-  return `${Math.floor(diffSec / 86400)}d ago`;
+  if (diffSec < 60) return t("tasks.relative.justNow");
+  if (diffSec < 3600) return t("tasks.relative.minutesAgo", { value: Math.floor(diffSec / 60) });
+  if (diffSec < 86400) return t("tasks.relative.hoursAgo", { value: Math.floor(diffSec / 3600) });
+  return t("tasks.relative.daysAgo", { value: Math.floor(diffSec / 86400) });
 }
 
 function mapSummaryStatus(status: TaskRecord["status"]): "done" | "running" | "queued" | "failed" | "blocked" {
@@ -37,6 +38,7 @@ type SummaryRow = {
 
 export function InboxModule() {
   const role = useCurrentRole();
+  const { t } = useLocale();
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [briefings, setBriefings] = useState<BriefingRecord[]>([]);
   const [sessions, setSessions] = useState<JarvisSessionRecord[]>([]);
@@ -92,7 +94,7 @@ export function InboxModule() {
       } else if (err instanceof Error && err.message.trim().length > 0) {
         setLoadError(err.message);
       } else {
-        setLoadError("failed to load inbox data");
+        setLoadError(t("inbox.loadFailed"));
       }
       setTasks([]);
       setBriefings([]);
@@ -102,7 +104,7 @@ export function InboxModule() {
     } finally {
       setLoading(false);
     }
-  }, [role]);
+  }, [role, t]);
 
   useEffect(() => {
     void refresh();
@@ -120,7 +122,7 @@ export function InboxModule() {
     const sessionRows: SummaryRow[] = sessions.slice(0, 4).map((session) => ({
       id: session.id,
       title: session.title,
-      time: formatRelativeTime(session.updatedAt),
+      time: formatRelativeTime(session.updatedAt, t),
       status: (() => {
         const nextStatus: "done" | "running" | "queued" | "failed" | "blocked" =
           session.status === "completed"
@@ -136,17 +138,17 @@ export function InboxModule() {
     const briefingRows: SummaryRow[] = briefings.slice(0, 4).map((briefing) => ({
       id: briefing.id,
       title: briefing.title,
-      time: formatRelativeTime(briefing.updatedAt),
+      time: formatRelativeTime(briefing.updatedAt, t),
       status: briefing.status === "failed" ? "failed" : "done" as const,
     }));
     const taskRows: SummaryRow[] = tasks.slice(0, 4).map((task) => ({
       id: task.id,
       title: task.title,
-      time: formatRelativeTime(task.updatedAt),
+      time: formatRelativeTime(task.updatedAt, t),
       status: mapSummaryStatus(task.status),
     }));
     return [...sessionRows, ...briefingRows, ...taskRows].slice(0, 8);
-  }, [briefings, sessions, tasks]);
+  }, [briefings, sessions, t, tasks]);
 
   const failedTaskCount = useMemo(() => tasks.filter((task) => task.status === "failed" || task.status === "cancelled").length, [tasks]);
 
@@ -154,23 +156,23 @@ export function InboxModule() {
     <main className="w-full h-full relative overflow-hidden bg-transparent text-white flex">
       <div className="relative z-10 w-full h-full p-6 flex flex-col pointer-events-none">
         <header className="mb-4 pl-4 border-l-2 border-cyan-500">
-          <h1 className="text-2xl font-mono font-bold tracking-widest text-cyan-400">INBOX</h1>
-          <p className="text-xs font-mono text-white/50 tracking-wide">JARVIS BRIEFING FEED</p>
+          <h1 className="text-2xl font-mono font-bold tracking-widest text-cyan-400">{t("inbox.title")}</h1>
+          <p className="text-xs font-mono text-white/50 tracking-wide">{t("inbox.subtitle")}</p>
         </header>
 
         <div className="flex-1 flex flex-col gap-4 overflow-y-auto pointer-events-auto pr-2">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="col-span-2 glass-panel p-5 rounded-lg flex flex-col h-72">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xs font-mono font-bold text-white/40 tracking-widest">TODAY SUMMARY</h2>
+                <h2 className="text-xs font-mono font-bold text-white/40 tracking-widest">{t("inbox.todaySummary")}</h2>
                 <Clock size={14} className="text-white/30" />
               </div>
 
               <div className="flex-1 space-y-2.5 overflow-y-auto pr-2">
                 {loadError && <p className="text-sm font-mono text-red-400">{loadError}</p>}
-                {loading && <p className="text-sm font-mono text-white/40">Loading summary...</p>}
+                {loading && <p className="text-sm font-mono text-white/40">{t("inbox.loading")}</p>}
                 {!loading && !loadError && summaryItems.length === 0 && (
-                  <p className="text-sm font-mono text-white/40">No tasks yet. Use the Command Bar above to create one.</p>
+                  <p className="text-sm font-mono text-white/40">{t("inbox.empty")}</p>
                 )}
                 {!loading &&
                   summaryItems.map((item) => (
@@ -181,22 +183,24 @@ export function InboxModule() {
 
             <div className="col-span-1 glass-panel p-5 rounded-lg flex flex-col h-72 border-t-2 border-t-amber-500">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xs font-mono font-bold text-amber-500 tracking-widest">ALERTS</h2>
+                <h2 className="text-xs font-mono font-bold text-amber-500 tracking-widest">{t("inbox.alerts")}</h2>
                 <AlertTriangle size={14} className="text-amber-500" />
               </div>
 
               <div className="space-y-3">
                 <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded">
-                  <p className="text-xs font-mono text-amber-400 mb-1">Pending Actions</p>
-                  <p className="text-xs text-white/70">{pendingApprovalCount} proposal(s) waiting.</p>
+                  <p className="text-xs font-mono text-amber-400 mb-1">{t("inbox.pendingActions")}</p>
+                  <p className="text-xs text-white/70">{t("inbox.pendingActionsCount", { value: pendingApprovalCount })}</p>
                 </div>
                 <div className="p-3 bg-white/5 border border-white/10 rounded">
-                  <p className="text-xs font-mono text-cyan-400 mb-1">Briefings Ready</p>
-                  <p className="text-xs text-white/70">{briefings.length} briefing(s) in archive.</p>
+                  <p className="text-xs font-mono text-cyan-400 mb-1">{t("inbox.briefingsReady")}</p>
+                  <p className="text-xs text-white/70">{t("inbox.briefingsReadyCount", { value: briefings.length })}</p>
                 </div>
                 <div className={`p-3 border rounded ${failedTaskCount > 0 ? "bg-red-950/30 border-red-500/20" : "bg-emerald-950/20 border-emerald-500/20"}`}>
-                  <p className={`text-xs font-mono mb-1 ${failedTaskCount > 0 ? "text-red-300" : "text-emerald-300"}`}>Task Failures</p>
-                  <p className="text-xs text-white/70">{failedTaskCount > 0 ? `${failedTaskCount} task(s) need retry.` : "All clear."}</p>
+                  <p className={`text-xs font-mono mb-1 ${failedTaskCount > 0 ? "text-red-300" : "text-emerald-300"}`}>{t("inbox.taskFailures")}</p>
+                  <p className="text-xs text-white/70">
+                    {failedTaskCount > 0 ? t("inbox.taskFailuresCount", { value: failedTaskCount }) : t("inbox.taskFailuresClear")}
+                  </p>
                 </div>
               </div>
             </div>

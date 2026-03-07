@@ -4,8 +4,10 @@ import React from "react";
 import { X, Focus, Eye, EyeOff, LayoutGrid, XCircle, RotateCcw } from "lucide-react";
 
 import { useHUD } from "@/components/providers/HUDProvider";
+import { useLocale } from "@/components/providers/LocaleProvider";
 import { clearAllWidgetLayouts, tileWidgetLayouts } from "@/lib/hud/widget-layout";
 import type { MissionStepStatus } from "@/lib/api/types";
+import type { TranslationKey } from "@/lib/locale";
 
 type MissionStepDockItem = {
   id: string;
@@ -32,33 +34,37 @@ type ContextDockBarProps = {
   onUserFocusWidget: (widgetId: string) => void;
 };
 
-const WIDGET_LABELS: Record<string, string> = {
-  inbox: "Inbox",
-  assistant: "Assistant",
-  tasks: "Tasks",
-  council: "Council",
-  workbench: "Workbench",
-  reports: "Reports",
-  approvals: "Approvals",
-  memory: "Memory",
-  settings: "Settings",
-  model_control: "Model Control",
-  ideation: "Ideation",
+const WIDGET_LABEL_KEYS: Record<string, TranslationKey> = {
+  inbox: "widget.title.inbox",
+  assistant: "widget.title.assistant",
+  tasks: "widget.title.tasks",
+  council: "widget.title.council",
+  workbench: "widget.title.workbench",
+  reports: "widget.title.reports",
+  approvals: "widget.title.approvals",
+  memory: "widget.title.memory",
+  settings: "widget.title.settings",
+  model_control: "widget.title.model_control",
+  ideation: "widget.title.ideation",
 };
 
-function widgetLabel(id: string): string {
-  return WIDGET_LABELS[id] ?? id;
+function widgetLabel(id: string, t: (key: TranslationKey, vars?: Record<string, string | number>) => string): string {
+  const key = WIDGET_LABEL_KEYS[id];
+  return key ? t(key) : id;
 }
 
-function missionStatusLabel(status: MissionStepStatus | null): string | null {
+function missionStatusLabel(
+  status: MissionStepStatus | null,
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string
+): string | null {
   if (!status) {
     return null;
   }
-  if (status === "done") return "DONE";
-  if (status === "running") return "RUNNING";
-  if (status === "blocked") return "BLOCKED";
-  if (status === "failed") return "FAILED";
-  return "PENDING";
+  if (status === "done") return t("taskStatus.done").toUpperCase();
+  if (status === "running") return t("taskStatus.running").toUpperCase();
+  if (status === "blocked") return t("taskStatus.blocked").toUpperCase();
+  if (status === "failed") return t("taskStatus.failed").toUpperCase();
+  return t("taskStatus.queued").toUpperCase();
 }
 
 function missionStatusClass(status: MissionStepStatus | null): string {
@@ -85,6 +91,7 @@ export function ContextDockBar({
   onMissionAutoFocusChange,
   onUserFocusWidget,
 }: ContextDockBarProps) {
+  const { t } = useLocale();
   const { openWidget, focusWidget, closeWidget, dropWidget, closeAll } = useHUD();
 
   if (mountedWidgets.length === 0) {
@@ -101,20 +108,20 @@ export function ContextDockBar({
   };
 
   const showRecommendation = typeof recommendedWidget === "string" && recommendedWidget.length > 0;
-  const statusLabel = missionStatusLabel(missionStepStatus);
+  const statusLabel = missionStatusLabel(missionStepStatus, t);
 
   return (
     <div
       role="region"
-      aria-label="Context Dock"
+      aria-label={t("contextDock.ariaLabel")}
       className="absolute bottom-3 left-1/2 -translate-x-1/2 z-[70] pointer-events-auto"
       data-testid="context-dock"
     >
       <div className="rounded-xl border border-cyan-500/30 bg-black/65 backdrop-blur-xl px-3 py-2 shadow-[0_0_30px_rgba(0,255,255,0.12)]">
         {(missionTitle || missionStepLabel) && (
           <div className="mb-2 text-[10px] font-mono tracking-widest text-white/60 flex flex-wrap items-center gap-2">
-            {missionTitle && <span className="text-cyan-300">MISSION {missionTitle}</span>}
-            {missionStepLabel && <span>STEP {missionStepLabel}</span>}
+            {missionTitle && <span className="text-cyan-300">{t("contextDock.mission", { value: missionTitle })}</span>}
+            {missionStepLabel && <span>{t("contextDock.step", { value: missionStepLabel })}</span>}
             {statusLabel && (
               <span
                 className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] ${missionStatusClass(missionStepStatus)}`}
@@ -125,6 +132,7 @@ export function ContextDockBar({
             )}
             <button
               type="button"
+              data-testid="dock-auto-focus-toggle"
               onClick={() => onMissionAutoFocusChange(!missionAutoFocusEnabled)}
               className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] transition-colors ${
                 missionAutoFocusEnabled
@@ -133,14 +141,16 @@ export function ContextDockBar({
               }`}
               aria-label="Mission Auto Focus Toggle"
             >
-              AUTO FOCUS {missionAutoFocusEnabled ? "ON" : "OFF"}
+              {t("contextDock.autoFocus", {
+                value: missionAutoFocusEnabled ? t("common.on") : t("common.off"),
+              })}
             </button>
             {missionAutoFocusHoldRemainingSec > 0 && (
               <span
                 className="inline-flex items-center rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] text-amber-200"
                 data-testid="dock-auto-focus-hold"
               >
-                MANUAL HOLD {missionAutoFocusHoldRemainingSec}s
+                {t("contextDock.manualHold", { value: missionAutoFocusHoldRemainingSec })}
               </span>
             )}
           </div>
@@ -164,7 +174,7 @@ export function ContextDockBar({
                 >
                   <span className="text-white/70">#{step.order}</span>
                   <span className="uppercase">{step.type}</span>
-                  <span>{missionStatusLabel(step.status)}</span>
+                  <span>{missionStatusLabel(step.status, t)}</span>
                 </span>
               );
             })}
@@ -182,8 +192,9 @@ export function ContextDockBar({
               <button
                 key={widgetId}
                 type="button"
+                data-testid={`dock-widget-${widgetId}`}
                 onClick={() => focusSingleWidget(widgetId)}
-                aria-label={`Dock ${widgetLabel(widgetId)}`}
+                aria-label={`Dock ${widgetLabel(widgetId, t)}`}
                 className={`group inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-mono tracking-widest transition-all ${
                   isFocused
                     ? "border-cyan-400 bg-cyan-500/20 text-cyan-200"
@@ -191,10 +202,16 @@ export function ContextDockBar({
                       ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200"
                       : "border-white/10 border-dashed bg-black/30 text-white/40 hover:text-white/70 hover:border-white/25"
                 }`}
-                title={isFocused ? "focused" : isActive ? "visible — click to focus" : "hidden — click to show"}
+                title={
+                  isFocused
+                    ? t("contextDock.state.focused")
+                    : isActive
+                      ? t("contextDock.state.visible")
+                      : t("contextDock.state.hidden")
+                }
               >
                 {isHidden && <EyeOff size={9} className="text-white/30" />}
-                <span>{widgetLabel(widgetId)}</span>
+                <span>{widgetLabel(widgetId, t)}</span>
                 {isFocused && <Focus size={10} />}
                 {isActive && !isFocused && (
                   <Eye size={9} className="text-emerald-300/60" />
@@ -215,7 +232,7 @@ export function ContextDockBar({
                     <X size={10} />
                   </span>
                 )}
-                {isRecommended && <span className="text-[9px] text-amber-300">REC</span>}
+                {isRecommended && <span className="text-[9px] text-amber-300">{t("contextDock.rec")}</span>}
               </button>
             );
           })}
@@ -223,13 +240,14 @@ export function ContextDockBar({
           {showRecommendation && recommendedWidget && focusedWidget !== recommendedWidget && (
             <button
               type="button"
+              data-testid="dock-recommended-widget"
               onClick={() => focusSingleWidget(recommendedWidget)}
               className="inline-flex items-center gap-1 rounded-md border border-amber-400/40 bg-amber-500/10 px-2 py-1 text-[10px] font-mono tracking-widest text-amber-200"
-              title={recommendedReason ?? "mission recommendation"}
-              aria-label={`Recommended ${widgetLabel(recommendedWidget)}`}
+              title={recommendedReason ?? t("contextDock.recommendedReasonFallback")}
+              aria-label={t("contextDock.recommendedTitle", { value: widgetLabel(recommendedWidget, t) })}
             >
               <Focus size={10} />
-              RECOMMENDED {widgetLabel(recommendedWidget)}
+              {t("common.recommended").toUpperCase()} {widgetLabel(recommendedWidget, t)}
             </button>
           )}
 

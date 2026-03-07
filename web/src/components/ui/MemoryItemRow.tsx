@@ -1,5 +1,8 @@
+"use client";
+
 import React from "react";
 import { BrainCircuit, Trash2, Edit3, Lock } from "lucide-react";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
 export type MemoryCategory = "preference" | "fact" | "rule";
 
@@ -12,6 +15,7 @@ interface MemoryItemRowProps {
 }
 
 export function MemoryItemRow({ category, content, source, timestamp }: MemoryItemRowProps) {
+    const { t } = useLocale();
     const getCategoryTheme = () => {
         switch (category) {
             case "preference": return "text-cyan-400 bg-cyan-500/10 border-cyan-500/20";
@@ -26,7 +30,7 @@ export function MemoryItemRow({ category, content, source, timestamp }: MemoryIt
             <div className="flex flex-col gap-2 flex-1">
                 <div className="flex items-center gap-3">
                     <span className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold tracking-widest uppercase border ${getCategoryTheme()}`}>
-                        {category}
+                        {t(`memory.category.${category}`)}
                     </span>
                     <span className="text-[10px] font-mono text-white/30 flex items-center gap-1">
                         <BrainCircuit size={10} /> {source}

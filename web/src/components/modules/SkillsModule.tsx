@@ -5,6 +5,7 @@ import { Bot, BookOpenText, Play, Search, Wand2 } from "lucide-react";
 
 import { MarkdownLite } from "@/components/ui/MarkdownLite";
 import { useHUD } from "@/components/providers/HUDProvider";
+import { useLocale } from "@/components/providers/LocaleProvider";
 import { ApiRequestError } from "@/lib/api/client";
 import { findSkills, getSkillResource, listSkills, useSkill } from "@/lib/api/endpoints";
 import type {
@@ -13,13 +14,17 @@ import type {
   SkillResourceRecord,
   SkillUseResult,
 } from "@/lib/api/types";
+import type { TranslationKey } from "@/lib/locale";
 import { consumeSkillPrefill, subscribeSkillPrefill } from "@/lib/skills/prefill";
 
-function mapWorkspaceLabel(value: SkillRecord["suggestedWorkspacePreset"] | SkillUseResult["preview"]["suggestedWorkspacePreset"]): string {
-  if (value === "research") return "Research";
-  if (value === "execution") return "Execution";
-  if (value === "control") return "Control";
-  return "Jarvis";
+function mapWorkspaceLabel(
+  value: SkillRecord["suggestedWorkspacePreset"] | SkillUseResult["preview"]["suggestedWorkspacePreset"],
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string
+): string {
+  if (value === "research") return t("sidebar.workspace.research.title");
+  if (value === "execution") return t("sidebar.workspace.code.title");
+  if (value === "control") return t("sidebar.workspace.intelligence.title");
+  return t("sidebar.workspace.mission.title");
 }
 
 function uniqueWidgets(value: string[]): string[] {
@@ -27,6 +32,7 @@ function uniqueWidgets(value: string[]): string[] {
 }
 
 export function SkillsModule() {
+  const { t } = useLocale();
   const { openWidgets } = useHUD();
   const [skills, setSkills] = useState<SkillRecord[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -66,14 +72,14 @@ export function SkillsModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("failed to load skills");
+        setError(t("skills.error.load"));
       }
       setSkills([]);
       setSelectedId(null);
     } finally {
       setLoading(false);
     }
-  }, [applyPrefill]);
+  }, [applyPrefill, t]);
 
   useEffect(() => {
     void refreshSkills();
@@ -91,7 +97,7 @@ export function SkillsModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("failed to load skill resource");
+        setError(t("skills.error.resource"));
       }
     }
   };
@@ -111,7 +117,7 @@ export function SkillsModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("failed to find skills");
+        setError(t("skills.error.find"));
       }
     } finally {
       setSearching(false);
@@ -155,7 +161,7 @@ export function SkillsModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("failed to use skill");
+        setError(t("skills.error.use"));
       }
     } finally {
       setExecuting(false);
@@ -167,16 +173,16 @@ export function SkillsModule() {
       <header className="border-l-2 border-cyan-500 pl-3 flex items-center justify-between">
         <div>
           <h2 className="text-sm font-mono font-bold tracking-widest text-cyan-400 flex items-center gap-2">
-            <Bot size={14} /> SKILLS
+            <Bot size={14} /> {t("widget.title.skills").toUpperCase()}
           </h2>
-          <p className="text-[10px] font-mono text-white/40">Lazy-loaded Jarvis capability registry</p>
+          <p className="text-[10px] font-mono text-white/40">{t("skills.subtitle")}</p>
         </div>
         <button
           type="button"
           onClick={() => void refreshSkills()}
           className="inline-flex items-center gap-1 h-7 px-2 rounded border border-white/20 text-[10px] font-mono text-white/70 hover:text-white"
         >
-          <BookOpenText size={11} /> REFRESH
+          <BookOpenText size={11} /> {t("common.refresh").toUpperCase()}
         </button>
       </header>
 
@@ -185,7 +191,7 @@ export function SkillsModule() {
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
           rows={3}
-          placeholder="요청을 입력하면 Skills가 적합한 실행 능력을 찾고 Jarvis flow로 넘깁니다."
+          placeholder={t("skills.promptPlaceholder")}
           className="rounded border border-white/10 bg-black/40 px-3 py-2 text-xs"
         />
         <div className="flex xl:flex-col gap-2">
@@ -195,7 +201,7 @@ export function SkillsModule() {
             disabled={searching}
             className="inline-flex items-center justify-center gap-1 rounded border border-cyan-500/40 px-3 py-2 text-[10px] font-mono text-cyan-300 disabled:opacity-50"
           >
-            <Search size={11} /> {searching ? "MATCHING" : "FIND"}
+            <Search size={11} /> {(searching ? t("skills.matching") : t("common.find")).toUpperCase()}
           </button>
           <button
             type="button"
@@ -203,7 +209,7 @@ export function SkillsModule() {
             disabled={executing || !selectedSkill}
             className="inline-flex items-center justify-center gap-1 rounded border border-white/20 px-3 py-2 text-[10px] font-mono text-white/75 disabled:opacity-50"
           >
-            <Wand2 size={11} /> PREVIEW
+            <Wand2 size={11} /> {t("common.preview").toUpperCase()}
           </button>
           <button
             type="button"
@@ -211,7 +217,7 @@ export function SkillsModule() {
             disabled={executing || !selectedSkill}
             className="inline-flex items-center justify-center gap-1 rounded border border-emerald-500/40 px-3 py-2 text-[10px] font-mono text-emerald-300 disabled:opacity-50"
           >
-            <Play size={11} /> {executing ? "RUNNING" : "EXECUTE"}
+            <Play size={11} /> {(executing ? t("taskStatus.running") : t("common.execute")).toUpperCase()}
           </button>
         </div>
       </section>
@@ -220,8 +226,8 @@ export function SkillsModule() {
 
       <div className="flex-1 grid grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)] gap-3 overflow-hidden">
         <section className="rounded border border-white/10 bg-black/30 overflow-y-auto p-2 space-y-2">
-          {loading && <p className="text-xs font-mono text-white/45">Loading skills...</p>}
-          {!loading && skills.length === 0 && <p className="text-xs font-mono text-white/45">No skills registered.</p>}
+          {loading && <p className="text-xs font-mono text-white/45">{t("skills.loading")}</p>}
+          {!loading && skills.length === 0 && <p className="text-xs font-mono text-white/45">{t("skills.empty")}</p>}
           {skills.map((skill) => (
             <button
               key={skill.id}
@@ -239,7 +245,7 @@ export function SkillsModule() {
         </section>
 
         <section className="rounded border border-white/10 bg-black/30 overflow-y-auto p-4 space-y-4">
-          {!selectedSkill && <p className="text-xs font-mono text-white/45">Select a skill to inspect resources and execution path.</p>}
+          {!selectedSkill && <p className="text-xs font-mono text-white/45">{t("skills.select")}</p>}
           {selectedSkill && (
             <>
               <div>
@@ -249,12 +255,12 @@ export function SkillsModule() {
                     {selectedSkill.executionKind}
                   </span>
                   <span className="rounded border border-white/15 bg-black/40 px-2 py-0.5 text-[9px] font-mono text-white/55">
-                    {mapWorkspaceLabel(selectedSkill.suggestedWorkspacePreset)}
+                    {mapWorkspaceLabel(selectedSkill.suggestedWorkspacePreset, t)}
                   </span>
                 </div>
                 <p className="mt-2 text-sm text-white/70">{selectedSkill.summary}</p>
                 <p className="mt-2 text-[10px] font-mono text-white/45">
-                  widgets: {selectedSkill.suggestedWidgets.join(" · ")}
+                  {t("skills.line.widgets", { value: selectedSkill.suggestedWidgets.join(" · ") })}
                 </p>
               </div>
 
@@ -273,11 +279,16 @@ export function SkillsModule() {
 
               {matches.length > 0 && (
                 <div className="rounded border border-white/10 bg-black/35 p-3">
-                  <p className="text-[10px] font-mono tracking-widest text-white/45">MATCHES</p>
+                  <p className="text-[10px] font-mono tracking-widest text-white/45">{t("skills.matches").toUpperCase()}</p>
                   <div className="mt-2 space-y-2">
                     {matches.map((match) => (
                       <div key={match.skill.id} className="rounded border border-white/10 bg-black/30 px-3 py-2">
-                        <p className="text-sm text-white/85">{match.skill.title} <span className="text-[10px] font-mono text-white/40">score {match.score}</span></p>
+                        <p className="text-sm text-white/85">
+                          {match.skill.title}{" "}
+                          <span className="text-[10px] font-mono text-white/40">
+                            {t("common.score")} {match.score}
+                          </span>
+                        </p>
                         <p className="mt-1 text-[11px] text-white/60">{match.reason}</p>
                       </div>
                     ))}
@@ -287,22 +298,31 @@ export function SkillsModule() {
 
               {previewResult?.preview && (
                 <div className="rounded border border-emerald-500/20 bg-emerald-500/10 p-3 space-y-2">
-                  <p className="text-[10px] font-mono tracking-widest text-emerald-200">PREVIEW</p>
+                  <p className="text-[10px] font-mono tracking-widest text-emerald-200">{t("skills.previewTitle").toUpperCase()}</p>
                   <p className="text-sm text-white/80">{previewResult.preview.rationale}</p>
                   <p className="text-[10px] font-mono text-white/45">
-                    workspace: {mapWorkspaceLabel(previewResult.preview.suggestedWorkspacePreset)} · widgets: {previewResult.preview.suggestedWidgets.join(" · ")}
+                    {t("skills.line.workspace", {
+                      workspace: mapWorkspaceLabel(previewResult.preview.suggestedWorkspacePreset, t),
+                      widgets: previewResult.preview.suggestedWidgets.join(" · "),
+                    })}
                   </p>
                   <pre className="whitespace-pre-wrap rounded border border-white/10 bg-black/30 p-3 text-[11px] text-white/75">
                     {previewResult.preview.suggestedPrompt}
                   </pre>
                   {previewResult.result_type === "jarvis_request" && previewResult.session && (
                     <p className="text-[11px] text-emerald-100/90">
-                      Session created: {previewResult.session.id} · {previewResult.session.status}
+                      {t("skills.sessionCreated", {
+                        id: previewResult.session.id,
+                        status: previewResult.session.status,
+                      })}
                     </p>
                   )}
                   {previewResult.result_type === "model_recommendation" && previewResult.recommendation && (
                     <p className="text-[11px] text-emerald-100/90">
-                      Recommendation: {previewResult.recommendation.recommendedProvider} / {previewResult.recommendation.recommendedModelId}
+                      {t("skills.recommendationResult", {
+                        provider: previewResult.recommendation.recommendedProvider,
+                        model: previewResult.recommendation.recommendedModelId,
+                      })}
                     </p>
                   )}
                 </div>

@@ -8,9 +8,11 @@ import { ApiRequestError } from "@/lib/api/client";
 import { authSignup } from "@/lib/api/endpoints";
 import { Jarvis3DCore } from "@/components/ui/Jarvis3DCore";
 import { saveAuthSession } from "@/lib/auth/session";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
 export default function SignupPage() {
   const router = useRouter();
+  const { t } = useLocale();
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
@@ -45,7 +47,7 @@ export default function SignupPage() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("signup failed");
+        setError(t("signup.error.failed"));
       }
     } finally {
       setLoading(false);
@@ -67,52 +69,52 @@ export default function SignupPage() {
       <div className="absolute inset-0 z-10 bg-black/40" />
       <div className="absolute inset-0 z-10 bg-[radial-gradient(circle_at_center,_rgba(0,0,0,0.6)_0%,_rgba(0,0,0,0.35)_35%,_rgba(0,255,255,0.08)_100%)]" />
       <div className="w-full max-w-xl glass-panel rounded-xl border border-white/10 p-6 bg-black/70 backdrop-blur-xl relative z-20">
-        <h1 className="text-xl font-mono font-bold tracking-widest text-cyan-300">SIGN UP</h1>
-        <p className="text-xs font-mono text-white/50 mt-1">Create a member account for personalized workspace.</p>
+        <h1 className="text-xl font-mono font-bold tracking-widest text-cyan-300">{t("signup.title")}</h1>
+        <p className="text-xs font-mono text-white/50 mt-1">{t("signup.subtitle")}</p>
 
         <form className="mt-5 space-y-3" onSubmit={handleSignupSubmit}>
           <input
             value={email}
             onChange={(event) => setEmail(event.target.value)}
-            placeholder="email"
+            placeholder={t("signup.emailPlaceholder")}
             className="w-full h-10 rounded border border-white/15 bg-black/50 px-3 text-sm font-mono"
           />
           <input
             value={displayName}
             onChange={(event) => setDisplayName(event.target.value)}
-            placeholder="display name (optional)"
+            placeholder={t("signup.displayNamePlaceholder")}
             className="w-full h-10 rounded border border-white/15 bg-black/50 px-3 text-sm font-mono"
           />
           <input
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             type="password"
-            placeholder="password (min 8)"
+            placeholder={t("signup.passwordPlaceholder")}
             className="w-full h-10 rounded border border-white/15 bg-black/50 px-3 text-sm font-mono"
           />
           <input
             value={confirmPassword}
             onChange={(event) => setConfirmPassword(event.target.value)}
             type="password"
-            placeholder="confirm password"
+            placeholder={t("signup.confirmPasswordPlaceholder")}
             className="w-full h-10 rounded border border-white/15 bg-black/50 px-3 text-sm font-mono"
           />
-          {passwordsMismatch && <p className="text-xs font-mono text-rose-300">passwords do not match</p>}
+          {passwordsMismatch && <p className="text-xs font-mono text-rose-300">{t("signup.passwordMismatch")}</p>}
           <button
             type="submit"
             disabled={loading || !email.trim() || password.length < 8 || passwordsMismatch}
             className="w-full h-10 rounded bg-cyan-500/20 border border-cyan-400/40 text-cyan-200 text-xs font-mono tracking-widest disabled:opacity-40"
           >
-            {loading ? "CREATING..." : "CREATE ACCOUNT"}
+            {loading ? t("signup.creating") : t("signup.createAccount")}
           </button>
         </form>
 
         {error && <p className="mt-3 text-xs font-mono text-rose-300">{error}</p>}
 
         <p className="mt-4 text-xs font-mono text-white/55">
-          Already have an account?{" "}
+          {t("signup.alreadyHaveAccount")}{" "}
           <Link href="/login" className="text-cyan-300 hover:text-cyan-100">
-            Login
+            {t("signup.login")}
           </Link>
         </p>
       </div>

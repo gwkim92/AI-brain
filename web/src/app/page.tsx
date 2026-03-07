@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   type VisualCoreRuntimeReason,
   VISUAL_CORE_RUNTIME_STATUS_EVENT,
@@ -19,7 +20,9 @@ import type { Jarvis3DBaseMode, Jarvis3DScene } from "@/lib/visual-core/types";
 import { canAccessWidget, useCurrentRoleState } from "@/lib/auth/role";
 import { resolveMissionFocus } from "@/lib/hud/mission-focus";
 import { ContextDockBar } from "@/components/layout/ContextDockBar";
-import { measureHudViewport, tileWidgetLayouts } from "@/lib/hud/widget-layout";
+import { useLocale } from "@/components/providers/LocaleProvider";
+import { measureHudViewport, spotlightWidgetLayout, tileWidgetLayouts } from "@/lib/hud/widget-layout";
+import type { TranslationKey } from "@/lib/locale";
 import {
   HUD_DEFAULT_MISSION_AUTO_FOCUS_HOLD_SECONDS,
   HUD_MISSION_AUTO_FOCUS_HOLD_SECONDS_KEY,
@@ -108,23 +111,23 @@ const WIDGET_DEFAULTS: Record<string, { x: number; y: number; w: number; h: numb
   ideation: { x: 120, y: 72, w: 920, h: 780 },
 };
 
-const WIDGET_TITLES: Record<string, string> = {
-  inbox: "ORCHESTRATION HUB",
-  assistant: "AI ASSISTANT",
-  council: "AGENT COUNCIL",
-  workbench: "WORKBENCH",
-  tasks: "TASK MANAGER",
-  reports: "SYSTEM REPORTS",
-  watchers: "WATCHERS",
-  dossier: "DOSSIER ARCHIVE",
-  action_center: "ACTION CENTER",
-  notifications: "NOTIFICATIONS",
-  skills: "SKILLS",
-  approvals: "PENDING APPROVALS",
-  memory: "SEMANTIC MEMORY",
-  settings: "SYSTEM SETTINGS",
-  model_control: "MODEL CONTROL",
-  ideation: "IDEATION LAB",
+const WIDGET_TITLE_KEYS: Record<string, TranslationKey> = {
+  inbox: "widget.title.inbox",
+  assistant: "widget.title.assistant",
+  council: "widget.title.council",
+  workbench: "widget.title.workbench",
+  tasks: "widget.title.tasks",
+  reports: "widget.title.reports",
+  watchers: "widget.title.watchers",
+  dossier: "widget.title.dossier",
+  action_center: "widget.title.action_center",
+  notifications: "widget.title.notifications",
+  skills: "widget.title.skills",
+  approvals: "widget.title.approvals",
+  memory: "widget.title.memory",
+  settings: "widget.title.settings",
+  model_control: "widget.title.model_control",
+  ideation: "widget.title.ideation",
 };
 
 const WIDGET_COMPONENTS: Record<string, React.ComponentType> = {
@@ -148,6 +151,7 @@ const WIDGET_COMPONENTS: Record<string, React.ComponentType> = {
 
 function HUDWidgetRenderer({ mountedWidgets, activeWidgets }: { mountedWidgets: string[]; activeWidgets: string[] }) {
   const constraintsRef = useRef<HTMLDivElement>(null);
+  const { t } = useLocale();
 
   return (
     <div ref={constraintsRef} data-hud-viewport="true" className="w-full h-full relative overflow-hidden pointer-events-none">
@@ -155,7 +159,8 @@ function HUDWidgetRenderer({ mountedWidgets, activeWidgets }: { mountedWidgets: 
         {mountedWidgets.map((widgetId) => {
           const isVisible = activeWidgets.includes(widgetId);
           const defaults = WIDGET_DEFAULTS[widgetId];
-          const title = WIDGET_TITLES[widgetId];
+          const titleKey = WIDGET_TITLE_KEYS[widgetId];
+          const title = titleKey ? t(titleKey) : widgetId;
           const Component = WIDGET_COMPONENTS[widgetId];
           if (!defaults || !title || !Component) return null;
           const orderIndex = activeWidgets.indexOf(widgetId);
@@ -382,7 +387,10 @@ function useStableVisualCoreScene(input: {
 }
 
 export default function JarvisHUD() {
-  const { activeWidgets, mountedWidgets, focusedWidget, openWidgets, dropWidget, setVisualCoreScene } = useHUD();
+  const searchParams = useSearchParams();
+  const requestedSearch = searchParams.toString();
+  const { hydrated: hudHydrated, activeWidgets, mountedWidgets, focusedWidget, openWidgets, dropWidget, setVisualCoreScene } = useHUD();
+  const { t } = useLocale();
   const { role, hydrated: roleHydrated } = useCurrentRoleState();
   const { tasks, pendingApprovalCount, hasRecentEventPulse } = useVisualCoreSignals();
   const requestedWidgetsRef = useRef<RequestedWidgetPlan | null>(null);
@@ -418,13 +426,12 @@ export default function JarvisHUD() {
   }, [dropWidget, mountedWidgets, role]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || requestedWidgetsRef.current !== null) {
-      return;
-    }
-    requestedWidgetsRef.current = parseRequestedWidgets(window.location.search);
-    requestedMissionRef.current = parseRequestedMission(window.location.search);
+    const normalizedSearch = requestedSearch.length > 0 ? `?${requestedSearch}` : "";
+    requestedWidgetsRef.current = parseRequestedWidgets(normalizedSearch);
+    requestedMissionRef.current = parseRequestedMission(normalizedSearch);
+    requestedWidgetsConsumedRef.current = false;
     setRequestedMission(requestedMissionRef.current);
-  }, []);
+  }, [requestedSearch]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -703,8 +710,8 @@ export default function JarvisHUD() {
       return {
         className:
           "border-white/30 bg-black/65 text-white/80 shadow-[0_0_16px_rgba(148,163,184,0.12)]",
-        label: "VISUAL CORE INIT",
-        detail: "SYNCING",
+        label: t("visualCore.init"),
+        detail: t("visualCore.syncing"),
         meta: runtimeMeta,
         showEnable: false,
       };
@@ -713,8 +720,8 @@ export default function JarvisHUD() {
       return {
         className:
           "border-amber-400/50 bg-black/70 text-amber-200 shadow-[0_0_20px_rgba(245,158,11,0.2)]",
-        label: "VISUAL CORE OFF",
-        detail: "DISABLED",
+        label: t("visualCore.off"),
+        detail: t("visualCore.disabled"),
         meta: runtimeMeta,
         showEnable: true,
       };
@@ -723,13 +730,13 @@ export default function JarvisHUD() {
       return {
         className:
           "border-rose-400/50 bg-black/70 text-rose-200 shadow-[0_0_20px_rgba(244,63,94,0.2)]",
-        label: "VISUAL CORE DEGRADED",
+        label: t("visualCore.degraded"),
         detail:
           visualCoreRuntimeReason === "canvas_runtime_error"
-            ? "AUTO FAILOVER ACTIVE"
+            ? t("visualCore.autoFailover")
             : visualCoreRuntimeReason === "webgl_unavailable"
-              ? "WEBGL UNAVAILABLE"
-              : "CPU CORE ACTIVE",
+              ? t("visualCore.webglUnavailable")
+              : t("visualCore.cpuCoreActive"),
         meta: visualCoreFailureCode === "none" ? runtimeMeta : `${runtimeMeta} ERR:${visualCoreFailureCode}`,
         showEnable: false,
       };
@@ -738,11 +745,11 @@ export default function JarvisHUD() {
       return {
         className:
           "border-emerald-400/50 bg-black/70 text-emerald-200 shadow-[0_0_20px_rgba(16,185,129,0.22)]",
-        label: "VISUAL CORE STABLE",
-        detail: "STABLE ENGINE ACTIVE",
+        label: t("visualCore.stable"),
+        detail: t("visualCore.stableEngineActive"),
         meta:
           visualCoreFailureCode === "none"
-            ? `${runtimeMeta}${visualCoreRecovered ? " RECOVERED" : ""}`
+            ? `${runtimeMeta}${visualCoreRecovered ? ` ${t("visualCore.recovered").toUpperCase()}` : ""}`
             : `${runtimeMeta} ERR:${visualCoreFailureCode}`,
         showEnable: false,
       };
@@ -751,11 +758,11 @@ export default function JarvisHUD() {
       return {
         className:
           "border-amber-400/50 bg-black/70 text-amber-200 shadow-[0_0_20px_rgba(245,158,11,0.2)]",
-        label: "VISUAL CORE SAFE MODE",
-        detail: "LITE 3D ACTIVE",
+        label: t("visualCore.safeMode"),
+        detail: t("visualCore.lite3dActive"),
         meta:
           visualCoreFailureCode === "none"
-            ? `${runtimeMeta}${visualCoreRecovered ? " RECOVERED" : ""}`
+            ? `${runtimeMeta}${visualCoreRecovered ? ` ${t("visualCore.recovered").toUpperCase()}` : ""}`
             : `${runtimeMeta} ERR:${visualCoreFailureCode}`,
         showEnable: false,
       };
@@ -764,11 +771,12 @@ export default function JarvisHUD() {
       return {
         className:
           "border-cyan-400/50 bg-black/70 text-cyan-200 shadow-[0_0_20px_rgba(34,211,238,0.2)]",
-        label: "VISUAL CORE OK",
-        detail: visualCoreRuntimeReason === "forced_engine" ? "FORCED ENGINE ACTIVE" : "FULL 3D ACTIVE",
+        label: t("visualCore.ok"),
+        detail:
+          visualCoreRuntimeReason === "forced_engine" ? t("visualCore.forcedEngineActive") : t("visualCore.full3dActive"),
         meta:
           visualCoreFailureCode === "none"
-            ? `${runtimeMeta}${visualCoreRecovered ? " RECOVERED" : ""}`
+            ? `${runtimeMeta}${visualCoreRecovered ? ` ${t("visualCore.recovered").toUpperCase()}` : ""}`
             : `${runtimeMeta} ERR:${visualCoreFailureCode}`,
         showEnable: false,
       };
@@ -776,8 +784,8 @@ export default function JarvisHUD() {
     return {
       className:
         "border-white/30 bg-black/65 text-white/80 shadow-[0_0_16px_rgba(148,163,184,0.12)]",
-      label: "VISUAL CORE INIT",
-      detail: "PROBING",
+      label: t("visualCore.init"),
+      detail: t("visualCore.probing"),
       meta: runtimeMeta,
       showEnable: false,
     };
@@ -790,6 +798,7 @@ export default function JarvisHUD() {
     visualCoreRuntimeReason,
     visualCoreRuntimeStatus,
     visualCoreSwitchCount,
+    t,
   ]);
 
   useEffect(() => {
@@ -828,7 +837,7 @@ export default function JarvisHUD() {
   ]);
 
   useEffect(() => {
-    if (requestedWidgetsConsumedRef.current || !roleHydrated || typeof window === "undefined") {
+    if (requestedWidgetsConsumedRef.current || !hudHydrated || !roleHydrated || typeof window === "undefined") {
       return;
     }
 
@@ -840,7 +849,10 @@ export default function JarvisHUD() {
           requestedPlan.focus && allowed.includes(requestedPlan.focus)
             ? requestedPlan.focus
             : allowed[allowed.length - 1];
-        if (requestedPlan.replace && requestedPlan.activate === "all" && allowed.length > 1) {
+        if (requestedPlan.replace && allowed.length === 1) {
+          const viewport = measureHudViewport();
+          spotlightWidgetLayout(allowed[0] ?? focusWidget, viewport.width, viewport.height, 24);
+        } else if (requestedPlan.replace && requestedPlan.activate === "all" && allowed.length > 1) {
           const viewport = measureHudViewport();
           tileWidgetLayouts(allowed, viewport.width, viewport.height, 24);
         }
@@ -871,7 +883,7 @@ export default function JarvisHUD() {
     }
 
     requestedWidgetsConsumedRef.current = true;
-  }, [openWidgets, role, roleHydrated]);
+  }, [hudHydrated, openWidgets, requestedSearch, role, roleHydrated]);
 
   const coreScene = useStableVisualCoreScene({
     activeWidgets: roleFilteredWidgets,

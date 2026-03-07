@@ -12,6 +12,7 @@ const JarvisRequestSchema = z.object({
   prompt: z.string().min(1).max(8000),
   source: z.string().min(1).max(120).default('quick_command'),
   client_session_id: z.string().uuid().optional(),
+  target_hint: z.enum(['assistant']).optional(),
   provider: z.enum(['auto', 'openai', 'gemini', 'anthropic', 'local']).optional(),
   strict_provider: z.boolean().optional(),
   model: z.string().max(160).optional()
@@ -98,6 +99,7 @@ export async function jarvisRoutes(app: FastifyInstance, ctx: RouteContext) {
       prompt: parsed.data.prompt,
       source: parsed.data.source,
       clientSessionId: parsed.data.client_session_id,
+      targetHint: parsed.data.target_hint,
       provider: parsed.data.provider,
       strictProvider: parsed.data.strict_provider,
       model: parsed.data.model,

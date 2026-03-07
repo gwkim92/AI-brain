@@ -12,6 +12,7 @@ import { applySseCorsHeaders, createSpanId, truncateText } from './types';
 const ExecutionRunCreateSchema = z.object({
   mode: z.enum(['code', 'compute']),
   prompt: z.string().min(1).max(8000),
+  client_session_id: z.string().uuid().optional(),
   system_prompt: z.string().optional(),
   provider: z.enum(['auto', 'openai', 'gemini', 'anthropic', 'local']).optional(),
   exclude_providers: z.array(z.enum(['openai', 'gemini', 'anthropic', 'local'])).max(4).optional(),
@@ -156,6 +157,54 @@ export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): 
         });
       }
 
+      let linkedSession = null;
+      if (parsed.data.client_session_id) {
+        const title = parsed.data.task_title ?? truncateText(parsed.data.prompt, 180);
+        const existingSession = await store.getJarvisSessionById({ userId, sessionId: parsed.data.client_session_id });
+        if (existingSession) {
+          linkedSession =
+            (await store.updateJarvisSession({
+              sessionId: parsed.data.client_session_id,
+              userId,
+              title,
+              prompt: parsed.data.prompt,
+              status: 'running',
+              workspacePreset: 'execution',
+              primaryTarget: 'execution',
+              taskId,
+              executionRunId: run.id
+            })) ?? existingSession;
+        } else {
+          linkedSession = await store.createJarvisSession({
+            id: parsed.data.client_session_id,
+            userId,
+            title,
+            prompt: parsed.data.prompt,
+            source: 'execution_run_api',
+            intent: 'code',
+            status: 'running',
+            workspacePreset: 'execution',
+            primaryTarget: 'execution',
+            taskId,
+            executionRunId: run.id
+          });
+        }
+
+        await store.appendJarvisSessionEvent({
+          userId,
+          sessionId: linkedSession.id,
+          eventType: 'execution.run.created',
+          status: 'running',
+          summary: parsed.data.mode === 'code' ? 'Execution run prepared' : 'Compute run prepared',
+          data: {
+            execution_run_id: run.id,
+            task_id: taskId,
+            mode: parsed.data.mode,
+            idempotent_replay: false
+          }
+        });
+      }
+
       void (async () => {
         const startedAt = Date.now();
         try {
@@ -213,6 +262,28 @@ export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): 
             duration_ms: Date.now() - startedAt
           });
 
+          if (parsed.data.client_session_id) {
+            await store.updateJarvisSession({
+              sessionId: parsed.data.client_session_id,
+              userId,
+              status: 'completed',
+              taskId,
+              executionRunId: run.id
+            });
+            await store.appendJarvisSessionEvent({
+              userId,
+              sessionId: parsed.data.client_session_id,
+              eventType: 'execution.run.completed',
+              status: 'completed',
+              summary: 'Execution run completed',
+              data: {
+                execution_run_id: run.id,
+                task_id: taskId,
+                mode: parsed.data.mode
+              }
+            });
+          }
+
           if (taskId) {
             await store.setTaskStatus({
               taskId,
@@ -241,6 +312,29 @@ export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): 
             duration_ms: Date.now() - startedAt
           });
 
+          if (parsed.data.client_session_id) {
+            await store.updateJarvisSession({
+              sessionId: parsed.data.client_session_id,
+              userId,
+              status: 'failed',
+              taskId,
+              executionRunId: run.id
+            });
+            await store.appendJarvisSessionEvent({
+              userId,
+              sessionId: parsed.data.client_session_id,
+              eventType: 'execution.run.failed',
+              status: 'failed',
+              summary: 'Execution run failed',
+              data: {
+                execution_run_id: run.id,
+                task_id: taskId,
+                mode: parsed.data.mode,
+                error: reason
+              }
+            });
+          }
+
           if (taskId) {
             await store.setTaskStatus({
               taskId,
@@ -260,7 +354,16 @@ export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): 
       })();
 
       const latest = await store.getExecutionRunById(run.id);
-      return sendSuccess(reply, request, 202, withRunCredential(latest ?? run), { accepted: true });
+      return sendSuccess(
+        reply,
+        request,
+        202,
+        {
+          ...withRunCredential(latest ?? run),
+          session: linkedSession
+        },
+        { accepted: true }
+      );
     } catch (error) {
       return sendError(reply, request, 503, 'INTERNAL_ERROR', 'execution run failed', {
         reason: maskErrorForApi(error)

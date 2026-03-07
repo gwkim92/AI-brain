@@ -1,6 +1,9 @@
+"use client";
+
 import React from "react";
 import { RiskPill, RiskLevel } from "./RiskPill";
 import { ShieldAlert, Check, X } from "lucide-react";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
 interface ApprovalCardProps {
     id: string;
@@ -28,6 +31,7 @@ export function ApprovalCard({
     highlighted = false,
     containerId,
 }: ApprovalCardProps) {
+    const { t } = useLocale();
     const isHighRisk = risk === "high" || risk === "critical";
 
     return (
@@ -48,11 +52,11 @@ export function ApprovalCard({
 
                 <div className="grid grid-cols-2 gap-4 bg-black/40 p-3 rounded border border-white/5 font-mono text-[11px] text-white/50">
                     <div>
-                        <span className="block text-white/30 tracking-widest mb-1">CALLER TARGET</span>
+                        <span className="block text-white/30 tracking-widest mb-1">{t("approvalCard.callerTarget")}</span>
                         <span className="text-cyan-400">{requester}</span>
                     </div>
                     <div>
-                        <span className="block text-white/30 tracking-widest mb-1">IMPACT SCOPE</span>
+                        <span className="block text-white/30 tracking-widest mb-1">{t("approvalCard.impactScope")}</span>
                         <span className={isHighRisk ? "text-red-400" : "text-amber-400"}>{impact}</span>
                     </div>
                 </div>
@@ -64,14 +68,14 @@ export function ApprovalCard({
                     disabled={disabled}
                     className="flex-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-mono text-xs font-bold tracking-widest py-2 rounded transition-colors flex justify-center items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                    <Check size={14} /> AUTHORIZE
+                    <Check size={14} /> {t("approvalCard.authorize")}
                 </button>
                 <button
                     onClick={onReject}
                     disabled={disabled}
                     className="flex-1 bg-white/5 hover:bg-red-500/20 text-white/50 hover:text-red-400 border border-white/10 hover:border-red-500/30 font-mono text-xs font-bold tracking-widest py-2 rounded transition-colors flex justify-center items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                    <X size={14} /> REJECT
+                    <X size={14} /> {t("approvalCard.reject")}
                 </button>
             </div>
         </div>

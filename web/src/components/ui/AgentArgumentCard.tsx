@@ -1,5 +1,6 @@
 import React from "react";
 import { User, Activity, Scale, ShieldAlert } from "lucide-react";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
 export type AgentRole = "Planner" | "Researcher" | "Critic" | "Risk" | "Synthesizer";
 
@@ -11,6 +12,7 @@ interface AgentArgumentCardProps {
 }
 
 export function AgentArgumentCard({ role, stance, argument, confidence }: AgentArgumentCardProps) {
+    const { t } = useLocale();
     const getRoleIcon = () => {
         switch (role) {
             case "Planner": return <Activity size={16} />;
@@ -44,7 +46,7 @@ export function AgentArgumentCard({ role, stance, argument, confidence }: AgentA
                     <span className="font-mono font-bold tracking-widest text-xs uppercase">{role}</span>
                 </div>
                 <div className="flex items-center gap-2 font-mono text-[10px]">
-                    <span className="opacity-60">CONFIDENCE</span>
+                    <span className="opacity-60">{t("workbench.compute.confidence").toUpperCase()}</span>
                     <span className="font-bold">{confidence}%</span>
                 </div>
             </div>

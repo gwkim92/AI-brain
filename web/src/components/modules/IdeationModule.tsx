@@ -5,9 +5,11 @@ import { Lightbulb, Send, Copy, Sparkles, CheckCircle2 } from "lucide-react";
 
 import { MarkdownLite } from "@/components/ui/MarkdownLite";
 import { useHUD } from "@/components/providers/HUDProvider";
+import { useLocale } from "@/components/providers/LocaleProvider";
 import { buildMissionIntake, dispatchMissionIntake } from "@/lib/hud/mission-intake";
 import { inferHudIntent, resolveWorkspaceForIntent } from "@/lib/hud/intent-router";
 import type { HudWorkspacePreset } from "@/lib/hud/widget-presets";
+import type { AppLocale } from "@/lib/locale";
 import { publishSkillPrefill } from "@/lib/skills/prefill";
 
 type IdeationQuestionType = "pick_one" | "pick_many" | "rank" | "ask_text";
@@ -37,51 +39,203 @@ type PersistedIdeationSession = {
 };
 
 const IDEATION_STORAGE_KEY = "jarvis.ideation.session.v1";
+type IdeationBlueprint = {
+    id: "user_value" | "business_impact" | "architecture" | "go_to_market" | "governance" | "execution_plan";
+    title: string;
+    angle: string;
+    executionModes: string[];
+    risks: string[];
+    metrics: string[];
+};
 
-const BRANCH_BLUEPRINTS: Array<{ title: string; angle: string; executionModes: string[]; risks: string[]; metrics: string[] }> = [
+const IDEATION_BLUEPRINTS: Record<AppLocale, IdeationBlueprint[]> = {
+    ko: [
+        {
+            id: "user_value",
+            title: "사용자 가치",
+            angle: "사용자 효용과 당장 체감할 수 있는 가치",
+            executionModes: ["빠른 MVP", "기능 고도화", "기존 플로우 대체"],
+            risks: ["가치 전달 불명확", "온보딩 복잡도 증가", "핵심 사용 시나리오 누락"],
+            metrics: ["주간 활성 사용자", "첫 성공까지 시간", "재방문율"],
+        },
+        {
+            id: "business_impact",
+            title: "비즈니스 임팩트",
+            angle: "매출, 비용, 운영 효율 관점의 영향",
+            executionModes: ["비용 절감형", "매출 확장형", "리스크 완화형"],
+            risks: ["ROI 불확실성", "운영 부하 증가", "단기 성과 지연"],
+            metrics: ["전환율", "단위 비용", "운영 이슈 건수"],
+        },
+        {
+            id: "architecture",
+            title: "아키텍처",
+            angle: "기술 부채, 확장성, 장애 반경 관점",
+            executionModes: ["모놀리식 확장", "도메인 분리", "비동기 파이프라인"],
+            risks: ["복잡도 급증", "배포 위험 증가", "회귀 테스트 누락"],
+            metrics: ["실패율", "배포 리드타임", "복구 시간"],
+        },
+        {
+            id: "go_to_market",
+            title: "Go-To-Market",
+            angle: "출시 순서, 사용자 커뮤니케이션, 채택 전략",
+            executionModes: ["내부 파일럿", "초기 얼리어답터", "전면 롤아웃"],
+            risks: ["메시지 혼선", "채택 저조", "지원 리소스 부족"],
+            metrics: ["활성화율", "코호트 잔존", "지원 티켓 비율"],
+        },
+        {
+            id: "governance",
+            title: "거버넌스",
+            angle: "권한, 보안, 감사 추적, 운영 통제",
+            executionModes: ["강제 정책", "권고 정책", "단계적 정책"],
+            risks: ["권한 오남용", "감사 공백", "정책 우회"],
+            metrics: ["승인 지연 시간", "정책 위반 건수", "감사 적합성"],
+        },
+        {
+            id: "execution_plan",
+            title: "실행 계획",
+            angle: "현실적인 일정, 인력, 우선순위 관점",
+            executionModes: ["2주 스프린트", "4주 안정화", "병렬 트랙"],
+            risks: ["범위 확장", "의존성 지연", "리소스 부족"],
+            metrics: ["완료율", "지연률", "핵심 이슈 해결 속도"],
+        },
+    ],
+    en: [
+        {
+            id: "user_value",
+            title: "User Value",
+            angle: "Immediate user value and visible payoff",
+            executionModes: ["Fast MVP", "Capability upgrade", "Replace existing flow"],
+            risks: ["Weak value signal", "Onboarding complexity", "Missing core scenario"],
+            metrics: ["WAU", "Time to first success", "Return rate"],
+        },
+        {
+            id: "business_impact",
+            title: "Business Impact",
+            angle: "Revenue, cost, and operational efficiency impact",
+            executionModes: ["Cost reduction", "Revenue expansion", "Risk mitigation"],
+            risks: ["Unclear ROI", "Higher ops load", "Slow short-term payoff"],
+            metrics: ["Conversion rate", "Unit cost", "Ops issue count"],
+        },
+        {
+            id: "architecture",
+            title: "Architecture",
+            angle: "Technical debt, scalability, and blast radius",
+            executionModes: ["Monolith extension", "Domain split", "Async pipeline"],
+            risks: ["Complexity spike", "Deployment risk", "Missed regression tests"],
+            metrics: ["Failure rate", "Deployment lead time", "Recovery time"],
+        },
+        {
+            id: "go_to_market",
+            title: "Go-To-Market",
+            angle: "Launch sequence, user communication, and adoption strategy",
+            executionModes: ["Internal pilot", "Early adopters", "Full rollout"],
+            risks: ["Mixed messaging", "Low adoption", "Support gaps"],
+            metrics: ["Activation rate", "Cohort retention", "Support ticket ratio"],
+        },
+        {
+            id: "governance",
+            title: "Governance",
+            angle: "Permissions, security, auditability, and control",
+            executionModes: ["Enforced policy", "Advisory policy", "Phased policy"],
+            risks: ["Privilege misuse", "Audit gaps", "Policy bypass"],
+            metrics: ["Approval latency", "Policy violation count", "Audit readiness"],
+        },
+        {
+            id: "execution_plan",
+            title: "Execution Plan",
+            angle: "Realistic schedule, staffing, and prioritization",
+            executionModes: ["2-week sprint", "4-week stabilization", "Parallel tracks"],
+            risks: ["Scope creep", "Dependency delay", "Resource shortage"],
+            metrics: ["Completion rate", "Delay rate", "Critical issue resolution speed"],
+        },
+    ],
+};
+
+const IDEATION_COPY: Record<
+    AppLocale,
     {
-        title: "User Value",
-        angle: "사용자 효용과 당장 체감할 수 있는 가치",
-        executionModes: ["빠른 MVP", "기능 고도화", "기존 플로우 대체"],
-        risks: ["가치 전달 불명확", "온보딩 복잡도 증가", "핵심 사용 시나리오 누락"],
-        metrics: ["주간 활성 사용자", "첫 성공까지 시간", "재방문율"]
-    },
-    {
-        title: "Business Impact",
-        angle: "매출/비용/운영 효율 관점의 영향",
-        executionModes: ["비용 절감형", "매출 확장형", "리스크 완화형"],
-        risks: ["ROI 불확실성", "운영 부하 증가", "단기 성과 지연"],
-        metrics: ["전환율", "단위 비용", "운영 이슈 건수"]
-    },
-    {
-        title: "Architecture",
-        angle: "기술 부채, 확장성, 장애 반경 관점",
-        executionModes: ["모놀리식 확장", "도메인 분리", "비동기 파이프라인"],
-        risks: ["복잡도 급증", "배포 위험 증가", "회귀 테스트 누락"],
-        metrics: ["실패율", "배포 리드타임", "복구 시간"]
-    },
-    {
-        title: "Go-To-Market",
-        angle: "출시 순서, 사용자 커뮤니케이션, 채택 전략",
-        executionModes: ["내부 파일럿", "초기 얼리어답터", "전면 롤아웃"],
-        risks: ["메시지 혼선", "채택 저조", "지원 리소스 부족"],
-        metrics: ["활성화율", "코호트 잔존", "지원 티켓 비율"]
-    },
-    {
-        title: "Governance",
-        angle: "권한, 보안, 감사 추적, 운영 통제",
-        executionModes: ["강제 정책", "권고 정책", "단계적 정책"],
-        risks: ["권한 오남용", "감사 공백", "정책 우회"],
-        metrics: ["승인 지연 시간", "정책 위반 건수", "감사 적합성"]
-    },
-    {
-        title: "Execution Plan",
-        angle: "현실적인 일정/인력/우선순위 관점",
-        executionModes: ["2주 스프린트", "4주 안정화", "병렬 트랙"],
-        risks: ["범위 확장", "의존성 지연", "리소스 부족"],
-        metrics: ["완료율", "지연률", "핵심 이슈 해결 속도"]
+        questionPrimary: string;
+        questionRisk: string;
+        questionMetric: string;
+        questionConstraint: string;
+        answerNone: string;
+        answerMissingRisk: string;
+        answerMissingText: string;
+        synthesisTitle: string;
+        synthesisProblem: string;
+        synthesisProblemEmpty: string;
+        synthesisScoreboard: string;
+        synthesisBranch: string;
+        synthesisCompletion: string;
+        synthesisPrimaryBet: string;
+        synthesisTopRisk: string;
+        synthesisRecommendedWorkspace: string;
+        synthesisSuggestedNextAction: string;
+        synthesisSuggestedNextActionBody: string;
+        assistantIntro: string;
+        assistantGoal: string;
+        assistantRequirements: string;
+        assistantRequirement1: string;
+        assistantRequirement2: string;
+        assistantRequirement3: string;
+        assistantRequirement4: string;
     }
-];
+> = {
+    ko: {
+        questionPrimary: "이번 브랜치에서 가장 우선할 실행 타입은?",
+        questionRisk: "가장 우려되는 리스크를 복수 선택하세요.",
+        questionMetric: "성공 판단 지표 우선순위를 정하세요 (상위부터 클릭).",
+        questionConstraint: "이 브랜치에서 반드시 지켜야 할 제약/원칙을 서술하세요.",
+        answerNone: "미선택",
+        answerMissingRisk: "리스크 미입력",
+        answerMissingText: "미입력",
+        synthesisTitle: "Ideation Synthesis",
+        synthesisProblem: "Problem",
+        synthesisProblemEmpty: "문제 정의 없음",
+        synthesisScoreboard: "Branch Scoreboard",
+        synthesisBranch: "Branch",
+        synthesisCompletion: "Completion",
+        synthesisPrimaryBet: "Primary Bet",
+        synthesisTopRisk: "Top Risk",
+        synthesisRecommendedWorkspace: "Recommended Workspace",
+        synthesisSuggestedNextAction: "Suggested Next Action",
+        synthesisSuggestedNextActionBody: "선택된 우선순위를 기준으로 2주 단위 실행 계획을 만들고, 리스크 완화 항목을 승인 게이트에 연결하세요.",
+        assistantIntro: "다음은 브랜치 기반 ideation 결과다.",
+        assistantGoal: '목표는 "실행 가능한 제품 계획"으로 수렴하는 것이다.',
+        assistantRequirements: "요구사항:",
+        assistantRequirement1: "1. 2주 단위 실행 플랜을 작성한다.",
+        assistantRequirement2: "2. 각 단계별 owner/입력/산출물/검증 기준을 명시한다.",
+        assistantRequirement3: "3. 리스크 완화 조치와 승인 필요 지점을 표시한다.",
+        assistantRequirement4: "4. 우선순위 변경 조건(트리거)을 명시한다.",
+    },
+    en: {
+        questionPrimary: "Which execution mode should this branch prioritize first?",
+        questionRisk: "Select the biggest risks for this branch.",
+        questionMetric: "Rank the success metrics from highest priority downward.",
+        questionConstraint: "Describe the constraints or principles this branch must preserve.",
+        answerNone: "Not selected",
+        answerMissingRisk: "No risk entered",
+        answerMissingText: "No input",
+        synthesisTitle: "Ideation Synthesis",
+        synthesisProblem: "Problem",
+        synthesisProblemEmpty: "No problem defined",
+        synthesisScoreboard: "Branch Scoreboard",
+        synthesisBranch: "Branch",
+        synthesisCompletion: "Completion",
+        synthesisPrimaryBet: "Primary Bet",
+        synthesisTopRisk: "Top Risk",
+        synthesisRecommendedWorkspace: "Recommended Workspace",
+        synthesisSuggestedNextAction: "Suggested Next Action",
+        synthesisSuggestedNextActionBody: "Turn the selected priorities into a 2-week execution plan and connect risk mitigation steps to approval gates.",
+        assistantIntro: "Below is a branch-based ideation result.",
+        assistantGoal: 'The goal is to converge on an "execution-ready product plan".',
+        assistantRequirements: "Requirements:",
+        assistantRequirement1: "1. Write a 2-week execution plan.",
+        assistantRequirement2: "2. Specify owner, inputs, outputs, and validation criteria for each stage.",
+        assistantRequirement3: "3. Mark risk mitigation steps and approval gates.",
+        assistantRequirement4: "4. Define the trigger conditions that would change priority.",
+    },
+};
 
 function createQuestion(branchId: string, index: number, title: string, type: IdeationQuestionType, options: string[]): IdeationQuestion {
     return {
@@ -92,19 +246,21 @@ function createQuestion(branchId: string, index: number, title: string, type: Id
     };
 }
 
-function buildBranches(problem: string, branchCount: number): IdeationBranch[] {
+function buildBranches(problem: string, branchCount: number, locale: AppLocale): IdeationBranch[] {
+    const blueprints = IDEATION_BLUEPRINTS[locale];
+    const copy = IDEATION_COPY[locale];
     const lower = problem.toLowerCase();
     const startsWithCodeBias = /api|oauth|model|trace|worker|retry|backend|frontend|ux|ui|코드|아키텍처|인증/u.test(lower);
     const startsWithMarketBias = /시장|매출|영업|마케팅|유저 획득|growth|gtm|pricing/u.test(lower);
 
-    const ordered = [...BRANCH_BLUEPRINTS].sort((left, right) => {
+    const ordered = [...blueprints].sort((left, right) => {
         if (startsWithCodeBias) {
-            if (left.title === "Architecture") return -1;
-            if (right.title === "Architecture") return 1;
+            if (left.id === "architecture") return -1;
+            if (right.id === "architecture") return 1;
         }
         if (startsWithMarketBias) {
-            if (left.title === "Go-To-Market") return -1;
-            if (right.title === "Go-To-Market") return 1;
+            if (left.id === "go_to_market") return -1;
+            if (right.id === "go_to_market") return 1;
         }
         return 0;
     });
@@ -119,28 +275,28 @@ function buildBranches(problem: string, branchCount: number): IdeationBranch[] {
                 createQuestion(
                     branchId,
                     1,
-                    "이번 브랜치에서 가장 우선할 실행 타입은?",
+                    copy.questionPrimary,
                     "pick_one",
                     blueprint.executionModes
                 ),
                 createQuestion(
                     branchId,
                     2,
-                    "가장 우려되는 리스크를 복수 선택하세요.",
+                    copy.questionRisk,
                     "pick_many",
                     blueprint.risks
                 ),
                 createQuestion(
                     branchId,
                     3,
-                    "성공 판단 지표 우선순위를 정하세요 (상위부터 클릭).",
+                    copy.questionMetric,
                     "rank",
                     blueprint.metrics
                 ),
                 createQuestion(
                     branchId,
                     4,
-                    "이 브랜치에서 반드시 지켜야 할 제약/원칙을 서술하세요.",
+                    copy.questionConstraint,
                     "ask_text",
                     []
                 )
@@ -157,11 +313,12 @@ function isQuestionAnswered(question: IdeationQuestion): boolean {
     return false;
 }
 
-function resolveQuestionAnswerSummary(question: IdeationQuestion): string {
-    if (question.type === "pick_one") return question.answerOne?.trim() || "미선택";
-    if (question.type === "pick_many") return question.answerMany && question.answerMany.length > 0 ? question.answerMany.join(", ") : "미선택";
-    if (question.type === "rank") return question.answerRank && question.answerRank.length > 0 ? question.answerRank.join(" > ") : "미선택";
-    return question.answerText?.trim() || "미입력";
+function resolveQuestionAnswerSummary(question: IdeationQuestion, locale: AppLocale): string {
+    const copy = IDEATION_COPY[locale];
+    if (question.type === "pick_one") return question.answerOne?.trim() || copy.answerNone;
+    if (question.type === "pick_many") return question.answerMany && question.answerMany.length > 0 ? question.answerMany.join(", ") : copy.answerNone;
+    if (question.type === "rank") return question.answerRank && question.answerRank.length > 0 ? question.answerRank.join(" > ") : copy.answerNone;
+    return question.answerText?.trim() || copy.answerMissingText;
 }
 
 function escapeTableCell(value: string): string {
@@ -169,25 +326,26 @@ function escapeTableCell(value: string): string {
 }
 
 function mapPresetLabel(preset: HudWorkspacePreset): string {
-    if (preset === "studio_code") return "Code Studio";
-    if (preset === "studio_research") return "Research Studio";
-    if (preset === "studio_intelligence") return "Intelligence Studio";
-    return "Mission Control";
+    if (preset === "studio_code") return "studio_code";
+    if (preset === "studio_research") return "studio_research";
+    if (preset === "studio_intelligence") return "studio_intelligence";
+    return "mission_control";
 }
 
-function buildIdeationSynthesis(problem: string, branches: IdeationBranch[]): {
+function buildIdeationSynthesis(problem: string, branches: IdeationBranch[], locale: AppLocale, recommendedPresetLabel: string): {
     markdown: string;
     assistantPrompt: string;
     recommendedPreset: HudWorkspacePreset;
 } {
+    const copy = IDEATION_COPY[locale];
     const intent = inferHudIntent(problem);
     const recommendedPreset = resolveWorkspaceForIntent(intent);
 
     const branchRows = branches.map((branch) => {
         const answered = branch.questions.filter((question) => isQuestionAnswered(question)).length;
         const score = Math.round((answered / branch.questions.length) * 100);
-        const firstChoice = branch.questions.find((q) => q.type === "pick_one")?.answerOne ?? "미선택";
-        const topRisk = branch.questions.find((q) => q.type === "pick_many")?.answerMany?.[0] ?? "리스크 미입력";
+        const firstChoice = branch.questions.find((q) => q.type === "pick_one")?.answerOne ?? copy.answerNone;
+        const topRisk = branch.questions.find((q) => q.type === "pick_many")?.answerMany?.[0] ?? copy.answerMissingRisk;
         return {
             title: branch.title,
             score,
@@ -197,18 +355,18 @@ function buildIdeationSynthesis(problem: string, branches: IdeationBranch[]): {
     });
 
     const keyInsights = branches.map((branch) => {
-        const answers = branch.questions.map((question) => `- ${question.title}: ${resolveQuestionAnswerSummary(question)}`).join("\n");
+        const answers = branch.questions.map((question) => `- ${question.title}: ${resolveQuestionAnswerSummary(question, locale)}`).join("\n");
         return `### ${branch.title}\n${answers}`;
     });
 
     const markdown = [
-        `## Ideation Synthesis`,
+        `## ${copy.synthesisTitle}`,
         ``,
-        `### Problem`,
-        `${problem.trim() || "문제 정의 없음"}`,
+        `### ${copy.synthesisProblem}`,
+        `${problem.trim() || copy.synthesisProblemEmpty}`,
         ``,
-        `### Branch Scoreboard`,
-        `| Branch | Completion | Primary Bet | Top Risk |`,
+        `### ${copy.synthesisScoreboard}`,
+        `| ${copy.synthesisBranch} | ${copy.synthesisCompletion} | ${copy.synthesisPrimaryBet} | ${copy.synthesisTopRisk} |`,
         `|---|---:|---|---|`,
         ...branchRows.map((row) =>
             `| ${escapeTableCell(row.title)} | ${row.score}% | ${escapeTableCell(row.firstChoice)} | ${escapeTableCell(row.topRisk)} |`
@@ -216,24 +374,24 @@ function buildIdeationSynthesis(problem: string, branches: IdeationBranch[]): {
         ``,
         ...keyInsights,
         ``,
-        `### Recommended Workspace`,
-        `- ${mapPresetLabel(recommendedPreset)} (${recommendedPreset})`,
+        `### ${copy.synthesisRecommendedWorkspace}`,
+        `- ${recommendedPresetLabel} (${recommendedPreset})`,
         ``,
-        `### Suggested Next Action`,
-        `- 선택된 우선순위를 기준으로 2주 단위 실행 계획을 만들고, 리스크 완화 항목을 승인 게이트에 연결하세요.`
+        `### ${copy.synthesisSuggestedNextAction}`,
+        `- ${copy.synthesisSuggestedNextActionBody}`
     ].join("\n");
 
     const assistantPrompt = [
-        `다음은 브랜치 기반 ideation 결과다.`,
-        `목표는 "실행 가능한 제품 계획"으로 수렴하는 것이다.`,
+        copy.assistantIntro,
+        copy.assistantGoal,
         ``,
         markdown,
         ``,
-        `요구사항:`,
-        `1. 2주 단위 실행 플랜을 작성한다.`,
-        `2. 각 단계별 owner/입력/산출물/검증 기준을 명시한다.`,
-        `3. 리스크 완화 조치와 승인 필요 지점을 표시한다.`,
-        `4. 우선순위 변경 조건(트리거)을 명시한다.`
+        copy.assistantRequirements,
+        copy.assistantRequirement1,
+        copy.assistantRequirement2,
+        copy.assistantRequirement3,
+        copy.assistantRequirement4,
     ].join("\n");
 
     return { markdown, assistantPrompt, recommendedPreset };
@@ -260,6 +418,7 @@ function loadInitialIdeationSession(): PersistedIdeationSession | null {
 }
 
 export function IdeationModule() {
+    const { t, locale } = useLocale();
     const { openWidgets } = useHUD();
     const [initialSession] = useState<PersistedIdeationSession | null>(() => loadInitialIdeationSession());
     const [problem, setProblem] = useState(() => initialSession?.problem ?? "");
@@ -292,7 +451,12 @@ export function IdeationModule() {
         };
     }, [branches]);
 
-    const synthesis = useMemo(() => buildIdeationSynthesis(problem, branches), [problem, branches]);
+    const recommendedPreset = useMemo(() => resolveWorkspaceForIntent(inferHudIntent(problem)), [problem]);
+    const recommendedPresetLabel = t(`ideation.preset.${mapPresetLabel(recommendedPreset)}` as never);
+    const synthesis = useMemo(
+        () => buildIdeationSynthesis(problem, branches, locale, recommendedPresetLabel),
+        [branches, locale, problem, recommendedPresetLabel]
+    );
 
     const resetAll = useCallback(() => {
         setProblem("");
@@ -302,9 +466,9 @@ export function IdeationModule() {
     }, []);
 
     const createBranches = useCallback(() => {
-        const next = buildBranches(problem, branchCount);
+        const next = buildBranches(problem, branchCount, locale);
         setBranches(next);
-    }, [branchCount, problem]);
+    }, [branchCount, locale, problem]);
 
     const updateQuestion = useCallback((branchId: string, questionId: string, patch: Partial<IdeationQuestion>) => {
         setBranches((prev) =>
@@ -407,16 +571,16 @@ export function IdeationModule() {
                             <Lightbulb size={16} />
                         </span>
                         <div>
-                            <p className="text-[11px] font-mono tracking-widest text-emerald-300">IDEATION LAB</p>
-                            <p className="text-xs text-white/60">Branch-driven exploration for product and execution strategy</p>
+                            <p className="text-[11px] font-mono tracking-widest text-emerald-300">{t("ideation.title").toUpperCase()}</p>
+                            <p className="text-xs text-white/60">{t("ideation.subtitle")}</p>
                         </div>
                     </div>
                     <div className="flex items-center gap-2 text-[11px] font-mono text-white/60">
                         <span className="rounded border border-white/15 bg-black/40 px-2 py-1">
-                            Completion {completion.ratio}% ({completion.answered}/{completion.total})
+                            {t("ideation.completion", { ratio: completion.ratio, answered: completion.answered, total: completion.total })}
                         </span>
                         <span className="rounded border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-cyan-200">
-                            Recommend {mapPresetLabel(synthesis.recommendedPreset)}
+                            {t("ideation.recommend", { value: recommendedPresetLabel })}
                         </span>
                     </div>
                 </div>
@@ -425,13 +589,13 @@ export function IdeationModule() {
                     <textarea
                         value={problem}
                         onChange={(event) => setProblem(event.target.value)}
-                        placeholder="탐색할 문제를 입력하세요. 예: 멀티 Provider 인증 + 모델 제어 UX를 유저 친화적으로 재설계하고 싶다."
+                        placeholder={t("ideation.problemPlaceholder")}
                         rows={3}
                         className="w-full rounded-lg border border-white/15 bg-black/45 px-3 py-2 text-sm text-white/85 placeholder:text-white/35 focus:border-emerald-500/45 focus:outline-none"
                     />
                     <div className="flex items-end gap-2">
                         <label className="text-[11px] font-mono text-white/60">
-                            Branches
+                            {t("ideation.branches")}
                             <input
                                 type="number"
                                 min={2}
@@ -447,14 +611,14 @@ export function IdeationModule() {
                             disabled={problem.trim().length < 8}
                             className="rounded border border-emerald-500/40 bg-emerald-500/20 px-3 py-2 text-[11px] font-mono tracking-widest text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-40"
                         >
-                            BUILD BRANCHES
+                            {t("ideation.buildBranches")}
                         </button>
                         <button
                             type="button"
                             onClick={resetAll}
                             className="rounded border border-white/20 bg-black/40 px-3 py-2 text-[11px] font-mono tracking-widest text-white/70 hover:text-white"
                         >
-                            RESET
+                            {t("common.reset")}
                         </button>
                     </div>
                 </div>
@@ -464,8 +628,8 @@ export function IdeationModule() {
                 <div className="space-y-3">
                     {branches.length === 0 && (
                         <div className="rounded-xl border border-white/10 bg-black/25 p-4 text-sm text-white/60">
-                            문제를 입력하고 <span className="font-mono text-emerald-300">BUILD BRANCHES</span>를 누르면
-                            `pick_one / pick_many / rank / ask_text` 질문 세트가 생성됩니다.
+                            {t("ideation.emptyLead")} <span className="font-mono text-emerald-300">{t("ideation.buildBranches").toUpperCase()}</span>
+                            {` ${t("ideation.empty")}`}
                         </div>
                     )}
                     {branches.map((branch) => {
@@ -555,7 +719,7 @@ export function IdeationModule() {
                                                     </div>
                                                     {question.answerRank && question.answerRank.length > 0 && (
                                                         <p className="text-[11px] text-white/60">
-                                                            Rank: {question.answerRank.join(" > ")}
+                                                            {t("ideation.rankLabel")}: {question.answerRank.join(" > ")}
                                                         </p>
                                                     )}
                                                 </div>
@@ -569,7 +733,7 @@ export function IdeationModule() {
                                                             answerText: event.target.value
                                                         })
                                                     }
-                                                    placeholder="핵심 제약/원칙을 입력하세요."
+                                                    placeholder={t("ideation.textPlaceholder")}
                                                     className="mt-2 w-full rounded border border-white/15 bg-black/45 px-2 py-1.5 text-xs text-white/80 placeholder:text-white/35"
                                                 />
                                             )}
@@ -583,7 +747,7 @@ export function IdeationModule() {
 
                 <aside className="space-y-3">
                     <div className="rounded-xl border border-cyan-500/25 bg-black/35 p-4">
-                        <p className="text-[10px] font-mono tracking-widest text-cyan-300">SYNTHESIS PREVIEW</p>
+                            <p className="text-[10px] font-mono tracking-widest text-cyan-300">{t("ideation.synthesisPreview")}</p>
                         <div className="mt-3 max-h-[34rem] overflow-y-auto pr-1 text-sm">
                             <MarkdownLite content={synthesis.markdown} className="space-y-3 text-white/80" />
                         </div>
@@ -597,7 +761,7 @@ export function IdeationModule() {
                             className="flex w-full items-center justify-center gap-2 rounded border border-emerald-500/45 bg-emerald-500/20 px-3 py-2 text-[11px] font-mono tracking-widest text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-40"
                         >
                             <Send size={13} />
-                            SEND TO ASSISTANT
+                            {t("ideation.sendToAssistant")}
                         </button>
                         <button
                             type="button"
@@ -606,7 +770,7 @@ export function IdeationModule() {
                             className="flex w-full items-center justify-center gap-2 rounded border border-white/20 bg-black/45 px-3 py-2 text-[11px] font-mono tracking-widest text-white/75 hover:text-white disabled:opacity-40"
                         >
                             {copied ? <CheckCircle2 size={13} /> : <Copy size={13} />}
-                            {copied ? "COPIED" : "COPY MARKDOWN"}
+                            {copied ? t("ideation.copied") : t("ideation.copyMarkdown")}
                         </button>
                         <button
                             type="button"
@@ -615,24 +779,24 @@ export function IdeationModule() {
                             className="flex w-full items-center justify-center gap-2 rounded border border-cyan-500/35 bg-cyan-500/10 px-3 py-2 text-[11px] font-mono tracking-widest text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-40"
                         >
                             <Sparkles size={13} />
-                            SEND TO SKILLS
+                            {t("ideation.sendToSkills")}
                         </button>
                         <p className="pt-1 text-[11px] text-white/55">
-                            Branch exploration 결과를 Assistant 또는 Skills 실행 프롬프트로 전환합니다.
+                            {t("ideation.assistantHint")}
                         </p>
                     </div>
 
                     <div className="rounded-xl border border-fuchsia-500/20 bg-fuchsia-500/10 p-4 text-[11px] text-fuchsia-100/85">
-                        <p className="font-mono tracking-widest text-fuchsia-200">PATTERN NOTES</p>
+                        <p className="font-mono tracking-widest text-fuchsia-200">{t("ideation.patternNotes")}</p>
                         <ul className="mt-2 space-y-1 text-white/75">
-                            <li>- Octto: branch-based interactive questioning</li>
-                            <li>- Micode: continuity persistence + synthesis handoff</li>
-                            <li>- Oh My OpenCode: workflow template to execution prompt</li>
-                            <li>- MD Table Formatter: structured table output normalization</li>
+                            <li>- {t("ideation.note.octto")}</li>
+                            <li>- {t("ideation.note.micode")}</li>
+                            <li>- {t("ideation.note.ohMyOpenCode")}</li>
+                            <li>- {t("ideation.note.mdTableFormatter")}</li>
                         </ul>
                         <div className="mt-2 inline-flex items-center gap-1 rounded border border-fuchsia-400/30 px-2 py-1 text-[10px] font-mono tracking-widest text-fuchsia-200">
                             <Sparkles size={12} />
-                            UX TRACK ENABLED
+                            {t("ideation.uxTrackEnabled")}
                         </div>
                     </div>
                 </aside>

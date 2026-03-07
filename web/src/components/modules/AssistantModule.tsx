@@ -10,6 +10,7 @@ import {
     aiRespond,
     appendAssistantContextEvent,
     createAssistantContext,
+    createJarvisRequest,
     getAssistantContext,
     getAssistantContextGroundingEvidence,
     getJarvisSession,
@@ -19,6 +20,7 @@ import {
     listProviderModels,
     listProviders,
     runAssistantContext,
+    runAssistantContextWithMeta,
     streamAssistantContextEvents,
     type AssistantContextEventsStream,
     updateAssistantContext,
@@ -59,11 +61,15 @@ import type {
     ProviderAvailability,
     ProviderModelCatalogEntry,
     RuntimeSelectedCredential,
+    WatcherKind,
 } from "@/lib/api/types";
 import { subscribeMissionIntake, subscribeMissionIntakeTaskLink, type MissionIntakePayload } from "@/lib/hud/mission-intake";
+import { dispatchJarvisDataRefresh } from "@/lib/hud/data-refresh";
 import { useHUD } from "@/components/providers/HUDProvider";
+import { useLocale } from "@/components/providers/LocaleProvider";
 import { emitRuntimeEvent } from "@/lib/runtime-events";
 import { isFeatureEnabled } from "@/lib/feature-flags";
+import type { TranslationKey } from "@/lib/locale";
 
 type MessageRoute = "system" | "manual" | "auto_context";
 
@@ -116,6 +122,7 @@ const STALE_AUTO_CONTEXT_ERROR_CODE = "server_state_lost";
 const STALE_AUTO_CONTEXT_ERROR_CODES = new Set([STALE_AUTO_CONTEXT_ERROR_CODE, "SERVER_RUN_STATE_LOST"]);
 const STALE_AUTO_CONTEXT_MESSAGE = "Server state was lost for this run. Re-run this session.";
 const AUTO_CONTEXT_STALE_TIMEOUT_MS = 45_000;
+const SESSION_LAUNCH_HIGHLIGHT_MS = 90_000;
 
 function isStaleAutoContext(context: AutoMissionContext): boolean {
     return typeof context.error === "string" && STALE_AUTO_CONTEXT_ERROR_CODES.has(context.error);
@@ -480,8 +487,60 @@ function formatElapsedShort(startedAt: string, nowMs: number): string | null {
     return `${minutes}m ${seconds}s`;
 }
 
+function describeSessionEntry(
+    t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+    source?: string | null
+): string {
+    if (source === "inbox_quick_command") {
+        return t("assistant.entry.commandBar");
+    }
+    if (source === "assistant_manual") {
+        return t("assistant.entry.assistant");
+    }
+    if (source === "watcher_run") {
+        return t("assistant.entry.watcher");
+    }
+    return t("assistant.entry.default");
+}
+
+function describePrimaryTarget(
+    t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+    target?: JarvisSessionDetail["session"]["primaryTarget"]
+): string {
+    if (target === "dossier") return t("assistant.target.dossier");
+    if (target === "council") return t("assistant.target.council");
+    if (target === "mission") return t("assistant.target.mission");
+    if (target === "execution") return t("assistant.target.execution");
+    return t("assistant.target.default");
+}
+
+function inferWatcherKindFromPrompt(prompt: string): WatcherKind {
+    if (/(전쟁|war|분쟁|중동|우크라|가자|iran|israel|lebanon)/iu.test(prompt)) {
+        return "war_region";
+    }
+    if (/(시장|macro|거시|환율|금리|주식|시장 동향|market|stocks|fx)/iu.test(prompt)) {
+        return "market";
+    }
+    if (/(repo|repository|깃허브|github|코드베이스)/iu.test(prompt)) {
+        return "repo";
+    }
+    if (/(회사|기업|브랜드|company)/iu.test(prompt)) {
+        return "company";
+    }
+    return "external_topic";
+}
+
+function buildDossierSplitHref(dossierId: string): string {
+    return `/?widgets=assistant,tasks,dossier&focus=dossier&replace=1&activation=all&dossier=${encodeURIComponent(dossierId)}`;
+}
+
+function buildWatcherPrefillHref(title: string, query: string, kind: WatcherKind): string {
+    return `/?widgets=assistant,tasks,watchers&focus=watchers&replace=1&activation=all&watcher_title=${encodeURIComponent(title)}&watcher_query=${encodeURIComponent(query)}&watcher_kind=${encodeURIComponent(kind)}`;
+}
+
 export function AssistantModule() {
-    const { sessions, activeSessionId, markSessionContextDelivered, updateSessionStaleState } = useHUD();
+    const { t } = useLocale();
+    const { sessions, activeSessionId, startSession, linkSessionTask, markSessionContextDelivered, updateSessionStaleState } = useHUD();
     const [inputVal, setInputVal] = useState("");
     const [messages, setMessages] = useState<ChatMessage[]>(() => defaultMessages());
     const [runRecords, setRunRecords] = useState<RunRecord[]>([]);
@@ -536,6 +595,21 @@ export function AssistantModule() {
         () => isFeatureEnabled("assistant.exactly_once_delivery", true),
         []
     );
+    const sessionLaunchCard = useMemo(() => {
+        const session = jarvisSessionDetail?.session;
+        if (!session) return null;
+        const ageLabel = formatElapsedShort(session.createdAt, Date.now());
+        const isFresh = Date.now() - Date.parse(session.createdAt) <= SESSION_LAUNCH_HIGHLIGHT_MS;
+        return {
+            id: session.id.slice(0, 8),
+            entry: describeSessionEntry(t, session.source),
+            lane: describePrimaryTarget(t, session.primaryTarget),
+            status: session.status,
+            target: session.primaryTarget,
+            ageLabel,
+            isFresh,
+        };
+    }, [jarvisSessionDetail, t]);
     const qualitySoftGateEnabled = useMemo(
         () => isFeatureEnabled("assistant.quality_soft_gate_v2", true),
         []
@@ -627,7 +701,7 @@ export function AssistantModule() {
                 if (error instanceof ApiRequestError) {
                     setJarvisSessionError(`${error.code}: ${error.message}`);
                 } else {
-                    setJarvisSessionError("failed to load jarvis session detail");
+                    setJarvisSessionError(t("assistant.error.loadSession"));
                 }
                 setJarvisSessionDetail(null);
             }
@@ -642,7 +716,7 @@ export function AssistantModule() {
             cancelled = true;
             window.clearInterval(intervalId);
         };
-    }, [activeSessionId]);
+    }, [activeSessionId, t]);
 
     const syncAutoContexts = useCallback(async () => {
         try {
@@ -1086,7 +1160,7 @@ export function AssistantModule() {
                     submitted: true,
                 }));
             } catch (err) {
-                const message = err instanceof ApiRequestError ? `${err.code}: ${err.message}` : "feedback submit failed";
+                const message = err instanceof ApiRequestError ? `${err.code}: ${err.message}` : t("assistant.error.feedback");
                 updateAutoContextFeedback(context.id, (current) => ({
                     ...current,
                     submitting: false,
@@ -1094,7 +1168,7 @@ export function AssistantModule() {
                 }));
             }
         },
-        [autoContextFeedback, updateAutoContextFeedback]
+        [autoContextFeedback, t, updateAutoContextFeedback]
     );
 
     const submitInlineAutoContextFeedback = useCallback(
@@ -1139,7 +1213,7 @@ export function AssistantModule() {
                     submitted: true,
                 }));
             } catch (err) {
-                const message = err instanceof ApiRequestError ? `${err.code}: ${err.message}` : "feedback submit failed";
+                const message = err instanceof ApiRequestError ? `${err.code}: ${err.message}` : t("assistant.error.feedback");
                 updateAutoContextFeedback(clientContextId, (draft) => ({
                     ...draft,
                     answerQuality: dimension === "answer" ? signal : draft.answerQuality,
@@ -1149,7 +1223,7 @@ export function AssistantModule() {
                 }));
             }
         },
-        [autoContextFeedback, updateAutoContextFeedback]
+        [autoContextFeedback, t, updateAutoContextFeedback]
     );
 
     const hydrateAutoContextEvents = useCallback(async (serverContextId: string, clientContextId: string, cacheKey: string) => {
@@ -1395,6 +1469,19 @@ export function AssistantModule() {
         return payload;
     }, [modelOverride, selectedProvider, strictProvider]);
 
+    const writeSessionMessages = useCallback(
+        (sessionId: string, updater: (current: ChatMessage[]) => ChatMessage[]) => {
+            const current = sessionMessageStoreRef.current[sessionId] ?? defaultMessages();
+            const nextMessages = pruneSessionMessages(updater(current));
+            sessionMessageStoreRef.current[sessionId] = nextMessages;
+            persistStoredSessionMessages(sessionMessageStoreRef.current);
+            pendingSessionPersistSkipRef.current = sessionId;
+            activeMessageSessionRef.current = sessionId;
+            setMessages(nextMessages);
+        },
+        []
+    );
+
     const toRunTimeline = useCallback((result: AiRespondData, runIndex: number, runCount: number): ToolCall[] => {
         const runPrefix = runLabel(runIndex, runCount);
         const timelineIdPrefix = `${Date.now()}_${runIndex}`;
@@ -1548,7 +1635,7 @@ export function AssistantModule() {
             const message =
                 err instanceof ApiRequestError
                     ? `${err.code}: ${err.message}`
-                    : "failed to create /api/v1/assistant/contexts";
+                    : t("assistant.error.createContext");
             setAutoContexts((prev) =>
                 prev.map((item) =>
                     item.id === payload.id
@@ -1603,32 +1690,99 @@ export function AssistantModule() {
         } finally {
             autoContextBootstrapInFlightRef.current.delete(payload.id);
         }
-    }, [buildRequestPayload, rememberContextSessionLink, syncAutoContextsWithRetry]);
+    }, [buildRequestPayload, rememberContextSessionLink, syncAutoContextsWithRetry, t]);
 
     const executePrompt = useCallback(async (prompt: string, options?: { auto?: boolean; autoStatus?: string }) => {
         const normalizedPrompt = prompt.trim();
         const promptLabel = options?.auto ? `${normalizedPrompt}\n\n(auto intake)` : normalizedPrompt;
         const promptStatus = options?.auto ? options.autoStatus ?? "AUTO INTAKE" : undefined;
         const runCount = options?.auto ? 1 : parallelRuns;
+        const useManualJarvisSession = !options?.auto && runCount === 1;
         const requestedModel = modelOverride.trim() || null;
 
         if (!normalizedPrompt || isRunning) return;
 
         setIsRunning(true);
         const pendingRuns = createPendingRuns(runCount, requestedModel);
-        setRunRecords(pendingRuns);
-        setActiveRunIndex(0);
-        setMessages((prev) => [
-            ...prev,
-            {
-                role: "user",
-                content: runCount > 1 ? `${promptLabel}\n\n(parallel runs: ${runCount})` : promptLabel,
-                status: promptStatus,
-            },
-        ]);
+        if (!useManualJarvisSession) {
+            setRunRecords(pendingRuns);
+            setActiveRunIndex(0);
+            setMessages((prev) => [
+                ...prev,
+                {
+                    role: "user",
+                    content: runCount > 1 ? `${promptLabel}\n\n(parallel runs: ${runCount})` : promptLabel,
+                    status: promptStatus,
+                },
+            ]);
+        }
         const requestPayload = buildRequestPayload(normalizedPrompt);
 
         try {
+            if (useManualJarvisSession) {
+                const manualSessionId = startSession(normalizedPrompt, {
+                    intent: "general",
+                    focusedWidget: "assistant",
+                });
+                dispatchJarvisDataRefresh({ scope: "sessions", source: "assistant-manual:start-session" });
+                const manualRunNonce =
+                    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+                        ? `assistant_${crypto.randomUUID()}`
+                        : `assistant_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
+                writeSessionMessages(manualSessionId, () => [
+                    buildSystemMessage(),
+                    {
+                        role: "user",
+                        content: promptLabel,
+                        status: promptStatus,
+                        route: "manual",
+                        promptRef: normalizedPrompt,
+                    },
+                ]);
+                setRunRecords([]);
+                setActiveRunIndex(0);
+
+                const sessionResult = await createJarvisRequest({
+                    prompt: normalizedPrompt,
+                    source: "assistant_manual",
+                    client_session_id: manualSessionId,
+                    target_hint: "assistant",
+                    provider: requestPayload.provider,
+                    strict_provider: requestPayload.strict_provider,
+                    model: requestPayload.model,
+                });
+                dispatchJarvisDataRefresh({ scope: "sessions", source: "assistant-manual:jarvis-request" });
+
+                if (sessionResult.delegation.task_id) {
+                    linkSessionTask(manualSessionId, sessionResult.delegation.task_id);
+                    dispatchJarvisDataRefresh({ scope: "tasks", source: "assistant-manual:task-linked" });
+                }
+
+                const contextId = sessionResult.delegation.assistant_context_id;
+                if (!contextId) {
+                    throw new Error(t("assistant.error.contextMissing"));
+                }
+
+                rememberContextSessionLink(manualSessionId, manualSessionId);
+                rememberContextSessionLink(contextId, manualSessionId);
+                autoContextStartedThisSessionRef.current.add(manualSessionId);
+                autoContextDeliveredRevisionRef.current.delete(manualSessionId);
+
+                const accepted = await runAssistantContextWithMeta(contextId, {
+                    provider: requestPayload.provider,
+                    strict_provider: requestPayload.strict_provider,
+                    model: requestPayload.model,
+                    task_type: requestPayload.task_type,
+                    client_run_nonce: manualRunNonce,
+                });
+
+                rememberContextSessionLink(accepted.context.id, manualSessionId);
+                rememberContextSessionLink(accepted.context.clientContextId, manualSessionId);
+                setAutoContexts((prev) => mergeAutoContexts(prev, [toAutoContextFromServer(accepted.context)]));
+                return;
+            }
+
             if (runCount <= 1) {
                 const result = await aiRespond(requestPayload);
                 const resolvedGateResult = resolveQualityGateResult({
@@ -1787,6 +1941,21 @@ export function AssistantModule() {
         } catch (err) {
             const failure = formatAssistantFailureMessage(err, "요청을 처리하지 못했습니다. 잠시 후 다시 시도하세요.");
             const message = failure.message;
+            if (useManualJarvisSession) {
+                const fallbackSessionId = activeMessageSessionRef.current;
+                if (fallbackSessionId) {
+                    writeSessionMessages(fallbackSessionId, (current) => [
+                        ...current,
+                        {
+                            role: "assistant",
+                            content: message,
+                            status: failure.reason ? t("common.blocked") : t("common.error"),
+                            route: "manual",
+                            promptRef: normalizedPrompt,
+                        },
+                    ]);
+                }
+            }
             setRunRecords(
                 pendingRuns.map((run) => ({
                     ...run,
@@ -1808,7 +1977,7 @@ export function AssistantModule() {
                 {
                     role: "assistant",
                     content: message,
-                    status: failure.reason ? "Blocked" : "Error",
+                    status: failure.reason ? t("common.blocked") : t("common.error"),
                     route: "manual",
                     promptRef: normalizedPrompt,
                 },
@@ -1821,11 +1990,16 @@ export function AssistantModule() {
         buildSynthesisMessage,
         createPendingRuns,
         isRunning,
+        linkSessionTask,
         modelOverride,
         parallelRuns,
         qualitySoftGateEnabled,
+        rememberContextSessionLink,
+        startSession,
+        t,
         toRunTimeline,
         uiSoftWarnEnabled,
+        writeSessionMessages,
     ]);
 
     const sendMessage = async () => {
@@ -2426,7 +2600,7 @@ export function AssistantModule() {
         { key: "accepted", label: "ACCEPTED" },
         { key: "started", label: "STARTED" },
         { key: "completed", label: "COMPLETED" },
-        { key: "failed", label: "FAILED" },
+        { key: "failed", label: t("common.failed").toUpperCase() },
     ];
 
     const countEventsByFilter = useCallback(
@@ -2584,7 +2758,7 @@ export function AssistantModule() {
                     ? `${context.servedProvider}/${context.servedModel}${context.usedFallback ? " (fallback)" : ""}`
                     : null;
             if (context.status === "error") {
-                return "FAILED";
+                return t("common.failed").toUpperCase();
             }
             if (qualityState.gateResult === "hard_fail") {
                 return `DEGRADED${providerLabel ? ` · ${providerLabel}` : ""}`;
@@ -2594,7 +2768,7 @@ export function AssistantModule() {
             }
             return providerLabel ?? "DONE";
         },
-        [resolveAutoContextQualityState]
+        [resolveAutoContextQualityState, t]
     );
 
     useEffect(() => {
@@ -2953,17 +3127,40 @@ export function AssistantModule() {
                     ) : (
                         <div className="border-b border-white/5 bg-black/40">
                             <div className="px-4 py-2 flex items-center justify-between text-[10px] font-mono">
-                                <span className="text-white/55 uppercase tracking-widest">User Mode</span>
+                                <span className="text-white/55 uppercase tracking-widest">{t("assistant.userMode")}</span>
                                 <span className="text-cyan-300/80">
-                                    grounded answers enabled for dynamic factual prompts
+                                    {t("assistant.groundedAnswers")}
                                 </span>
                             </div>
                             {(jarvisSessionDetail || jarvisSessionError) && (
                                 <div className="px-4 pb-3">
                                     <div className="rounded border border-cyan-500/20 bg-cyan-500/5 px-3 py-3">
+                                        {sessionLaunchCard && (
+                                            <div className="mb-3 rounded border border-cyan-400/25 bg-gradient-to-r from-cyan-500/15 via-cyan-500/8 to-transparent px-3 py-3">
+                                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                                    <div>
+                                                        <div className="inline-flex items-center gap-2 rounded border border-cyan-400/30 bg-black/30 px-2 py-1 text-[10px] font-mono tracking-[0.25em] text-cyan-200 uppercase">
+                                                            <Sparkles size={11} />
+                                                            {sessionLaunchCard.isFresh ? t("assistant.newSession") : t("assistant.activeSession")}
+                                                        </div>
+                                                        <p className="mt-2 text-sm font-mono text-cyan-100">{sessionLaunchCard.lane}</p>
+                                                        <p className="mt-1 text-[11px] text-white/55">
+                                                            {sessionLaunchCard.entry} · {sessionLaunchCard.id}
+                                                            {sessionLaunchCard.ageLabel ? ` · ${t("assistant.startedAgo", { value: sessionLaunchCard.ageLabel })}` : ""}
+                                                        </p>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <p className="text-[10px] font-mono uppercase tracking-[0.2em] text-white/45">{t("assistant.currentState")}</p>
+                                                        <p className="mt-1 text-sm text-white/90">
+                                                            {sessionLaunchCard.status} · {describePrimaryTarget(t, sessionLaunchCard.target)}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
                                         <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
                                             <div className="rounded border border-white/10 bg-black/30 p-3">
-                                                <p className="text-[10px] font-mono tracking-widest text-cyan-300">GOAL</p>
+                                                <p className="text-[10px] font-mono tracking-widest text-cyan-300">{t("assistant.goal")}</p>
                                                 {jarvisSessionError ? (
                                                     <p className="mt-2 text-xs font-mono text-rose-300">{jarvisSessionError}</p>
                                                 ) : (
@@ -2978,20 +3175,20 @@ export function AssistantModule() {
                                                 )}
                                             </div>
                                             <div className="rounded border border-white/10 bg-black/30 p-3">
-                                                <p className="text-[10px] font-mono tracking-widest text-cyan-300">PROGRESS</p>
+                                                <p className="text-[10px] font-mono tracking-widest text-cyan-300">{t("assistant.progress")}</p>
                                                 <p className="mt-2 text-sm text-white/90">
                                                     {jarvisSessionDetail?.session.status ?? "idle"} · {jarvisSessionDetail?.session.primaryTarget ?? "n/a"}
                                                 </p>
                                                 <div className="mt-2 space-y-1">
                                                     {(jarvisSessionDetail?.events ?? []).slice(-3).map((event) => (
                                                         <p key={event.id} className="text-[10px] font-mono text-white/55">
-                                                            {event.eventType}: {event.summary ?? "updated"}
+                                                            {event.eventType}: {event.summary ?? t("assistant.event.updated")}
                                                         </p>
                                                     ))}
                                                 </div>
                                             </div>
                                             <div className="rounded border border-white/10 bg-black/30 p-3">
-                                                <p className="text-[10px] font-mono tracking-widest text-cyan-300">EVIDENCE</p>
+                                                <p className="text-[10px] font-mono tracking-widest text-cyan-300">{t("assistant.evidence")}</p>
                                                 {jarvisSessionDetail?.dossier ? (
                                                     <>
                                                         <p className="mt-2 text-sm text-white/90">{jarvisSessionDetail.dossier.title}</p>
@@ -3001,12 +3198,16 @@ export function AssistantModule() {
                                                     </>
                                                 ) : jarvisSessionDetail?.briefing ? (
                                                     <p className="mt-2 text-sm text-white/80">{jarvisSessionDetail.briefing.summary}</p>
+                                                ) : jarvisSessionDetail?.session.primaryTarget === "dossier" ? (
+                                                    <p className="mt-2 text-xs text-white/45">{t("assistant.researchRunning")}</p>
+                                                ) : jarvisSessionDetail?.session.primaryTarget === "council" ? (
+                                                    <p className="mt-2 text-xs text-white/45">{t("assistant.councilEvidence")}</p>
                                                 ) : (
-                                                    <p className="mt-2 text-xs text-white/45">No grounded dossier attached yet.</p>
+                                                    <p className="mt-2 text-xs text-white/45">{t("assistant.noDossier")}</p>
                                                 )}
                                             </div>
                                             <div className="rounded border border-white/10 bg-black/30 p-3">
-                                                <p className="text-[10px] font-mono tracking-widest text-cyan-300">ACTION NEEDED</p>
+                                                <p className="text-[10px] font-mono tracking-widest text-cyan-300">{t("assistant.actionNeeded")}</p>
                                                 {(jarvisSessionDetail?.actions ?? []).filter((item) => item.status === "pending").length > 0 ? (
                                                     <div className="mt-2 space-y-1">
                                                         {jarvisSessionDetail?.actions
@@ -3017,8 +3218,46 @@ export function AssistantModule() {
                                                                 </p>
                                                             ))}
                                                     </div>
+                                                ) : jarvisSessionDetail?.dossier ? (
+                                                    <div className="mt-2 space-y-2">
+                                                        <p className="text-xs text-white/55">
+                                                            {t("assistant.researchReady")}
+                                                        </p>
+                                                        <div className="flex flex-wrap gap-2">
+                                                            <Link
+                                                                href={buildDossierSplitHref(jarvisSessionDetail.dossier.id)}
+                                                                className="rounded border border-cyan-400/30 bg-cyan-500/10 px-2 py-1 text-[10px] font-mono uppercase tracking-widest text-cyan-200 hover:bg-cyan-500/20"
+                                                            >
+                                                                {t("assistant.openDossier")}
+                                                            </Link>
+                                                            <Link
+                                                                href={buildWatcherPrefillHref(
+                                                                    jarvisSessionDetail.dossier.title,
+                                                                    jarvisSessionDetail.session.prompt,
+                                                                    inferWatcherKindFromPrompt(jarvisSessionDetail.session.prompt)
+                                                                )}
+                                                                className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[10px] font-mono uppercase tracking-widest text-white/70 hover:border-white/30 hover:text-white"
+                                                            >
+                                                                {t("assistant.trackTopic")}
+                                                            </Link>
+                                                        </div>
+                                                    </div>
+                                                ) : jarvisSessionDetail?.session.primaryTarget === "council" ? (
+                                                    <div className="mt-2 space-y-2">
+                                                        <p className="text-xs text-white/55">
+                                                            {t("assistant.councilReady")}
+                                                        </p>
+                                                        <div className="flex flex-wrap gap-2">
+                                                            <Link
+                                                                href="/?widget=council&focus=council"
+                                                                className="rounded border border-cyan-400/30 bg-cyan-500/10 px-2 py-1 text-[10px] font-mono uppercase tracking-widest text-cyan-200 hover:bg-cyan-500/20"
+                                                            >
+                                                                {t("assistant.openCouncil")}
+                                                            </Link>
+                                                        </div>
+                                                    </div>
                                                 ) : (
-                                                    <p className="mt-2 text-xs text-white/45">No approval currently required.</p>
+                                                    <p className="mt-2 text-xs text-white/45">{t("assistant.noApproval")}</p>
                                                 )}
                                             </div>
                                         </div>
@@ -3027,9 +3266,9 @@ export function AssistantModule() {
                             )}
                             {stageTimelineEnabled && userStageTimeline && (
                                 <div className="px-4 pb-3">
-                                    <div className="rounded border border-cyan-500/20 bg-cyan-500/5 px-3 py-2">
-                                        <div className="flex items-center justify-between gap-3 text-[10px] font-mono tracking-widest">
-                                            <span className="text-cyan-300">AI EXECUTION STAGES</span>
+                                        <div className="rounded border border-cyan-500/20 bg-cyan-500/5 px-3 py-2">
+                                            <div className="flex items-center justify-between gap-3 text-[10px] font-mono tracking-widest">
+                                            <span className="text-cyan-300">{t("assistant.executionStages").toUpperCase()}</span>
                                             <div className="flex items-center gap-2 min-w-0">
                                                 {userStageProgress?.isRunning && (
                                                     <span className="inline-flex items-center gap-1 rounded border border-cyan-500/40 bg-cyan-500/15 px-1.5 py-0.5 text-[9px] text-cyan-200 shrink-0">
@@ -3070,7 +3309,7 @@ export function AssistantModule() {
                                                             <Loader2 size={11} className="animate-spin text-cyan-200" />
                                                         )}
                                                         {userStageProgress.currentStageLabel}
-                                                        {userStageProgress.hasFailed && " · FAILED"}
+                                                        {userStageProgress.hasFailed && ` · ${t("common.failed").toUpperCase()}`}
                                                     </span>
                                                     <span>
                                                         {userStageProgress.progressPercent}%{userStageProgress.elapsedLabel ? ` · ${userStageProgress.elapsedLabel}` : ""}
@@ -3629,6 +3868,7 @@ function SystemMessage({
     onRetry?: () => void;
     feedback?: SystemMessageFeedback;
 }) {
+    const { t } = useLocale();
     const [showBlockedRawOutput, setShowBlockedRawOutput] = useState(false);
     const showDiagnostics = renderMode === "debug_mode";
     const qualityGateResult = resolveQualityGateResult({
@@ -3646,16 +3886,16 @@ function SystemMessage({
     const softWarnReasonCodes = qualityGateResult === "soft_warn" ? reasonCodes : [];
     const blockedReasonLabels = blockedReasonCodes.length > 0
         ? blockedReasonCodes.map((code) => mapBlockedReasonLabel(code))
-        : ["응답 품질 기준을 충족하지 못했습니다."];
+        : [t("assistant.quality.blockedFallback")];
     const softWarnReasonLabels = softWarnReasonCodes.length > 0
         ? softWarnReasonCodes.map((code) => mapBlockedReasonLabel(code))
-        : ["근거 품질이 일부 기준에 미달해 보정된 응답으로 제공됩니다."];
+        : [t("assistant.quality.softWarnFallback")];
     const softWarnDisplayLabels = hasOnlySoftWarnReasons(softWarnReasonCodes)
         ? softWarnReasonLabels
-        : [...softWarnReasonLabels, "일부 위험 신호로 인해 제한 모드로 응답했습니다."];
+        : [...softWarnReasonLabels, t("assistant.quality.restrictedMode")];
     const groundingSummary = buildGroundingSummary(grounding);
     const routeLabel =
-        showDiagnostics && (route === "manual" ? "MANUAL" : route === "auto_context" ? "AUTO CONTEXT" : null);
+        showDiagnostics && (route === "manual" ? t("assistant.route.manual") : route === "auto_context" ? t("assistant.route.autoContext") : null);
     const routeClass =
         route === "manual"
             ? "text-cyan-300/90 border-cyan-500/40 bg-cyan-500/10"
@@ -3732,7 +3972,7 @@ function SystemMessage({
                                             setShowBlockedRawOutput((prev) => !prev);
                                         }}
                                     >
-                                        {showBlockedRawOutput ? "원본 출력 숨기기" : "원본 출력 보기"}
+                                        {showBlockedRawOutput ? t("assistant.hideRawOutput") : t("assistant.showRawOutput")}
                                     </button>
                                 )}
                                 <Link

@@ -29,6 +29,7 @@ import type {
   UserProviderCredentialRecord,
   SettingsOverviewData,
 } from "@/lib/api/types";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
 const PROVIDERS: ProviderName[] = ["openai", "gemini", "anthropic", "local"];
 const FEATURE_ORDER: ModelControlFeatureKey[] = [
@@ -41,17 +42,6 @@ const FEATURE_ORDER: ModelControlFeatureKey[] = [
   "mission_plan_generation",
   "mission_execute_step",
 ];
-const FEATURE_LABELS: Record<ModelControlFeatureKey, string> = {
-  global_default: "Global Default",
-  assistant_chat: "Assistant Chat",
-  assistant_context_run: "Assistant Context Run",
-  council_run: "Council Run",
-  execution_code: "Execution Code",
-  execution_compute: "Execution Compute",
-  mission_plan_generation: "Mission Plan Generation",
-  mission_execute_step: "Mission Execute Step",
-};
-
 type ModelPreferenceDraft = {
   provider: ProviderName | "auto";
   model: string;
@@ -69,14 +59,29 @@ function toErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function formatCredentialMode(mode: UserProviderCredentialRecord["selected_credential_mode"]): string {
+function formatCredentialMode(
+  mode: UserProviderCredentialRecord["selected_credential_mode"],
+  t: (key: "common.none") => string
+): string {
   if (mode === "api_key") return "API key";
   if (mode === "oauth_official") return "OAuth (official)";
-  return "none";
+  return t("common.none");
 }
 
-function formatFeatureLabel(feature: ModelControlFeatureKey): string {
-  return FEATURE_LABELS[feature] ?? feature;
+function formatCredentialModeDraft(
+  mode: ProviderCredentialSelectionMode,
+  t: (key: "modelControl.mode.auto" | "modelControl.mode.api_key" | "modelControl.mode.oauth_official") => string
+): string {
+  if (mode === "api_key") return t("modelControl.mode.api_key");
+  if (mode === "oauth_official") return t("modelControl.mode.oauth_official");
+  return t("modelControl.mode.auto");
+}
+
+function formatFeatureLabel(
+  feature: ModelControlFeatureKey,
+  t: (key: keyof typeof import("@/lib/locale").translations.en, values?: Record<string, string | number>) => string
+): string {
+  return t(`modelControl.feature.${feature}` as keyof typeof import("@/lib/locale").translations.en);
 }
 
 function toTraceStatusClass(trace: AiInvocationTraceRecord): string {
@@ -122,6 +127,7 @@ function buildDefaultDraft(): ModelPreferenceDraft {
 }
 
 export function ModelControlModule() {
+  const { t, formatDateTime } = useLocale();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -233,7 +239,7 @@ export function ModelControlModule() {
       setCredentialModeDrafts({});
       setPreferenceDrafts({});
     } catch (refreshError) {
-      setError(toErrorMessage(refreshError, "failed to load model control"));
+      setError(toErrorMessage(refreshError, t("modelControl.loadFailed")));
     } finally {
       setLoading(false);
     }
@@ -253,10 +259,22 @@ export function ModelControlModule() {
       await upsertUserProviderCredential(provider, {
         selected_credential_mode: draftMode,
       });
-      setNotice(`${provider.toUpperCase()} credential mode updated: ${draftMode}`);
+      setNotice(
+        t("modelControl.notice.credentialModeUpdated", {
+          provider: provider.toUpperCase(),
+          mode: formatCredentialModeDraft(draftMode, t),
+        })
+      );
       await refresh();
     } catch (saveError) {
-      setError(toErrorMessage(saveError, `failed to save ${provider} credential mode`));
+      setError(
+        toErrorMessage(
+          saveError,
+          t("modelControl.error.saveCredentialMode", {
+            provider: provider.toUpperCase(),
+          })
+        )
+      );
     } finally {
       setActiveCredentialProvider(null);
     }
@@ -276,13 +294,21 @@ export function ModelControlModule() {
         selection_mode: draft.selection_mode,
       });
       setNotice(
-        `${formatFeatureLabel(feature)} routing updated: ${
-          orchestratorOwned ? "orchestrator-managed" : "user-managed"
-        }`
+        t("modelControl.notice.routingUpdated", {
+          feature: formatFeatureLabel(feature, t),
+          mode: orchestratorOwned ? t("modelControl.orchestratorManaged") : t("modelControl.userManaged"),
+        })
       );
       await refresh();
     } catch (saveError) {
-      setError(toErrorMessage(saveError, `failed to save ${feature} preference`));
+      setError(
+        toErrorMessage(
+          saveError,
+          t("modelControl.error.savePreference", {
+            feature: formatFeatureLabel(feature, t),
+          })
+        )
+      );
     } finally {
       setSavingFeature(null);
     }
@@ -300,10 +326,10 @@ export function ModelControlModule() {
         prompt,
       });
       setRecommendPrompt("");
-      setNotice(`Recommendation created for ${formatFeatureLabel(recommendFeature)}`);
+      setNotice(t("modelControl.recommendationCreated", { feature: formatFeatureLabel(recommendFeature, t) }));
       await refresh();
     } catch (recommendError) {
-      setError(toErrorMessage(recommendError, "failed to create recommendation"));
+      setError(toErrorMessage(recommendError, t("modelControl.error.createRecommendation")));
     } finally {
       setRecommending(false);
     }
@@ -315,10 +341,10 @@ export function ModelControlModule() {
     setApplyingRecommendationId(recommendationId);
     try {
       await applyModelRecommendation(recommendationId);
-      setNotice("Recommendation applied");
+      setNotice(t("modelControl.recommendationApplied"));
       await refresh();
     } catch (applyError) {
-      setError(toErrorMessage(applyError, "failed to apply recommendation"));
+      setError(toErrorMessage(applyError, t("modelControl.error.applyRecommendation")));
     } finally {
       setApplyingRecommendationId(null);
     }
@@ -328,10 +354,10 @@ export function ModelControlModule() {
     <main className="w-full min-h-full bg-transparent text-white p-4 space-y-4">
       <header className="border-l-2 border-cyan-400/70 pl-3">
         <h2 className="text-sm font-mono font-bold tracking-widest text-cyan-100 flex items-center gap-2">
-          <SlidersHorizontal size={14} /> MODEL CONTROL
+          <SlidersHorizontal size={14} /> {t("modelControl.title")}
         </h2>
         <p className="mt-1 text-xs text-white/65">
-          Choose credential mode, set per-feature model defaults, request recommendations, and inspect invocation traces.
+          {t("modelControl.subtitle")}
         </p>
       </header>
 
@@ -342,7 +368,7 @@ export function ModelControlModule() {
           className="inline-flex items-center gap-1 h-8 px-3 rounded border border-white/20 text-xs text-white/80 hover:text-white hover:border-white/35"
           disabled={loading}
         >
-          <RefreshCw size={12} className={loading ? "animate-spin" : ""} /> Refresh
+          <RefreshCw size={12} className={loading ? "animate-spin" : ""} /> {t("modelControl.refresh")}
         </button>
         {error && <span className="text-xs text-rose-300">{error}</span>}
         {notice && <span className="text-xs text-emerald-300">{notice}</span>}
@@ -350,9 +376,9 @@ export function ModelControlModule() {
 
       <section className="rounded-xl border border-white/12 bg-black/35 p-3">
         <h3 className="text-xs font-semibold tracking-wide text-white flex items-center gap-2">
-          <ShieldCheck size={14} /> Credential Mode (Explicit)
+          <ShieldCheck size={14} /> {t("modelControl.credentialModeTitle")}
         </h3>
-        <p className="mt-1 text-xs text-white/60">`auto | api_key | oauth_official`</p>
+        <p className="mt-1 text-xs text-white/60">{t("modelControl.credentialModeHint")}</p>
         <div className="mt-3 space-y-2">
           {PROVIDERS.map((provider) => {
             const row = userCredentialMap.get(provider) ?? {
@@ -376,14 +402,14 @@ export function ModelControlModule() {
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-semibold text-white">{provider.toUpperCase()}</p>
                     <span className={`rounded-full border px-2 py-0.5 text-[11px] ${toCredentialSourceClass(row.source)}`}>
-                      source: {row.source}
+                      {t("modelControl.source")}: {row.source}
                     </span>
                     <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-[11px] text-cyan-100">
-                      active: {formatCredentialMode(row.selected_credential_mode)}
+                      {t("modelControl.active")}: {formatCredentialMode(row.selected_credential_mode, t)}
                     </span>
                   </div>
                   <div className="text-[11px] text-white/55">
-                    key={row.has_user_api_key ? "yes" : "no"} · oauth-official={row.has_user_oauth_official ? "yes" : "no"}
+                    key={row.has_user_api_key ? t("modelControl.yes") : t("modelControl.no")} · oauth-official={row.has_user_oauth_official ? t("modelControl.yes") : t("modelControl.no")}
                   </div>
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -397,9 +423,9 @@ export function ModelControlModule() {
                     }
                     className="h-8 rounded border border-white/15 bg-black/60 px-2 text-xs text-white/85"
                   >
-                    <option value="auto">auto</option>
-                    <option value="api_key">api_key</option>
-                    {oauthModesAllowed && <option value="oauth_official">oauth_official</option>}
+                    <option value="auto">{t("modelControl.mode.auto")}</option>
+                    <option value="api_key">{t("modelControl.mode.api_key")}</option>
+                    {oauthModesAllowed && <option value="oauth_official">{t("modelControl.mode.oauth_official")}</option>}
                   </select>
                   <button
                     type="button"
@@ -407,7 +433,7 @@ export function ModelControlModule() {
                     disabled={activeCredentialProvider === provider || draftMode === row.selected_user_credential_mode}
                     className="h-8 px-3 rounded border border-cyan-400/35 bg-cyan-500/10 text-xs text-cyan-100 disabled:opacity-40"
                   >
-                    {activeCredentialProvider === provider ? "Saving..." : "Apply mode"}
+                    {activeCredentialProvider === provider ? t("modelControl.saving") : t("modelControl.applyMode")}
                   </button>
                 </div>
               </div>
@@ -418,15 +444,13 @@ export function ModelControlModule() {
 
       <section className="rounded-xl border border-white/12 bg-black/35 p-3">
         <h3 className="text-xs font-semibold tracking-wide text-white flex items-center gap-2">
-          <BrainCircuit size={14} /> Feature Model Defaults
+          <BrainCircuit size={14} /> {t("modelControl.featureDefaultsTitle")}
         </h3>
         <p className="mt-1 text-xs text-white/60">
-          Pick who controls routing for each feature: <span className="text-cyan-200">Orchestrator</span> or{" "}
-          <span className="text-fuchsia-200">User</span>. Resolution order: request override &gt; feature default &gt;
-          global default &gt; auto.
+          {t("modelControl.featureDefaultsHint")}
         </p>
         <div className="mt-3 rounded-lg border border-white/10 bg-black/40 p-2">
-          <p className="text-[11px] uppercase tracking-[0.16em] text-white/55">Discovered Models (Auto)</p>
+          <p className="text-[11px] uppercase tracking-[0.16em] text-white/55">{t("modelControl.discoveredModels")}</p>
           <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
             {providerModelOverview.map(({ provider, models, runtime }) => (
               <div key={`provider-overview-${provider}`} className="rounded border border-white/10 bg-black/35 p-2">
@@ -439,11 +463,11 @@ export function ModelControlModule() {
                         : "border-rose-500/35 bg-rose-500/10 text-rose-200"
                     }`}
                   >
-                    {runtime?.enabled ? "enabled" : "disabled"}
+                    {runtime?.enabled ? t("modelControl.enabled") : t("modelControl.disabled")}
                   </span>
                   {formatCooldownRemaining(runtime?.cooldown_until) && (
                     <span className="rounded border border-amber-500/35 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-200">
-                      cooldown {formatCooldownRemaining(runtime?.cooldown_until)}
+                      {t("modelControl.cooldown", { value: formatCooldownRemaining(runtime?.cooldown_until) ?? "" })}
                     </span>
                   )}
                 </div>
@@ -451,9 +475,9 @@ export function ModelControlModule() {
                   success={Math.round(runtime?.success_rate_pct ?? 0)}% · attempts={runtime?.attempts ?? 0} · failures=
                   {runtime?.health_failure_count ?? runtime?.failures ?? 0}
                 </p>
-                {runtime?.reason && <p className="mt-1 text-[10px] text-rose-200/90">reason: {runtime.reason}</p>}
+                {runtime?.reason && <p className="mt-1 text-[10px] text-rose-200/90">{t("modelControl.reason", { value: runtime.reason })}</p>}
                 {runtime?.cooldown_reason && (
-                  <p className="mt-1 text-[10px] text-amber-200/90">cooldown: {runtime.cooldown_reason}</p>
+                  <p className="mt-1 text-[10px] text-amber-200/90">{t("modelControl.cooldownReason", { value: runtime.cooldown_reason })}</p>
                 )}
                 <div className="mt-1 flex flex-wrap items-center gap-1">
                   {models.length > 0 ? (
@@ -466,7 +490,7 @@ export function ModelControlModule() {
                       </span>
                     ))
                   ) : (
-                    <span className="text-[10px] text-white/40">no discovered models</span>
+                    <span className="text-[10px] text-white/40">{t("modelControl.noDiscoveredModels", { provider })}</span>
                   )}
                 </div>
               </div>
@@ -490,9 +514,9 @@ export function ModelControlModule() {
             return (
               <div key={`pref-${feature}`} className="rounded-lg border border-white/10 bg-black/40 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm font-semibold text-white">{formatFeatureLabel(feature)}</p>
+                  <p className="text-sm font-semibold text-white">{formatFeatureLabel(feature, t)}</p>
                   <span className="text-[11px] text-white/55">
-                    routing={orchestratorOwned ? "orchestrator-managed" : "user-managed"}
+                    {t("modelControl.routing", { value: orchestratorOwned ? t("modelControl.orchestratorManaged") : t("modelControl.userManaged") })}
                   </span>
                 </div>
                 <div className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-[180px_220px_minmax(0,1fr)_auto_auto]">
@@ -539,8 +563,8 @@ export function ModelControlModule() {
                     }
                     className="h-8 rounded border border-white/15 bg-black/60 px-2 text-xs text-white/85"
                   >
-                    <option value="auto">orchestrator-managed</option>
-                    <option value="manual">user-managed</option>
+                    <option value="auto">{t("modelControl.orchestratorManaged")}</option>
+                    <option value="manual">{t("modelControl.userManaged")}</option>
                   </select>
                   <select
                     value={modelSelectValue}
@@ -564,13 +588,13 @@ export function ModelControlModule() {
                     className="h-8 rounded border border-white/15 bg-black/60 px-2 text-xs text-white/85"
                     disabled={!canEditModel}
                   >
-                    <option value="">(auto model)</option>
+                    <option value="">{t("modelControl.autoModel")}</option>
                     {models.map((modelId) => (
                       <option key={`${feature}-model-option-${modelId}`} value={modelId}>
                         {modelId}
                       </option>
                     ))}
-                    <option value="__custom__">custom model id...</option>
+                    <option value="__custom__">{t("modelControl.customModelId")}</option>
                   </select>
                   <input
                     type="text"
@@ -584,7 +608,7 @@ export function ModelControlModule() {
                         },
                       }))
                     }
-                    placeholder="model id (optional)"
+                    placeholder={t("modelControl.modelIdOptional")}
                     className="h-8 rounded border border-white/15 bg-black/60 px-2 text-xs text-white/85"
                     disabled={!canEditModel}
                   />
@@ -604,7 +628,7 @@ export function ModelControlModule() {
                       disabled={orchestratorOwned || draft.provider === "auto"}
                       className="accent-cyan-400"
                     />
-                    strict
+                    {t("modelControl.strict")}
                   </label>
                   <button
                     type="button"
@@ -612,7 +636,7 @@ export function ModelControlModule() {
                     disabled={savingFeature === feature}
                     className="h-8 px-3 rounded border border-cyan-400/35 bg-cyan-500/10 text-xs text-cyan-100 disabled:opacity-40"
                   >
-                    {savingFeature === feature ? "Saving..." : "Save"}
+                    {savingFeature === feature ? t("modelControl.saving") : t("modelControl.save")}
                   </button>
                   {!orchestratorOwned && draft.provider !== "auto" && (
                     <div className="lg:col-span-5 flex flex-wrap items-center gap-1">
@@ -641,7 +665,7 @@ export function ModelControlModule() {
                         ))
                       ) : (
                         <span className="text-[11px] text-white/45">
-                          no discovered models for {draft.provider} yet
+                          {t("modelControl.noDiscoveredModels", { provider: draft.provider })}
                         </span>
                       )}
                     </div>
@@ -655,7 +679,7 @@ export function ModelControlModule() {
 
       <section className="rounded-xl border border-white/12 bg-black/35 p-3">
         <h3 className="text-xs font-semibold tracking-wide text-white flex items-center gap-2">
-          <Sparkles size={14} /> Recommender
+          <Sparkles size={14} /> {t("modelControl.recommenderTitle")}
         </h3>
         <div className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-[220px_minmax(0,1fr)_auto]">
           <select
@@ -665,7 +689,7 @@ export function ModelControlModule() {
           >
             {FEATURE_ORDER.filter((feature) => feature !== "global_default").map((feature) => (
               <option key={`recommend-feature-${feature}`} value={feature}>
-                {formatFeatureLabel(feature)}
+                {formatFeatureLabel(feature, t)}
               </option>
             ))}
           </select>
@@ -673,7 +697,7 @@ export function ModelControlModule() {
             value={recommendPrompt}
             onChange={(event) => setRecommendPrompt(event.target.value)}
             rows={3}
-            placeholder="Paste prompt or task context for recommendation..."
+            placeholder={t("modelControl.recommendPlaceholder")}
             className="rounded border border-white/15 bg-black/60 px-2 py-1.5 text-xs text-white/85 resize-y min-h-[64px]"
           />
           <button
@@ -682,7 +706,7 @@ export function ModelControlModule() {
             disabled={recommending || recommendPrompt.trim().length === 0}
             className="h-8 px-3 rounded border border-fuchsia-400/35 bg-fuchsia-500/10 text-xs text-fuchsia-100 disabled:opacity-40 self-start"
           >
-            {recommending ? "Recommending..." : "Recommend"}
+            {recommending ? t("modelControl.recommending") : t("modelControl.recommend")}
           </button>
         </div>
 
@@ -691,7 +715,7 @@ export function ModelControlModule() {
             <div key={`recommend-${row.id}`} className="rounded-lg border border-white/10 bg-black/40 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm font-semibold text-white">
-                  {formatFeatureLabel(row.featureKey)} → {row.recommendedProvider}/{row.recommendedModelId}
+                  {formatFeatureLabel(row.featureKey, t)} → {row.recommendedProvider}/{row.recommendedModelId}
                 </p>
                 <button
                   type="button"
@@ -699,42 +723,42 @@ export function ModelControlModule() {
                   disabled={Boolean(row.appliedAt) || applyingRecommendationId === row.id}
                   className="h-7 px-2 rounded border border-cyan-400/35 bg-cyan-500/10 text-[11px] text-cyan-100 disabled:opacity-40"
                 >
-                  {row.appliedAt ? "Applied" : applyingRecommendationId === row.id ? "Applying..." : "Apply"}
+                  {row.appliedAt ? t("modelControl.applied") : applyingRecommendationId === row.id ? t("modelControl.applying") : t("modelControl.apply")}
                 </button>
               </div>
               <p className="mt-1 text-xs text-white/70">{row.rationaleText}</p>
               <p className="mt-1 text-[11px] text-white/45">
-                created {new Date(row.createdAt).toLocaleString()}
-                {row.appliedAt ? ` · applied ${new Date(row.appliedAt).toLocaleString()}` : ""}
+                {t("modelControl.createdAt", { value: formatDateTime(row.createdAt) })}
+                {row.appliedAt ? ` · ${t("modelControl.appliedAt", { value: formatDateTime(row.appliedAt) })}` : ""}
               </p>
             </div>
           ))}
           {!loading && recommendations.length === 0 && (
-            <p className="text-xs text-white/50">No recommendations yet.</p>
+            <p className="text-xs text-white/50">{t("modelControl.noRecommendations")}</p>
           )}
         </div>
       </section>
 
       <section className="rounded-xl border border-white/12 bg-black/35 p-3">
         <h3 className="text-xs font-semibold tracking-wide text-white flex items-center gap-2">
-          <Route size={14} /> Recent AI Traces
+          <Route size={14} /> {t("modelControl.recentTracesTitle")}
         </h3>
         {metrics && (
           <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4">
             <div className="rounded border border-white/10 bg-black/40 p-2">
-              <p className="text-[10px] text-white/45 uppercase tracking-widest">Total</p>
+              <p className="text-[10px] text-white/45 uppercase tracking-widest">{t("modelControl.metrics.total")}</p>
               <p className="text-sm text-white font-semibold">{metrics.total}</p>
             </div>
             <div className="rounded border border-white/10 bg-black/40 p-2">
-              <p className="text-[10px] text-white/45 uppercase tracking-widest">Success</p>
+              <p className="text-[10px] text-white/45 uppercase tracking-widest">{t("modelControl.metrics.success")}</p>
               <p className="text-sm text-emerald-300 font-semibold">{metrics.successCount}</p>
             </div>
             <div className="rounded border border-white/10 bg-black/40 p-2">
-              <p className="text-[10px] text-white/45 uppercase tracking-widest">Failure</p>
+              <p className="text-[10px] text-white/45 uppercase tracking-widest">{t("modelControl.metrics.failure")}</p>
               <p className="text-sm text-rose-300 font-semibold">{metrics.failureCount}</p>
             </div>
             <div className="rounded border border-white/10 bg-black/40 p-2">
-              <p className="text-[10px] text-white/45 uppercase tracking-widest">P95 (ms)</p>
+              <p className="text-[10px] text-white/45 uppercase tracking-widest">{t("modelControl.metrics.p95")}</p>
               <p className="text-sm text-white font-semibold">{Math.round(metrics.p95LatencyMs)}</p>
             </div>
           </div>
@@ -745,17 +769,22 @@ export function ModelControlModule() {
             <div key={`trace-${trace.id}`} className={`rounded-lg border p-2 ${toTraceStatusClass(trace)}`}>
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                 <p className="font-semibold">
-                  {formatFeatureLabel(trace.featureKey as ModelControlFeatureKey)} · {trace.resolvedProvider ?? "none"}/{trace.resolvedModel ?? "none"}
+                  {formatFeatureLabel(trace.featureKey as ModelControlFeatureKey, t)} · {trace.resolvedProvider ?? "none"}/{trace.resolvedModel ?? "none"}
                 </p>
                 <span>{trace.latencyMs}ms</span>
               </div>
               <p className="mt-1 text-[11px] text-white/80">
-                request={trace.requestProvider}/{trace.requestModel ?? "default"} · credential={trace.credentialMode ?? "none"}({trace.credentialSource})
+                {t("modelControl.requestLine", {
+                  provider: trace.requestProvider,
+                  model: trace.requestModel ?? "default",
+                  credential: trace.credentialMode ?? "none",
+                  source: trace.credentialSource,
+                })}
               </p>
-              <p className="mt-1 text-[11px] text-white/60">{new Date(trace.createdAt).toLocaleString()}</p>
+              <p className="mt-1 text-[11px] text-white/60">{formatDateTime(trace.createdAt)}</p>
             </div>
           ))}
-          {!loading && traces.length === 0 && <p className="text-xs text-white/50">No traces recorded yet.</p>}
+          {!loading && traces.length === 0 && <p className="text-xs text-white/50">{t("modelControl.noTraces")}</p>}
         </div>
       </section>
     </main>

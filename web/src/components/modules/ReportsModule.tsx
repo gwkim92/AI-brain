@@ -26,15 +26,17 @@ import type {
 } from "@/lib/api/types";
 import { hasMinRole, useCurrentRole } from "@/lib/auth/role";
 import { AsyncState } from "@/components/ui/AsyncState";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
-function formatDate(value: string): string {
+function formatDate(value: string, formatDateTime: (value: string | Date | number | null | undefined, options?: Intl.DateTimeFormatOptions) => string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
+  return formatDateTime(date);
 }
 
 export function ReportsModule() {
   const role = useCurrentRole();
+  const { t, formatDateTime } = useLocale();
   const canOperate = hasMinRole(role, "operator");
   const [proposals, setProposals] = useState<UpgradeProposalRecord[]>([]);
   const [overview, setOverview] = useState<ReportsOverviewData | null>(null);
@@ -81,7 +83,7 @@ export function ReportsModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("failed to load reports");
+        setError(t("reports.loadFailed"));
       }
       setProposals([]);
       setOverview(null);
@@ -140,7 +142,7 @@ export function ReportsModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("failed to start run");
+        setError(t("reports.startRunFailed"));
       }
     } finally {
       setStartingFor(null);
@@ -159,7 +161,7 @@ export function ReportsModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("failed to retry telegram report");
+        setError(t("reports.retryTelegramFailed"));
       }
     } finally {
       setRetryingReportId(null);
@@ -171,7 +173,7 @@ export function ReportsModule() {
       <header className="mb-4 border-l-2 border-white/40 pl-3 flex items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-mono font-bold tracking-widest text-white flex items-center gap-2">
-            <FileSpreadsheet size={14} /> REPORT STUDIO
+            <FileSpreadsheet size={14} /> {t("reports.title")}
           </h2>
         </div>
         <button
@@ -179,14 +181,14 @@ export function ReportsModule() {
           onClick={() => void refresh()}
           className="inline-flex items-center gap-1 h-7 px-2 rounded border border-white/20 text-[10px] font-mono text-white/70 hover:text-white hover:border-white/40"
         >
-          <RefreshCw size={11} /> REFRESH
+          <RefreshCw size={11} /> {t("reports.refresh")}
         </button>
       </header>
 
       {!canOperate && (
         <section className="rounded border border-amber-500/30 bg-amber-500/10 p-3">
           <p className="text-xs font-mono text-amber-300">
-            Operator role required. Member accounts cannot load report, radar, or upgrade execution APIs.
+            {t("reports.operatorRequired")}
           </p>
         </section>
       )}
@@ -196,7 +198,7 @@ export function ReportsModule() {
           loading={loading}
           error={error}
           empty={false}
-          loadingText="Loading report data..."
+          loadingText={t("reports.loading")}
           onRetry={() => void refresh()}
           className="mb-3"
         />
@@ -205,21 +207,21 @@ export function ReportsModule() {
       {canOperate && overview && (
         <section className="mb-3 grid grid-cols-2 xl:grid-cols-4 gap-2">
           <div className="rounded border border-white/10 bg-black/40 p-2">
-            <p className="text-[10px] font-mono text-white/40 uppercase">Running Tasks</p>
+            <p className="text-[10px] font-mono text-white/40 uppercase">{t("reports.stats.runningTasks")}</p>
             <p className="text-sm font-mono text-cyan-300">{overview.tasks.running}</p>
           </div>
           <div className="rounded border border-white/10 bg-black/40 p-2">
-            <p className="text-[10px] font-mono text-white/40 uppercase">Pending Approvals</p>
+            <p className="text-[10px] font-mono text-white/40 uppercase">{t("reports.stats.pendingApprovals")}</p>
             <p className="text-sm font-mono text-amber-300">{overview.upgrades.pending_approvals}</p>
           </div>
           <div className="rounded border border-white/10 bg-black/40 p-2">
-            <p className="text-[10px] font-mono text-white/40 uppercase">Fallback Rate</p>
+            <p className="text-[10px] font-mono text-white/40 uppercase">{t("reports.stats.fallbackRate")}</p>
             <p className="text-sm font-mono text-rose-300">{overview.executions.fallback_rate_pct}%</p>
           </div>
           <div className="rounded border border-white/10 bg-black/40 p-2">
-            <p className="text-[10px] font-mono text-white/40 uppercase">Providers</p>
+            <p className="text-[10px] font-mono text-white/40 uppercase">{t("reports.stats.providers")}</p>
             <p className="text-sm font-mono text-emerald-300">
-              {overview.providers.enabled}/{overview.providers.items.length} enabled
+              {t("reports.stats.providersEnabled", { enabled: overview.providers.enabled, total: overview.providers.items.length })}
             </p>
           </div>
         </section>
@@ -228,19 +230,19 @@ export function ReportsModule() {
       {canOperate && (
         <section className="mb-3 grid grid-cols-1 xl:grid-cols-2 gap-3">
           <div className="rounded border border-cyan-500/20 bg-cyan-500/5 p-3">
-            <p className="text-[10px] font-mono tracking-widest text-cyan-300 uppercase mb-2">Briefing Archive</p>
+            <p className="text-[10px] font-mono tracking-widest text-cyan-300 uppercase mb-2">{t("reports.briefingArchive")}</p>
             <div className="space-y-2">
               {briefings.slice(0, 4).map((briefing) => (
                 <div key={briefing.id} className="rounded border border-white/10 bg-black/30 px-3 py-2">
                   <p className="text-sm text-white/90">{briefing.title}</p>
-                  <p className="text-[10px] font-mono text-white/45">{briefing.sourceCount} sources</p>
+                  <p className="text-[10px] font-mono text-white/45">{t("reports.briefingSources", { count: briefing.sourceCount })}</p>
                 </div>
               ))}
-              {briefings.length === 0 && <p className="text-xs text-white/45">No briefings generated yet.</p>}
+              {briefings.length === 0 && <p className="text-xs text-white/45">{t("reports.noBriefings")}</p>}
             </div>
           </div>
           <div className="rounded border border-cyan-500/20 bg-cyan-500/5 p-3">
-            <p className="text-[10px] font-mono tracking-widest text-cyan-300 uppercase mb-2">Dossier Archive</p>
+            <p className="text-[10px] font-mono tracking-widest text-cyan-300 uppercase mb-2">{t("reports.dossierArchive")}</p>
             <div className="space-y-2">
               {dossiers.slice(0, 4).map((dossier) => (
                 <div key={dossier.id} className="rounded border border-white/10 bg-black/30 px-3 py-2">
@@ -248,7 +250,7 @@ export function ReportsModule() {
                   <p className="text-[10px] font-mono text-white/45">{dossier.status}</p>
                 </div>
               ))}
-              {dossiers.length === 0 && <p className="text-xs text-white/45">No dossiers compiled yet.</p>}
+              {dossiers.length === 0 && <p className="text-xs text-white/45">{t("reports.noDossiers")}</p>}
             </div>
           </div>
         </section>
@@ -257,11 +259,11 @@ export function ReportsModule() {
       {canOperate && <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 flex-1 overflow-hidden">
         <section className="border border-white/10 rounded bg-black/30 overflow-hidden flex flex-col">
           <div className="px-3 py-2 border-b border-white/10 font-mono text-[10px] text-white/40 uppercase tracking-widest">
-            Approved Proposals ({approved.length})
+            {t("reports.approvedProposals", { count: approved.length })}
           </div>
           <div className="flex-1 overflow-y-auto p-3 space-y-2">
             {!loading && !error && approved.length === 0 && (
-              <p className="text-xs font-mono text-white/40">No approved proposals yet.</p>
+              <p className="text-xs font-mono text-white/40">{t("reports.noApprovedProposals")}</p>
             )}
 
             {!loading &&
@@ -271,13 +273,13 @@ export function ReportsModule() {
                   <p className="text-sm text-white/90 mb-1">{item.proposalTitle}</p>
                   <p className="text-[10px] font-mono text-white/40 mb-2">{item.id}</p>
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-mono text-white/35">{formatDate(item.createdAt)}</span>
+                    <span className="text-[10px] font-mono text-white/35">{formatDate(item.createdAt, formatDateTime)}</span>
                     <button
                       onClick={() => void startRun(item.id)}
                       disabled={startingFor === item.id}
                       className="px-2 py-1 text-[10px] font-mono rounded border border-emerald-500/40 text-emerald-300 hover:text-emerald-100 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
                     >
-                      <Play size={11} /> START RUN
+                      <Play size={11} /> {t("reports.startRun")}
                     </button>
                   </div>
                 </div>
@@ -287,17 +289,17 @@ export function ReportsModule() {
 
         <section className="border border-emerald-500/20 rounded bg-emerald-950/10 overflow-hidden flex flex-col">
           <div className="px-3 py-2 border-b border-emerald-500/20 font-mono text-[10px] text-emerald-300 uppercase tracking-widest flex items-center gap-2">
-            <GitPullRequest size={12} /> Latest Run
+            <GitPullRequest size={12} /> {t("reports.latestRun")}
           </div>
           <div className="p-3 space-y-2 text-sm">
-            {!latestRun && <p className="text-white/50">No run started from widget.</p>}
+            {!latestRun && <p className="text-white/50">{t("reports.latestRun.none")}</p>}
             {latestRun && (
               <>
-                <p className="text-emerald-100/90">Run: {latestRun.id}</p>
-                <p className="text-emerald-100/90">Proposal: {latestRun.proposalId}</p>
-                <p className="text-emerald-100/90">Status: {latestRun.status}</p>
-                <p className="text-emerald-100/90">Created: {formatDate(latestRun.createdAt)}</p>
-                <p className="text-emerald-100/90">Updated: {formatDate(latestRun.updatedAt)}</p>
+                <p className="text-emerald-100/90">{t("reports.latestRun.run", { value: latestRun.id })}</p>
+                <p className="text-emerald-100/90">{t("reports.latestRun.proposal", { value: latestRun.proposalId })}</p>
+                <p className="text-emerald-100/90">{t("reports.latestRun.status", { value: latestRun.status })}</p>
+                <p className="text-emerald-100/90">{t("reports.latestRun.created", { value: formatDate(latestRun.createdAt, formatDateTime) })}</p>
+                <p className="text-emerald-100/90">{t("reports.latestRun.updated", { value: formatDate(latestRun.updatedAt, formatDateTime) })}</p>
               </>
             )}
           </div>
@@ -306,15 +308,15 @@ export function ReportsModule() {
         <section className="border border-cyan-500/20 rounded bg-cyan-950/10 overflow-hidden flex flex-col">
           <div className="px-3 py-2 border-b border-cyan-500/20 font-mono text-[10px] text-cyan-300 uppercase tracking-widest flex items-center justify-between">
             <span className="inline-flex items-center gap-2">
-              <Send size={12} /> Telegram Delivery
+              <Send size={12} /> {t("reports.telegramDelivery")}
             </span>
             <span className="text-[9px] text-cyan-200/80">
-              q:{telegramSummary.queued} s:{telegramSummary.sent} f:{telegramSummary.failed}
+              {t("reports.telegramSummary", telegramSummary)}
             </span>
           </div>
           <div className="flex-1 overflow-y-auto p-3 space-y-2">
             {!loading && !error && telegramReports.length === 0 && (
-              <p className="text-xs font-mono text-white/40">No telegram reports yet.</p>
+              <p className="text-xs font-mono text-white/40">{t("reports.noTelegramReports")}</p>
             )}
             {!loading &&
               !error &&
@@ -336,15 +338,15 @@ export function ReportsModule() {
                   </div>
                   <p className="text-[10px] font-mono text-white/40">{report.id}</p>
                   <p className="text-[10px] font-mono text-white/50 mt-1">
-                    attempts {report.attemptCount ?? 0}/{report.maxAttempts ?? 0}
+                    {t("reports.telegramAttempts", { attempts: report.attemptCount ?? 0, maxAttempts: report.maxAttempts ?? 0 })}
                   </p>
                   {report.status === "queued" && report.nextAttemptAt && (
-                    <p className="text-[10px] font-mono text-amber-200/80">next: {formatDate(report.nextAttemptAt)}</p>
+                    <p className="text-[10px] font-mono text-amber-200/80">{t("reports.telegramNext", { date: formatDate(report.nextAttemptAt, formatDateTime) })}</p>
                   )}
                   {report.status === "sent" && report.sentAt && (
                     <p className="text-[10px] font-mono text-emerald-200/80">
-                      sent: {formatDate(report.sentAt)}
-                      {report.telegramMessageId ? ` · msg ${report.telegramMessageId}` : ""}
+                      {t("reports.telegramSent", { date: formatDate(report.sentAt, formatDateTime) })}
+                      {report.telegramMessageId ? ` · ${t("reports.telegramMessage", { value: report.telegramMessageId })}` : ""}
                     </p>
                   )}
                   {report.status === "failed" && report.lastError && (
@@ -359,11 +361,11 @@ export function ReportsModule() {
                         className="inline-flex items-center gap-1 h-6 px-2 rounded border border-amber-400/40 bg-amber-500/10 text-[10px] font-mono text-amber-200 disabled:opacity-40"
                       >
                         <RotateCcw size={10} />
-                        {retryingReportId === report.id ? "RETRYING..." : "RETRY"}
+                        {retryingReportId === report.id ? t("reports.telegramRetrying") : t("reports.telegramRetry")}
                       </button>
                     </div>
                   )}
-                  <p className="text-[10px] font-mono text-white/35 mt-1">{formatDate(report.createdAt)}</p>
+                  <p className="text-[10px] font-mono text-white/35 mt-1">{formatDate(report.createdAt, formatDateTime)}</p>
                 </div>
               ))}
           </div>

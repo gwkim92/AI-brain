@@ -65,6 +65,7 @@ export type ExecuteJarvisRequestInput = {
   prompt: string;
   source: string;
   clientSessionId?: string;
+  targetHint?: 'assistant';
   provider?: ProviderName | 'auto';
   strictProvider?: boolean;
   model?: string;
@@ -99,7 +100,8 @@ export async function executeJarvisRequest(
   const title = truncateText(prompt, 90);
   const intent = inferJarvisIntent(prompt);
   const complexity = classifyComplexity(prompt);
-  const primaryTarget = resolvePrimaryTarget(intent, complexity);
+  const primaryTarget = input.targetHint === 'assistant' ? 'assistant' : resolvePrimaryTarget(intent, complexity);
+  const workspacePreset = input.targetHint === 'assistant' ? 'jarvis' : resolveWorkspacePreset(intent);
 
   const session = await store.createJarvisSession({
     id: input.clientSessionId,
@@ -109,7 +111,7 @@ export async function executeJarvisRequest(
     source: input.source,
     intent,
     status: 'running',
-    workspacePreset: resolveWorkspacePreset(intent),
+    workspacePreset,
     primaryTarget
   });
 

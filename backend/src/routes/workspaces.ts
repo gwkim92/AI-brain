@@ -20,6 +20,7 @@ const WorkspaceCreateSchema = z.object({
 
 const WorkspaceSpawnSchema = z.object({
   command: z.string().min(1).max(2000),
+  client_session_id: z.string().uuid().optional(),
   shell: z.string().min(1).max(200).optional()
 });
 
@@ -247,16 +248,30 @@ export async function workspaceRoutes(app: FastifyInstance, ctx: RouteContext) {
           workspaceKind: workspace.kind,
           policy
         });
-        const session = await ctx.store.createJarvisSession({
-          userId,
-          title: approvalCopy.title,
-          prompt: command,
-          source: 'workspace_runtime',
-          intent: 'code',
-          status: 'needs_approval',
-          workspacePreset: 'execution',
-          primaryTarget: 'execution'
-        });
+        const existingSession = parsed.data.client_session_id
+          ? await ctx.store.getJarvisSessionById({ userId, sessionId: parsed.data.client_session_id })
+          : null;
+        const session = existingSession
+          ? ((await ctx.store.updateJarvisSession({
+              sessionId: existingSession.id,
+              userId,
+              title: approvalCopy.title,
+              prompt: command,
+              status: 'needs_approval',
+              workspacePreset: 'execution',
+              primaryTarget: 'execution'
+            })) ?? existingSession)
+          : await ctx.store.createJarvisSession({
+              id: parsed.data.client_session_id,
+              userId,
+              title: approvalCopy.title,
+              prompt: command,
+              source: 'workspace_runtime',
+              intent: 'code',
+              status: 'needs_approval',
+              workspacePreset: 'execution',
+              primaryTarget: 'execution'
+            });
         const proposal = await ctx.store.createActionProposal({
           userId,
           sessionId: session.id,
@@ -317,16 +332,64 @@ export async function workspaceRoutes(app: FastifyInstance, ctx: RouteContext) {
     }
 
     try {
+      let linkedSession = null;
+      if (parsed.data.client_session_id) {
+        const title = truncateText(command, 180);
+        const existingSession = await ctx.store.getJarvisSessionById({ userId, sessionId: parsed.data.client_session_id });
+        linkedSession = existingSession
+          ? ((await ctx.store.updateJarvisSession({
+              sessionId: existingSession.id,
+              userId,
+              title,
+              prompt: command,
+              status: 'running',
+              workspacePreset: 'execution',
+              primaryTarget: 'execution'
+            })) ?? existingSession)
+          : await ctx.store.createJarvisSession({
+              id: parsed.data.client_session_id,
+              userId,
+              title,
+              prompt: command,
+              source: 'workspace_runtime',
+              intent: 'code',
+              status: 'running',
+              workspacePreset: 'execution',
+              primaryTarget: 'execution'
+            });
+      }
+
       const workspace = manager.spawnCommand({
         workspaceId,
         userId,
         command,
-        shell: parsed.data.shell
+        shell: parsed.data.shell,
+        linkedJarvisSessionId: linkedSession?.id ?? null
       });
+      if (linkedSession) {
+        await ctx.store.appendJarvisSessionEvent({
+          userId,
+          sessionId: linkedSession.id,
+          eventType: 'workspace.run.created',
+          status: 'running',
+          summary: `Workspace command started: ${truncateText(command, 96)}`,
+          data: {
+            workspace_id: workspace.id,
+            cwd: workspace.cwd,
+            command,
+            risk_level: policy.riskLevel,
+            impact_profile: policy.impactProfile,
+            policy_severity: policy.severity,
+            policy_disposition: policy.disposition,
+            impact: policy.impact
+          }
+        });
+      }
       return sendSuccess(reply, request, 202, {
         workspace,
         low_risk: lowRisk,
-        policy
+        policy,
+        session: linkedSession
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'failed to spawn workspace session';

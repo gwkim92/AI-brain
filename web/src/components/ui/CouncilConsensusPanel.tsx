@@ -1,5 +1,6 @@
 import React from "react";
 import { CheckCircle2, ShieldAlert } from "lucide-react";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
 interface CouncilConsensusPanelProps {
     status: "Consensus Reached" | "Contradiction Detected" | "Escalated to Human";
@@ -8,7 +9,14 @@ interface CouncilConsensusPanelProps {
 }
 
 export function CouncilConsensusPanel({ status, summary, rounds }: CouncilConsensusPanelProps) {
+    const { t } = useLocale();
     const isHealthy = status === "Consensus Reached";
+    const statusLabel =
+        status === "Consensus Reached"
+            ? t("council.status.consensus")
+            : status === "Contradiction Detected"
+                ? t("council.status.contradiction")
+                : t("council.status.escalated");
 
     return (
         <div className={`p-6 rounded-lg border ${isHealthy
@@ -24,12 +32,12 @@ export function CouncilConsensusPanel({ status, summary, rounds }: CouncilConsen
                         <ShieldAlert className="text-red-400" size={18} />
                     )}
                     <h2 className={`font-mono font-bold tracking-widest text-sm ${isHealthy ? "text-purple-400" : "text-red-400"}`}>
-                        {status.toUpperCase()}
+                        {statusLabel.toUpperCase()}
                     </h2>
                 </div>
 
                 <span className="text-[10px] font-mono text-white/40">
-                    AFTER {rounds} ROUNDS
+                    {t("council.roundsAfter", { value: rounds })}
                 </span>
             </div>
 

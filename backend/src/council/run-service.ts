@@ -18,6 +18,7 @@ type CouncilSpanEvent = {
 
 export type StartCouncilRunInput = {
   userId: string;
+  linkedSessionId?: string;
   traceId?: string;
   idempotencyKey: string;
   question: string;
@@ -223,6 +224,16 @@ async function executeCouncilRun(ctx: RouteContext, input: StartCouncilRunInput,
       used_fallback: routed.usedFallback
     });
 
+    if (input.linkedSessionId) {
+      await store.updateJarvisSession({
+        sessionId: input.linkedSessionId,
+        userId: input.userId,
+        status: 'completed',
+        taskId,
+        councilRunId: run.id
+      });
+    }
+
     void embedAndStore(store, null, {
       userId: input.userId,
       content: `Council Q: ${input.question}\nSynthesis: ${summaryWithRounds}`,
@@ -270,6 +281,16 @@ async function executeCouncilRun(ctx: RouteContext, input: StartCouncilRunInput,
       used_fallback: true
     });
 
+    if (input.linkedSessionId) {
+      await store.updateJarvisSession({
+        sessionId: input.linkedSessionId,
+        userId: input.userId,
+        status: 'failed',
+        taskId,
+        councilRunId: run.id
+      });
+    }
+
     if (taskId) {
       await store.setTaskStatus({
         taskId,
@@ -295,6 +316,38 @@ export async function startCouncilRun(ctx: RouteContext, input: StartCouncilRunI
     idempotencyKey: input.idempotencyKey
   });
   if (existing) {
+    if (input.linkedSessionId) {
+      const existingSession = await store.getJarvisSessionById({ userId: input.userId, sessionId: input.linkedSessionId });
+      const sessionStatus =
+        existing.status === 'completed' ? 'completed' : existing.status === 'failed' ? 'failed' : 'running';
+      if (existingSession) {
+        await store.updateJarvisSession({
+          sessionId: input.linkedSessionId,
+          userId: input.userId,
+          title: input.taskTitle ?? truncateText(input.question, 180),
+          prompt: input.question,
+          status: sessionStatus,
+          workspacePreset: 'jarvis',
+          primaryTarget: 'council',
+          taskId: existing.task_id,
+          councilRunId: existing.id
+        });
+      } else {
+        await store.createJarvisSession({
+          id: input.linkedSessionId,
+          userId: input.userId,
+          title: input.taskTitle ?? truncateText(input.question, 180),
+          prompt: input.question,
+          source: input.taskSource ?? 'council_run_api',
+          intent: 'council',
+          status: sessionStatus,
+          workspacePreset: 'jarvis',
+          primaryTarget: 'council',
+          taskId: existing.task_id,
+          councilRunId: existing.id
+        });
+      }
+    }
     return {
       run: existing,
       idempotentReplay: true
@@ -350,6 +403,37 @@ export async function startCouncilRun(ctx: RouteContext, input: StartCouncilRunI
         stage: 'running'
       }
     });
+  }
+
+  if (input.linkedSessionId) {
+    const existingSession = await store.getJarvisSessionById({ userId: input.userId, sessionId: input.linkedSessionId });
+    if (existingSession) {
+      await store.updateJarvisSession({
+        sessionId: input.linkedSessionId,
+        userId: input.userId,
+        title: input.taskTitle ?? truncateText(input.question, 180),
+        prompt: input.question,
+        status: 'running',
+        workspacePreset: 'jarvis',
+        primaryTarget: 'council',
+        taskId,
+        councilRunId: run.id
+      });
+    } else {
+      await store.createJarvisSession({
+        id: input.linkedSessionId,
+        userId: input.userId,
+        title: input.taskTitle ?? truncateText(input.question, 180),
+        prompt: input.question,
+        source: input.taskSource ?? 'council_run_api',
+        intent: 'council',
+        status: 'running',
+        workspacePreset: 'jarvis',
+        primaryTarget: 'council',
+        taskId,
+        councilRunId: run.id
+      });
+    }
   }
 
   void executeCouncilRun(ctx, input, run, taskId);

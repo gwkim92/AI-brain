@@ -9,6 +9,7 @@ import { ApiRequestError } from "@/lib/api/client";
 import type { UpgradeProposalRecord, UpgradeStatus } from "@/lib/api/types";
 import { AsyncState } from "@/components/ui/AsyncState";
 import { hasMinRole, useCurrentRole } from "@/lib/auth/role";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
 function proposalAnchorId(proposalId: string): string {
     return `proposal-${proposalId}`;
@@ -16,6 +17,7 @@ function proposalAnchorId(proposalId: string): string {
 
 export default function ApprovalsPage() {
     const role = useCurrentRole();
+    const { t, formatDateTime } = useLocale();
     const canOperate = hasMinRole(role, "operator");
     const [requestedProposalId, setRequestedProposalId] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<"pending" | "history">("pending");
@@ -41,7 +43,7 @@ export default function ApprovalsPage() {
             if (err instanceof ApiRequestError) {
                 setError(`${err.code}: ${err.message}`);
             } else {
-                setError("failed to load proposals");
+                setError(t("approvals.loadFailed"));
             }
             setProposals([]);
         } finally {
@@ -127,7 +129,7 @@ export default function ApprovalsPage() {
             if (err instanceof ApiRequestError) {
                 setError(`${err.code}: ${err.message}`);
             } else {
-                setError("failed to submit approval decision");
+                setError(t("approvals.submitUpgradeFailed"));
             }
         } finally {
             setSubmittingId(null);
@@ -140,10 +142,10 @@ export default function ApprovalsPage() {
             <header className="mb-8 border-l-2 border-amber-500 pl-4 flex justify-between items-end">
                 <div>
                     <h1 className="text-2xl font-mono font-bold tracking-widest text-amber-500 flex items-center gap-3">
-                        <ShieldCheck size={24} /> APPROVAL CENTER
+                        <ShieldCheck size={24} /> {t("approvals.title")}
                     </h1>
                     <p className="text-sm font-mono text-white/50 tracking-wide mt-1">
-                        HUMAN PRE-EXECUTION GATE
+                        {t("approvals.subtitle")}
                     </p>
                 </div>
 
@@ -152,32 +154,32 @@ export default function ApprovalsPage() {
                         onClick={() => setActiveTab("pending")}
                         className={`px-4 py-2 rounded transition-colors flex items-center gap-2 ${activeTab === "pending" ? "bg-white/10 text-white font-bold shadow-[0_4px_10px_rgba(0,0,0,0.5)]" : "text-white/50 hover:text-white"}`}
                     >
-                        PENDING <span className="px-1.5 rounded-full bg-amber-500 text-black text-[10px]">{pendingApprovals.length}</span>
+                        {t("approvals.tab.pending")} <span className="px-1.5 rounded-full bg-amber-500 text-black text-[10px]">{pendingApprovals.length}</span>
                     </button>
                     <button
                         onClick={() => setActiveTab("history")}
                         className={`px-4 py-2 rounded transition-colors flex items-center gap-2 ${activeTab === "history" ? "bg-white/10 text-white font-bold" : "text-white/50 hover:text-white"}`}
                     >
-                        HISTORY <History size={14} />
+                        {t("approvals.tab.history")} <History size={14} />
                     </button>
                 </div>
             </header>
 
             {!canOperate && (
                 <div className="mb-4 rounded border border-amber-500/30 bg-amber-500/10 p-3 font-mono text-xs text-amber-300">
-                    Operator role required. Member accounts cannot access approval execution APIs.
+                    {t("approvals.operatorRequiredPage")}
                 </div>
             )}
 
             {canOperate && <div className="flex justify-between items-center mb-6 font-mono text-xs border-b border-white/10 pb-4">
                 <div className="flex items-center gap-4 text-white/50">
                     <button className="flex items-center gap-2 hover:text-white transition-colors">
-                        <SlidersHorizontal size={14} /> FILTER BY RISK
+                        <SlidersHorizontal size={14} /> {t("approvals.page.filterByRisk")}
                     </button>
-                    <button className="hover:text-white transition-colors">DATE</button>
+                    <button className="hover:text-white transition-colors">{t("approvals.page.date")}</button>
                 </div>
                 <div className="text-white/40">
-                    AUTO-REJECT IN 24H: <span className="text-amber-500">ON</span>
+                    {t("approvals.page.autoReject")}: <span className="text-amber-500">{t("approvals.page.autoRejectOn")}</span>
                 </div>
             </div>}
 
@@ -185,18 +187,18 @@ export default function ApprovalsPage() {
                 loading={loading}
                 error={error}
                 empty={false}
-                loadingText="Loading approvals..."
+                loadingText={t("approvals.loading")}
                 onRetry={() => void refresh()}
                 className="mb-4"
             />}
             {canOperate && !loading && requestedProposalId && !targetedProposal && (
                 <div className="mb-4 rounded border border-amber-500/30 bg-amber-500/10 p-3 font-mono text-xs text-amber-300">
-                    Proposal `{requestedProposalId.slice(0, 8)}` was not found in the current approval dataset.
+                    {t("approvals.page.proposalMissing", { proposalId: requestedProposalId.slice(0, 8) })}
                 </div>
             )}
             {canOperate && !loading && targetedProposal && (
                 <div className="mb-4 rounded border border-cyan-500/30 bg-cyan-500/10 p-3 font-mono text-xs text-cyan-300">
-                    Focused proposal: `{targetedProposal.id.slice(0, 8)}` ({targetedProposal.status.toUpperCase()}).
+                    {t("approvals.page.focusedProposal", { proposalId: targetedProposal.id.slice(0, 8), status: targetedProposal.status.toUpperCase() })}
                 </div>
             )}
 
@@ -207,7 +209,7 @@ export default function ApprovalsPage() {
                             loading={false}
                             error={null}
                             empty
-                            emptyText="No pending upgrade proposals."
+                            emptyText={t("approvals.page.nonePending")}
                             className="col-span-2 text-sm font-mono text-white/30 border border-white/10 rounded-lg p-6"
                         />
                     )}
@@ -218,10 +220,16 @@ export default function ApprovalsPage() {
                             containerId={proposalAnchorId(app.id)}
                             highlighted={app.id === requestedProposalId}
                             title={app.proposalTitle}
-                            description={`Proposal ${app.id.slice(0, 8)} based on recommendation ${app.recommendationId.slice(0, 8)}.`}
+                            description={t("approvals.upgrade.description", {
+                                proposalId: app.id.slice(0, 8),
+                                recommendationId: app.recommendationId.slice(0, 8),
+                            })}
                             risk={resolveRisk(app.status)}
-                            requester="Upgrade Planner"
-                            impact={`STATUS: ${app.status.toUpperCase()} | CREATED: ${new Date(app.createdAt).toLocaleString()}`}
+                            requester={t("approvals.upgrade.requester")}
+                            impact={t("approvals.impact.created", {
+                                status: app.status.toUpperCase(),
+                                date: formatDateTime(app.createdAt),
+                            })}
                             onApprove={() => void decide(app.id, "approve")}
                             onReject={() => void decide(app.id, "reject")}
                             disabled={submittingId === app.id}
@@ -235,7 +243,7 @@ export default function ApprovalsPage() {
                             loading={false}
                             error={null}
                             empty
-                            emptyText="NO HISTORICAL APPROVALS IN TIMEFRAME"
+                            emptyText={t("approvals.page.noneHistory")}
                             className="flex-1 flex items-center justify-center text-white/20 font-mono text-sm border-2 border-dashed border-white/10 rounded-xl min-h-[180px]"
                         />
                     )}
@@ -246,10 +254,13 @@ export default function ApprovalsPage() {
                             containerId={proposalAnchorId(item.id)}
                             highlighted={item.id === requestedProposalId}
                             title={item.proposalTitle}
-                            description={`Recommendation ${item.recommendationId.slice(0, 8)}.`}
+                            description={t("approvals.upgrade.historyDescription", { recommendationId: item.recommendationId.slice(0, 8) })}
                             risk={resolveRisk(item.status)}
-                            requester="Upgrade Planner"
-                            impact={`STATUS: ${item.status.toUpperCase()} | UPDATED: ${new Date(item.createdAt).toLocaleString()}`}
+                            requester={t("approvals.upgrade.requester")}
+                            impact={t("approvals.impact.updated", {
+                                status: item.status.toUpperCase(),
+                                date: formatDateTime(item.createdAt),
+                            })}
                             disabled
                         />
                     ))}

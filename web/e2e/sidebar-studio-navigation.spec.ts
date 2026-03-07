@@ -482,6 +482,7 @@ test("sidebar mission/studio buttons open HUD widget workspaces without route na
   await page.addInitScript(() => {
     window.localStorage.setItem("jarvis.auth.role", "admin");
     window.localStorage.setItem("jarvis.auth.token", "e2e-token");
+    window.localStorage.setItem("jarvis.app.locale", "en");
   });
 
   await context.addCookies([
@@ -498,23 +499,23 @@ test("sidebar mission/studio buttons open HUD widget workspaces without route na
 
   await installAppApiMocks(page);
 
-  const navigationChecks: Array<{ ariaLabel: string; headings: string[] }> = [
-    { ariaLabel: "Mission Control", headings: ["ORCHESTRATION HUB", "AI ASSISTANT", "TASK MANAGER"] },
-    { ariaLabel: "Code", headings: ["AI ASSISTANT", "TASK MANAGER", "WORKBENCH"] },
-    { ariaLabel: "Research", headings: ["DOSSIER ARCHIVE", "WATCHERS", "AI ASSISTANT"] },
-    { ariaLabel: "Intelligence", headings: ["SYSTEM REPORTS", "ACTION CENTER", "NOTIFICATIONS"] },
+  const navigationChecks: Array<{ testId: string; widgets: string[] }> = [
+    { testId: "sidebar-workspace-jarvis", widgets: ["inbox", "assistant", "tasks"] },
+    { testId: "sidebar-workspace-execution", widgets: ["assistant", "tasks", "workbench"] },
+    { testId: "sidebar-workspace-research", widgets: ["dossier", "watchers", "assistant"] },
+    { testId: "sidebar-workspace-control", widgets: ["reports", "action_center", "notifications"] },
   ];
 
   for (const item of navigationChecks) {
     await page.goto("/?widget=inbox");
 
-    const navButton = page.locator(`button[aria-label="${item.ariaLabel}"]`);
+    const navButton = page.getByTestId(item.testId);
     await expect(navButton).toBeVisible();
     await navButton.click();
     await expect(page).not.toHaveURL(/\/mission(?:\?|$)|\/studio\//);
 
-    for (const heading of item.headings) {
-      await expect(page.getByRole("heading", { name: heading, exact: true }).first()).toBeVisible();
+    for (const widgetId of item.widgets) {
+      await expect(page.getByTestId(`glass-widget-${widgetId}`)).toBeVisible();
     }
   }
 });
@@ -523,6 +524,7 @@ test("legacy mission/studio routes redirect to HUD widgets", async ({ page, cont
   await page.addInitScript(() => {
     window.localStorage.setItem("jarvis.auth.role", "admin");
     window.localStorage.setItem("jarvis.auth.token", "e2e-token");
+    window.localStorage.setItem("jarvis.app.locale", "en");
   });
 
   await context.addCookies([
@@ -539,12 +541,12 @@ test("legacy mission/studio routes redirect to HUD widgets", async ({ page, cont
 
   await installAppApiMocks(page);
 
-  const checks: Array<{ path: string; headings: string[] }> = [
-    { path: "/mission?mission=mid-1&step=sid-1", headings: ["ORCHESTRATION HUB", "AI ASSISTANT", "TASK MANAGER"] },
-    { path: "/studio/code", headings: ["AI ASSISTANT", "TASK MANAGER", "WORKBENCH"] },
-    { path: "/studio/research", headings: ["DOSSIER ARCHIVE", "WATCHERS", "AI ASSISTANT"] },
-    { path: "/studio/finance", headings: ["SYSTEM REPORTS", "ACTION CENTER", "NOTIFICATIONS"] },
-    { path: "/studio/news", headings: ["SYSTEM REPORTS", "ACTION CENTER", "NOTIFICATIONS"] },
+  const checks: Array<{ path: string; widgets: string[] }> = [
+    { path: "/mission?mission=mid-1&step=sid-1", widgets: ["inbox", "assistant", "tasks"] },
+    { path: "/studio/code", widgets: ["assistant", "tasks", "workbench"] },
+    { path: "/studio/research", widgets: ["dossier", "watchers", "assistant"] },
+    { path: "/studio/finance", widgets: ["reports", "action_center", "notifications"] },
+    { path: "/studio/news", widgets: ["reports", "action_center", "notifications"] },
   ];
 
   for (const item of checks) {
@@ -564,16 +566,63 @@ test("legacy mission/studio routes redirect to HUD widgets", async ({ page, cont
       expect(currentUrl.searchParams.get("step")).toBe("sid-1");
     }
 
-    for (const heading of item.headings) {
-      await expect(page.getByRole("heading", { name: heading, exact: true }).first()).toBeVisible();
+    for (const widgetId of item.widgets) {
+      await expect(page.getByTestId(`glass-widget-${widgetId}`)).toBeVisible();
     }
   }
+});
+
+test("single widget deep-links override persisted HUD layout and spotlight the requested widget", async ({ page, context }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("jarvis.auth.role", "admin");
+    window.localStorage.setItem("jarvis.auth.token", "e2e-token");
+    window.localStorage.setItem("jarvis.app.locale", "en");
+    window.localStorage.setItem("hud-mounted-widgets", JSON.stringify(["assistant", "tasks", "notifications"]));
+    window.localStorage.setItem("hud-active-widgets", JSON.stringify(["assistant", "tasks", "notifications"]));
+    window.localStorage.setItem("hud-focused-widget", "notifications");
+    window.localStorage.setItem("hud-workspace-preset", "jarvis");
+    window.localStorage.setItem("hud-widget-layout:workbench", JSON.stringify({ x: 1040, y: 32, w: 220, h: 220 }));
+    window.localStorage.setItem("hud-widget-layout:assistant", JSON.stringify({ x: 32, y: 52, w: 420, h: 300 }));
+    window.localStorage.setItem("hud-widget-layout:tasks", JSON.stringify({ x: 460, y: 52, w: 420, h: 300 }));
+    window.localStorage.setItem("hud-widget-layout:notifications", JSON.stringify({ x: 900, y: 52, w: 280, h: 220 }));
+  });
+
+  await context.addCookies([
+    {
+      name: "jarvis_auth_token",
+      value: "e2e-token",
+      domain: "127.0.0.1",
+      path: "/",
+      httpOnly: false,
+      secure: false,
+      sameSite: "Lax",
+    },
+  ]);
+
+  await installAppApiMocks(page);
+
+  await page.goto("/?widget=workbench");
+
+  await expect(page.getByTestId("glass-widget-workbench")).toBeVisible();
+  await expect(page.getByTestId("glass-widget-assistant")).toBeHidden();
+  await expect(page.getByTestId("glass-widget-tasks")).toBeHidden();
+  await expect(page.getByTestId("glass-widget-notifications")).toBeHidden();
+
+  const box = await page.getByTestId("glass-widget-workbench").boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.width).toBeGreaterThan(480);
+  expect(box!.height).toBeGreaterThan(360);
+  expect(box!.x).toBeLessThan(900);
+  expect(box!.x).not.toBe(1040);
+  expect(box!.y).toBeGreaterThan(24);
+  await expect(page).not.toHaveURL(/widget=|widgets=|focus=|replace=|activation=/);
 });
 
 test("research preset keeps watcher create form clickable beside empty dossier state", async ({ page, context }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem("jarvis.auth.role", "member");
     window.localStorage.setItem("jarvis.auth.token", "e2e-token");
+    window.localStorage.setItem("jarvis.app.locale", "en");
   });
 
   await context.addCookies([
@@ -673,13 +722,11 @@ test("research preset keeps watcher create form clickable beside empty dossier s
 
   await page.goto("/studio/research");
   await expect(page).not.toHaveURL(/\/studio\//);
-  await expect(page.getByRole("heading", { name: "WATCHERS", exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("heading", { name: "DOSSIERS", exact: true }).first()).toBeVisible();
+  await expect(page.getByTestId("glass-widget-watchers")).toBeVisible();
+  await expect(page.getByTestId("glass-widget-dossier")).toBeVisible();
   await page
-    .locator("main")
-    .filter({ has: page.getByText("Grounded research archive") })
-    .first()
-    .getByRole("button", { name: "LIST", exact: true })
+    .getByTestId("glass-widget-dossier")
+    .getByRole("button", { name: "List", exact: true })
     .click();
 
   await page.getByPlaceholder("Watcher title").fill("Research lane watcher");
@@ -695,20 +742,19 @@ test("research preset keeps watcher create form clickable beside empty dossier s
     .getByRole("button", { name: "RUN", exact: true })
     .click();
   await page
-    .locator("main")
-    .filter({ has: page.getByText("Grounded research archive") })
-    .first()
-    .getByRole("button", { name: "LIST", exact: true })
+    .getByTestId("glass-widget-dossier")
+    .getByRole("button", { name: "List", exact: true })
     .click();
 
   await expect(page.getByText("Research lane watcher")).toBeVisible();
-  await expect(page.getByText("external_topic · world major news and war updates")).toBeVisible();
+  await expect(page.getByText("External Topic · world major news and war updates")).toBeVisible();
 });
 
 test("widget close remains closed and refresh does not reopen preset widgets", async ({ page, context }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem("jarvis.auth.role", "admin");
     window.localStorage.setItem("jarvis.auth.token", "e2e-token");
+    window.localStorage.setItem("jarvis.app.locale", "en");
   });
 
   await context.addCookies([
@@ -728,20 +774,21 @@ test("widget close remains closed and refresh does not reopen preset widgets", a
   await page.goto("/studio/code");
   await expect(page).not.toHaveURL(/\/studio\//);
 
-  await expect(page.getByRole("heading", { name: "WORKBENCH", exact: true })).toHaveCount(1);
-  await page.getByRole("button", { name: "Close WORKBENCH" }).click();
-  await expect(page.getByRole("heading", { name: "WORKBENCH", exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("glass-widget-workbench")).toHaveCount(1);
+  await page.getByTestId("glass-widget-close-workbench").click();
+  await expect(page.getByTestId("glass-widget-workbench")).not.toBeVisible();
 
   await page.reload();
-  await expect(page.getByRole("heading", { name: "WORKBENCH", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "TASK MANAGER", exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("heading", { name: "AI ASSISTANT", exact: true }).first()).toBeVisible();
+  await expect(page.getByTestId("glass-widget-workbench")).not.toBeVisible();
+  await expect(page.getByTestId("glass-widget-tasks")).toBeVisible();
+  await expect(page.getByTestId("glass-widget-assistant")).toBeVisible();
 });
 
 test("approving an action refreshes inbox pending actions", async ({ page, context }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem("jarvis.auth.role", "member");
     window.localStorage.setItem("jarvis.auth.token", "e2e-token");
+    window.localStorage.setItem("jarvis.app.locale", "en");
   });
 
   await context.addCookies([
@@ -871,11 +918,11 @@ test("approving an action refreshes inbox pending actions", async ({ page, conte
   });
 
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "INBOX", exact: true }).first()).toBeVisible();
+  await expect(page.getByTestId("glass-widget-inbox")).toBeVisible();
   await expect(page.getByText("1 proposal(s) waiting.")).toBeVisible();
 
-  await page.getByRole("button", { name: "Action Center", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "ACTION CENTER", exact: true }).first()).toBeVisible();
+  await page.getByTestId("sidebar-action-center").click();
+  await expect(page.getByTestId("glass-widget-action_center")).toBeVisible();
   await page.getByRole("button", { name: "APPROVE", exact: true }).click();
 
   await expect(page.getByText("0 proposal(s) waiting.")).toBeVisible();
@@ -885,6 +932,7 @@ test("approval-required workspace commands hide stale transcript until approval"
   await page.addInitScript(() => {
     window.localStorage.setItem("jarvis.auth.role", "member");
     window.localStorage.setItem("jarvis.auth.token", "e2e-token");
+    window.localStorage.setItem("jarvis.app.locale", "en");
   });
 
   await context.addCookies([
@@ -1053,29 +1101,29 @@ test("approval-required workspace commands hide stale transcript until approval"
 
   await page.goto("/studio/code");
   await expect(page).not.toHaveURL(/\/studio\//);
-  await expect(page.getByRole("heading", { name: "WORKBENCH", exact: true }).first()).toBeVisible();
-  const dock = page.getByRole("region", { name: "Context Dock" });
+  await expect(page.getByTestId("glass-widget-workbench")).toBeVisible();
+  const dock = page.getByTestId("context-dock");
   await expect(dock).toBeVisible();
-  const runCommandButton = page.getByRole("button", { name: "RUN COMMAND" });
+  const runCommandButton = page.getByTestId("workbench-run-command");
   await runCommandButton.scrollIntoViewIfNeeded();
   const [runButtonBox, dockBox] = await Promise.all([runCommandButton.boundingBox(), dock.boundingBox()]);
   expect(runButtonBox).not.toBeNull();
   expect(dockBox).not.toBeNull();
   const runButtonBottom = (runButtonBox?.y ?? 0) + (runButtonBox?.height ?? 0);
   expect(runButtonBottom < (dockBox?.y ?? Number.POSITIVE_INFINITY) - 4).toBe(true);
-  const workspaceRuntimePanel = page
-    .getByRole("button", { name: "RUN COMMAND" })
-    .locator('xpath=ancestor::div[contains(@class,"space-y-3")][1]');
-  const workspaceTranscript = workspaceRuntimePanel.locator("pre");
+  const workspaceRuntimePanel = page.getByTestId("workbench-run-command").locator('xpath=ancestor::div[contains(@class,"space-y-3")][1]');
+  const workspaceTranscript = page.getByTestId("workbench-workspace-transcript");
 
   await expect(workspaceTranscript).toContainText("PREVIOUS-OUTPUT");
 
-  await page.getByPlaceholder("pwd | git status | rg TODO src").fill("node -p process.version");
+  await page.getByTestId("workbench-workspace-command").fill("node -p process.version");
   await runCommandButton.click();
 
-  await expect(workspaceRuntimePanel).toContainText("Approval queued: Approve process launch in Approval Replay Runtime (build)");
+  await expect(workspaceRuntimePanel).toContainText(
+    "Approve process launch in Approval Replay Runtime queued for approval review (risk=build)."
+  );
   await expect(workspaceTranscript).toContainText(
-    "Approval pending. Existing workspace output is hidden until this command is approved."
+    "Approval pending. The command will not run until an approved action resumes this workspace."
   );
   await expect(workspaceTranscript).not.toContainText("PREVIOUS-OUTPUT");
 });
@@ -1084,6 +1132,7 @@ test("mission dock supports focus switch and recommendation controls", async ({ 
   await page.addInitScript(() => {
     window.localStorage.setItem("jarvis.auth.role", "admin");
     window.localStorage.setItem("jarvis.auth.token", "e2e-token");
+    window.localStorage.setItem("jarvis.app.locale", "en");
   });
 
   await context.addCookies([
@@ -1107,17 +1156,17 @@ test("mission dock supports focus switch and recommendation controls", async ({ 
   await expect(dock.getByTestId("dock-step-status")).toHaveText("RUNNING");
   await expect(dock.getByTestId("dock-step-timeline")).toBeVisible();
   await expect(dock.getByTestId("dock-step-1")).toContainText("RUNNING");
-  await expect(dock.getByTestId("dock-step-2")).toContainText("PENDING");
-  await expect(page.getByRole("heading", { name: "WORKBENCH", exact: true }).first()).toBeVisible();
+  await expect(dock.getByTestId("dock-step-2")).toContainText("QUEUED");
+  await expect(page.getByTestId("glass-widget-workbench")).toBeVisible();
 
-  await dock.getByRole("button", { name: "Dock Tasks" }).click();
-  await expect(page.getByRole("heading", { name: "TASK MANAGER", exact: true }).first()).toBeVisible();
-  await expect(dock.getByRole("button", { name: "Recommended Workbench" })).toBeVisible();
-  await expect(dock.getByTestId("dock-auto-focus-hold")).toContainText("MANUAL HOLD");
+  await dock.getByTestId("dock-widget-tasks").click();
+  await expect(page.getByTestId("glass-widget-tasks")).toBeVisible();
+  await expect(dock.getByTestId("dock-recommended-widget")).toBeVisible();
+  await expect(dock.getByTestId("dock-auto-focus-hold")).toContainText(/manual hold/i);
 
-  const autoFocusToggle = dock.getByRole("button", { name: "Mission Auto Focus Toggle" });
+  const autoFocusToggle = dock.getByTestId("dock-auto-focus-toggle");
   await autoFocusToggle.click();
-  await expect(autoFocusToggle).toContainText("AUTO FOCUS OFF");
+  await expect(autoFocusToggle).toContainText(/auto focus off/i);
   await expect
     .poll(() =>
       page.evaluate(() => {
@@ -1126,6 +1175,6 @@ test("mission dock supports focus switch and recommendation controls", async ({ 
     )
     .toBe("0");
 
-  await dock.getByRole("button", { name: "Recommended Workbench" }).click();
-  await expect(page.getByRole("heading", { name: "WORKBENCH", exact: true }).first()).toBeVisible();
+  await dock.getByTestId("dock-recommended-widget").click();
+  await expect(page.getByTestId("glass-widget-workbench")).toBeVisible();
 });

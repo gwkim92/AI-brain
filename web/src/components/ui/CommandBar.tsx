@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Loader2, Zap } from "lucide-react";
 import { useQuickCommand } from "@/hooks/useQuickCommand";
+import { useLocale } from "@/components/providers/LocaleProvider";
 import {
   isRuntimeDebugEnabled,
   JARVIS_RUNTIME_DEBUG_CHANGED_EVENT,
@@ -11,6 +12,7 @@ import {
 import { subscribeSessionRerun } from "@/lib/hud/session-rerun";
 
 export function CommandBar() {
+  const { t } = useLocale();
   const { commandInput, setCommandInput, isSubmitting, error, execute } = useQuickCommand();
   const [runtimeDebugEnabled, setRuntimeDebugEnabledState] = useState(false);
   const showDebugToggle = process.env.NODE_ENV !== "production";
@@ -55,7 +57,7 @@ export function CommandBar() {
         <Zap size={14} className="text-cyan-500/60 shrink-0" />
         <input
           type="text"
-          placeholder="Ask JARVIS anything..."
+          placeholder={t("commandBar.placeholder")}
           className="flex-1 bg-transparent text-sm text-cyan-50 focus:outline-none font-mono placeholder:text-white/25"
           value={commandInput}
           onChange={(e) => setCommandInput(e.target.value)}
@@ -86,7 +88,7 @@ export function CommandBar() {
           disabled={isSubmitting || !commandInput.trim()}
         >
           {isSubmitting && <Loader2 size={10} className="animate-spin" />}
-          EXEC
+          {t("commandBar.execute").toUpperCase()}
         </button>
       </div>
       {error && (

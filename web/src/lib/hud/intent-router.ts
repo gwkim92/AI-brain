@@ -20,6 +20,7 @@ export type HudWidgetId =
 
 export type HudIntent = "code" | "research" | "finance" | "news" | "council" | "general";
 export type HudTaskMode = "code" | "execute" | "radar_review" | "council";
+export type HudLaunchComplexity = "simple" | "moderate" | "complex";
 
 const CODE_KEYWORDS =
   /(코드|개발|버그|디버그|리팩토링|테스트|패치|api 설계|architecture|code|debug|refactor|test|fix)/i;
@@ -88,6 +89,26 @@ export function buildWidgetPlan(intent: HudIntent, prompt: string): HudWidgetId[
 
   if (IDEATION_KEYWORDS.test(prompt)) {
     base.splice(1, 0, "ideation", "skills");
+  }
+
+  return Array.from(new Set(base));
+}
+
+export function buildLaunchWidgetPlan(
+  intent: HudIntent,
+  complexity: HudLaunchComplexity,
+  prompt: string
+): HudWidgetId[] {
+  const base: HudWidgetId[] = ["assistant", "tasks"];
+
+  if (intent === "code") {
+    base.splice(1, 0, "workbench");
+  } else if (intent === "council") {
+    base.splice(1, 0, "council");
+  } else if (intent === "research" || intent === "finance" || intent === "news") {
+    // Research artifacts should be revealed progressively after the session starts.
+  } else if (IDEATION_KEYWORDS.test(prompt) && complexity === "simple") {
+    base.splice(1, 0, "ideation");
   }
 
   return Array.from(new Set(base));

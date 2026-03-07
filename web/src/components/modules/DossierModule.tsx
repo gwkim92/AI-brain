@@ -7,6 +7,7 @@ import { useSearchParams } from "next/navigation";
 import { ApiRequestError } from "@/lib/api/client";
 import { exportDossier, getDossier, listDossiers, refreshDossier } from "@/lib/api/endpoints";
 import type { DossierDetail, DossierRecord } from "@/lib/api/types";
+import { useLocale } from "@/components/providers/LocaleProvider";
 import { MarkdownLite } from "@/components/ui/MarkdownLite";
 
 type ParsedQuality = {
@@ -70,30 +71,18 @@ function sourceFreshnessClass(tone: SourceFreshnessTone): string {
   return "border-white/15 bg-white/5 text-white/60";
 }
 
-function formatSourceDate(value: string | null): string {
-  if (!value) return "date unknown";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "date unknown";
-  return date.toLocaleString("ko-KR", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatRelativeAge(value: string): string {
+function formatRelativeAge(value: string, t: ReturnType<typeof useLocale>["t"]): string {
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) return value;
   const deltaMs = Date.now() - timestamp;
-  if (deltaMs < 60_000) return "just now";
-  if (deltaMs < 3_600_000) return `${Math.floor(deltaMs / 60_000)}m ago`;
-  if (deltaMs < 86_400_000) return `${Math.floor(deltaMs / 3_600_000)}h ago`;
-  return `${Math.floor(deltaMs / 86_400_000)}d ago`;
+  if (deltaMs < 60_000) return t("tasks.relative.justNow");
+  if (deltaMs < 3_600_000) return t("tasks.relative.minutesAgo", { value: Math.floor(deltaMs / 60_000) });
+  if (deltaMs < 86_400_000) return t("tasks.relative.hoursAgo", { value: Math.floor(deltaMs / 3_600_000) });
+  return t("tasks.relative.daysAgo", { value: Math.floor(deltaMs / 86_400_000) });
 }
 
 export function DossierModule() {
+  const { t, formatDateTime } = useLocale();
   const searchParams = useSearchParams();
   const [dossiers, setDossiers] = useState<DossierRecord[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -121,13 +110,13 @@ export function DossierModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("failed to load dossiers");
+        setError(t("dossier.loadFailed"));
       }
       setDossiers([]);
     } finally {
       setLoading(false);
     }
-  }, [searchParams]);
+  }, [searchParams, t]);
 
   const hydrateDetail = useCallback(async (dossierId: string) => {
     try {
@@ -137,11 +126,11 @@ export function DossierModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("failed to load dossier detail");
+        setError(t("dossier.loadDetailFailed"));
       }
       setDetail(null);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void refreshList();
@@ -266,7 +255,7 @@ export function DossierModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("failed to refresh dossier");
+        setError(t("dossier.refreshFailed"));
       }
     } finally {
       setRefreshing(false);
@@ -282,7 +271,7 @@ export function DossierModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("failed to export dossier");
+        setError(t("dossier.exportFailed"));
       }
     }
   };
@@ -292,19 +281,19 @@ export function DossierModule() {
       <header className="border-l-2 border-cyan-500 pl-3 flex items-center justify-between shrink-0">
         <div>
           <h2 className="text-sm font-mono font-bold tracking-widest text-cyan-400 flex items-center gap-2">
-            <BookOpenText size={14} /> DOSSIERS
+            <BookOpenText size={14} /> {t("dossier.title")}
           </h2>
-          <p className="text-[10px] font-mono text-white/40">Grounded research archive</p>
+          <p className="text-[10px] font-mono text-white/40">{t("dossier.subtitle")}</p>
         </div>
         <div className="flex items-center gap-2">
           <button type="button" onClick={() => void refreshList()} className="inline-flex h-7 items-center gap-1 rounded border border-white/20 px-2 text-[10px] font-mono text-white/70">
-            <RefreshCw size={11} /> LIST
+            <RefreshCw size={11} /> {t("dossier.list")}
           </button>
           <button type="button" onClick={() => void onRefreshDossier()} disabled={!selected || refreshing} className="inline-flex h-7 items-center gap-1 rounded border border-cyan-500/40 px-2 text-[10px] font-mono text-cyan-300 disabled:opacity-50">
-            <RefreshCw size={11} /> REFRESH
+            <RefreshCw size={11} /> {t("common.refresh")}
           </button>
           <button type="button" onClick={() => void onExport()} disabled={!selected} className="inline-flex h-7 items-center gap-1 rounded border border-emerald-500/40 px-2 text-[10px] font-mono text-emerald-300 disabled:opacity-50">
-            <Download size={11} /> EXPORT
+            <Download size={11} /> {t("common.export")}
           </button>
         </div>
       </header>
@@ -312,8 +301,8 @@ export function DossierModule() {
       {error && <p className="text-xs font-mono text-rose-300">{error}</p>}
       <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)] gap-3 overflow-hidden">
         <section className="rounded border border-white/10 bg-black/30 overflow-y-auto p-2 space-y-2 min-h-0">
-          {loading && <p className="text-xs font-mono text-white/45">Loading dossiers...</p>}
-          {!loading && dossiers.length === 0 && <p className="text-xs font-mono text-white/45">No dossiers yet.</p>}
+          {loading && <p className="text-xs font-mono text-white/45">{t("dossier.loading")}</p>}
+          {!loading && dossiers.length === 0 && <p className="text-xs font-mono text-white/45">{t("dossier.empty")}</p>}
           {dossiers.map((dossier) => (
             (() => {
               const quality = parseQualityJson(dossier.qualityJson);
@@ -327,25 +316,25 @@ export function DossierModule() {
               <p className="text-sm text-white/90 truncate">{dossier.title}</p>
               <p className="mt-1 text-[10px] font-mono text-white/45 line-clamp-2">{dossier.summary}</p>
               <div className="mt-2 flex flex-wrap items-center gap-1 text-[9px] font-mono text-white/40">
-                <span className="rounded border border-white/10 px-2 py-0.5">updated {formatRelativeAge(dossier.updatedAt)}</span>
-                <span className="rounded border border-white/10 px-2 py-0.5">created {formatSourceDate(dossier.createdAt)}</span>
-                <span className="rounded border border-white/10 px-2 py-0.5">id {dossier.id.slice(0, 8)}</span>
+                <span className="rounded border border-white/10 px-2 py-0.5">{t("dossier.badge.updated", { value: formatRelativeAge(dossier.updatedAt, t) })}</span>
+                <span className="rounded border border-white/10 px-2 py-0.5">{t("dossier.badge.created", { value: formatDateTime(dossier.createdAt) })}</span>
+                <span className="rounded border border-white/10 px-2 py-0.5">{t("dossier.badge.id", { value: dossier.id.slice(0, 8) })}</span>
                 {dossier.sessionId ? (
-                  <span className="rounded border border-white/10 px-2 py-0.5">session {dossier.sessionId.slice(0, 8)}</span>
+                  <span className="rounded border border-white/10 px-2 py-0.5">{t("dossier.badge.session", { value: dossier.sessionId.slice(0, 8) })}</span>
                 ) : null}
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-1">
                 <span className={`rounded border px-2 py-0.5 text-[9px] font-mono ${qualityTone(quality.qualityGatePassed)}`}>
-                  {quality.qualityGatePassed === true ? "quality pass" : quality.qualityGatePassed === false ? "quality warn" : "quality n/a"}
+                  {quality.qualityGatePassed === true ? t("dossier.badge.qualityPass") : quality.qualityGatePassed === false ? t("dossier.badge.qualityWarn") : t("dossier.badge.qualityNa")}
                 </span>
                 {quality.sourceCount !== null && (
                   <span className="rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono text-white/55">
-                    {quality.sourceCount} sources
+                    {t("dossier.badge.sources", { value: quality.sourceCount })}
                   </span>
                 )}
                 {quality.freshnessBucket && (
                   <span className="rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono text-white/55">
-                    freshness {quality.freshnessBucket}
+                    {t("dossier.badge.freshness", { value: quality.freshnessBucket })}
                   </span>
                 )}
               </div>
@@ -356,7 +345,7 @@ export function DossierModule() {
         </section>
 
         <section className="rounded border border-white/10 bg-black/30 overflow-hidden flex min-h-0 flex-col">
-          {!detail && <div className="p-4 text-xs font-mono text-white/45">Select a dossier to inspect sources and claims.</div>}
+          {!detail && <div className="p-4 text-xs font-mono text-white/45">{t("dossier.select")}</div>}
           {detail && (
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
               <div>
@@ -367,45 +356,45 @@ export function DossierModule() {
                 <div className="rounded border border-white/10 bg-black/35 p-3 space-y-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className={`rounded border px-2 py-0.5 text-[10px] font-mono ${qualityTone(quality.qualityGatePassed)}`}>
-                      {quality.qualityGatePassed === true ? "QUALITY PASS" : quality.qualityGatePassed === false ? "QUALITY WARN" : "QUALITY UNKNOWN"}
+                      {quality.qualityGatePassed === true ? t("dossier.quality.pass") : quality.qualityGatePassed === false ? t("dossier.quality.warn") : t("dossier.quality.unknown")}
                     </span>
                     {quality.freshnessBucket && (
                       <span className="rounded border border-white/10 px-2 py-0.5 text-[10px] font-mono text-white/60">
-                        freshness {quality.freshnessBucket}
+                        {t("dossier.badge.freshness", { value: quality.freshnessBucket })}
                       </span>
                     )}
                     {conflictCount !== null && (
                       <span className="rounded border border-white/10 px-2 py-0.5 text-[10px] font-mono text-white/60">
-                        conflicts {conflictCount}
+                        {t("dossier.quality.conflicts", { value: conflictCount })}
                       </span>
                     )}
                   </div>
                   <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
                     <div className="rounded border border-white/10 bg-black/20 p-2">
-                      <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">sources</p>
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">{t("dossier.quality.sources")}</p>
                       <p className="mt-1 text-sm text-white/90">{quality.sourceCount ?? "-"}</p>
                     </div>
                     <div className="rounded border border-white/10 bg-black/20 p-2">
-                      <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">domains</p>
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">{t("dossier.quality.domains")}</p>
                       <p className="mt-1 text-sm text-white/90">
                         {quality.domainCount ?? "-"}
                         {quality.domainDiversityScore !== null ? ` · ${quality.domainDiversityScore}` : ""}
                       </p>
                     </div>
                     <div className="rounded border border-white/10 bg-black/20 p-2">
-                      <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">citation</p>
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">{t("dossier.quality.citation")}</p>
                       <p className="mt-1 text-sm text-white/90">
                         {quality.citationCoverage !== null ? `${Math.round(quality.citationCoverage * 100)}%` : "-"}
                       </p>
                     </div>
                     <div className="rounded border border-white/10 bg-black/20 p-2">
-                      <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">freshness</p>
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">{t("dossier.quality.freshness")}</p>
                       <p className="mt-1 text-sm text-white/90">{quality.freshnessBucket ?? "-"}</p>
                     </div>
                   </div>
                   {quality.softWarnings.length > 0 && (
                     <div className="rounded border border-amber-500/20 bg-amber-500/5 p-3">
-                      <h4 className="text-[11px] font-mono tracking-widest text-amber-300 mb-2">QUALITY WARNINGS</h4>
+                      <h4 className="text-[11px] font-mono tracking-widest text-amber-300 mb-2">{t("dossier.quality.warnings")}</h4>
                       <div className="space-y-1">
                         {quality.softWarnings.map((warning) => (
                           <p key={warning} className="text-xs text-amber-100/80">
@@ -417,7 +406,7 @@ export function DossierModule() {
                   )}
                   {quality.topDomains.length > 0 && (
                     <div className="rounded border border-white/10 bg-black/20 p-3">
-                      <h4 className="text-[11px] font-mono tracking-widest text-cyan-300 mb-2">TOP DOMAINS</h4>
+                      <h4 className="text-[11px] font-mono tracking-widest text-cyan-300 mb-2">{t("dossier.quality.topDomains")}</h4>
                       <div className="flex flex-wrap gap-2">
                         {quality.topDomains.map((entry) => (
                           <span key={entry.domain} className="rounded border border-white/10 px-2 py-1 text-[10px] font-mono text-white/65">
@@ -434,7 +423,7 @@ export function DossierModule() {
               </div>
               <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] gap-3">
                 <div className="rounded border border-white/10 bg-black/35 p-3">
-                  <h4 className="text-[11px] font-mono tracking-widest text-cyan-300 mb-2">FRESHNESS TIMELINE</h4>
+                  <h4 className="text-[11px] font-mono tracking-widest text-cyan-300 mb-2">{t("dossier.timeline.title")}</h4>
                   <div className="space-y-2">
                     {freshnessTimeline.map((source) => {
                       const freshness = sourceFreshnessTone(source.publishedAt);
@@ -451,11 +440,11 @@ export function DossierModule() {
                             <span className={`rounded border px-2 py-0.5 text-[9px] font-mono ${sourceFreshnessClass(freshness)}`}>
                               {freshness}
                             </span>
-                            <span className="text-[10px] font-mono text-white/45">{formatSourceDate(source.publishedAt)}</span>
+                            <span className="text-[10px] font-mono text-white/45">{source.publishedAt ? formatDateTime(source.publishedAt) : t("dossier.timeline.dateUnknown")}</span>
                           </div>
                           <p className="mt-2 text-sm text-white/90">{source.title}</p>
                           <p className="mt-1 text-[10px] font-mono text-white/50">
-                            {source.domain} · cited by {sourceUsage.get(source.url) ?? 0} claim{(sourceUsage.get(source.url) ?? 0) === 1 ? "" : "s"}
+                            {t("dossier.timeline.citedByClaims", { domain: source.domain, count: sourceUsage.get(source.url) ?? 0 })}
                           </p>
                         </button>
                       );
@@ -463,13 +452,13 @@ export function DossierModule() {
                   </div>
                 </div>
                 <div className="rounded border border-white/10 bg-black/35 p-3">
-                  <h4 className="text-[11px] font-mono tracking-widest text-cyan-300 mb-2">CLAIM COVERAGE</h4>
+                  <h4 className="text-[11px] font-mono tracking-widest text-cyan-300 mb-2">{t("dossier.claimCoverage.title")}</h4>
                   <div className="space-y-2">
                     {detail.claims.map((claim) => (
                       <div key={claim.id} className="rounded border border-white/10 px-3 py-2">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono text-white/55">
-                            {claim.sourceUrls.length} source{claim.sourceUrls.length === 1 ? "" : "s"}
+                            {t("dossier.claimCoverage.sources", { value: claim.sourceUrls.length })}
                           </span>
                         </div>
                         <p className="mt-2 text-sm text-white/85">{claim.claimText}</p>
@@ -497,7 +486,7 @@ export function DossierModule() {
               </div>
               <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-3">
                 <div className="rounded border border-white/10 bg-black/35 p-3">
-                  <h4 className="text-[11px] font-mono tracking-widest text-cyan-300 mb-2">SOURCE COVERAGE MAP</h4>
+                  <h4 className="text-[11px] font-mono tracking-widest text-cyan-300 mb-2">{t("dossier.sourceCoverage.title")}</h4>
                   <div className="space-y-2">
                     {sourceCoverageRows.map(({ source, citedByClaims, coveragePct }) => (
                       <button
@@ -510,7 +499,7 @@ export function DossierModule() {
                       >
                         <div className="flex items-center justify-between gap-3">
                           <p className="truncate text-sm text-white/85">{source.domain}</p>
-                          <span className="text-[10px] font-mono text-white/45">{citedByClaims} claims</span>
+                          <span className="text-[10px] font-mono text-white/45">{t("dossier.sourceCoverage.claims", { value: citedByClaims })}</span>
                         </div>
                         <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
                           <div className="h-full rounded-full bg-cyan-400/70" style={{ width: `${coveragePct}%` }} />
@@ -521,18 +510,18 @@ export function DossierModule() {
                   </div>
                 </div>
                 <div className="rounded border border-white/10 bg-black/35 p-3">
-                  <h4 className="text-[11px] font-mono tracking-widest text-cyan-300 mb-2">SUPPORT BREAKDOWN</h4>
+                  <h4 className="text-[11px] font-mono tracking-widest text-cyan-300 mb-2">{t("dossier.support.title")}</h4>
                   <div className="space-y-2">
                     <div className="rounded border border-white/10 bg-black/20 p-2">
-                      <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">multi-source</p>
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">{t("dossier.support.multi")}</p>
                       <p className="mt-1 text-sm text-white/90">{claimSupportStats.multiSourceClaims}</p>
                     </div>
                     <div className="rounded border border-white/10 bg-black/20 p-2">
-                      <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">single-source</p>
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">{t("dossier.support.single")}</p>
                       <p className="mt-1 text-sm text-white/90">{claimSupportStats.singleSourceClaims}</p>
                     </div>
                     <div className="rounded border border-white/10 bg-black/20 p-2">
-                      <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">unsupported</p>
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">{t("dossier.support.unsupported")}</p>
                       <p className="mt-1 text-sm text-white/90">{claimSupportStats.unsupportedClaims}</p>
                     </div>
                   </div>
@@ -540,7 +529,7 @@ export function DossierModule() {
               </div>
               {conflictTopics.length > 0 && (
                 <div className="rounded border border-amber-500/20 bg-amber-500/5 p-3">
-                  <h4 className="text-[11px] font-mono tracking-widest text-amber-300 mb-2">CONFLICT TOPICS</h4>
+                  <h4 className="text-[11px] font-mono tracking-widest text-amber-300 mb-2">{t("dossier.conflicts.title")}</h4>
                   <div className="flex flex-wrap gap-2">
                     {conflictTopics.map((topic) => (
                       <span key={topic} className="rounded border border-amber-500/20 px-2 py-1 text-[10px] font-mono text-amber-100/80">
@@ -552,7 +541,7 @@ export function DossierModule() {
               )}
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
                 <div className="rounded border border-white/10 bg-black/35 p-3">
-                  <h4 className="text-[11px] font-mono tracking-widest text-cyan-300 mb-2">SOURCES</h4>
+                  <h4 className="text-[11px] font-mono tracking-widest text-cyan-300 mb-2">{t("dossier.sources.title")}</h4>
                   <div className="space-y-2">
                     {detail.sources.map((source) => (
                       <a
@@ -570,17 +559,17 @@ export function DossierModule() {
                             {sourceFreshnessTone(source.publishedAt)}
                           </span>
                           <span className="rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono text-white/55">
-                            cited {sourceUsage.get(source.url) ?? 0}
+                            {t("dossier.sources.cited", { value: sourceUsage.get(source.url) ?? 0 })}
                           </span>
                         </div>
-                        <p className="mt-1 text-[10px] font-mono text-white/45">{source.domain} · {formatSourceDate(source.publishedAt)}</p>
+                        <p className="mt-1 text-[10px] font-mono text-white/45">{source.domain} · {source.publishedAt ? formatDateTime(source.publishedAt) : t("dossier.timeline.dateUnknown")}</p>
                         {source.snippet ? <p className="mt-2 text-xs text-white/65 line-clamp-3">{source.snippet}</p> : null}
                       </a>
                     ))}
                   </div>
                 </div>
                 <div className="rounded border border-white/10 bg-black/35 p-3">
-                  <h4 className="text-[11px] font-mono tracking-widest text-cyan-300 mb-2">CLAIMS</h4>
+                  <h4 className="text-[11px] font-mono tracking-widest text-cyan-300 mb-2">{t("dossier.claims.title")}</h4>
                   <div className="space-y-2">
                     {detail.claims.map((claim) => (
                       <div key={claim.id} className="rounded border border-white/10 px-2 py-2">
@@ -609,7 +598,7 @@ export function DossierModule() {
               </div>
               {exportedMarkdown && (
                 <div className="rounded border border-emerald-500/20 bg-emerald-500/5 p-3">
-                  <h4 className="text-[11px] font-mono tracking-widest text-emerald-300 mb-2">EXPORT PREVIEW</h4>
+                  <h4 className="text-[11px] font-mono tracking-widest text-emerald-300 mb-2">{t("dossier.exportPreview")}</h4>
                   <pre className="whitespace-pre-wrap text-[11px] font-mono text-white/75">{exportedMarkdown}</pre>
                 </div>
               )}

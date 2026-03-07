@@ -393,7 +393,7 @@ export async function createWorkspace(payload: {
 
 export async function spawnWorkspaceSession(
   workspaceId: string,
-  payload: { command: string; shell?: string }
+  payload: { command: string; client_session_id?: string; shell?: string }
 ): Promise<WorkspaceSpawnResult> {
   return apiRequest<WorkspaceSpawnResult>(`/api/v1/workspaces/${workspaceId}/pty/spawn`, {
     method: "POST",

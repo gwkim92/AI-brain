@@ -39,6 +39,7 @@ import type {
   WorkspaceRecord,
 } from "@/lib/api/types";
 import { useHUD } from "@/components/providers/HUDProvider";
+import { useLocale } from "@/components/providers/LocaleProvider";
 import { publishSkillPrefill } from "@/lib/skills/prefill";
 import { dispatchJarvisDataRefresh } from "@/lib/hud/data-refresh";
 
@@ -60,6 +61,7 @@ function getImpactTone(level: string) {
 }
 
 function WorkspaceImpactRow({ label, dimension }: { label: string; dimension: WorkspaceCommandImpactDimension }) {
+  const { t } = useLocale();
   return (
     <div className="rounded border border-white/10 bg-black/20 p-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -68,7 +70,9 @@ function WorkspaceImpactRow({ label, dimension }: { label: string; dimension: Wo
       </div>
       <p className="mt-1 text-[11px] text-white/75">{dimension.summary}</p>
       {dimension.targets.length > 0 && (
-        <p className="mt-1 text-[10px] text-white/50">targets: {dimension.targets.join(", ")}</p>
+        <p className="mt-1 text-[10px] text-white/50">
+          {t("workbench.workspace.targets")}: {dimension.targets.join(", ")}
+        </p>
       )}
     </div>
   );
@@ -90,7 +94,8 @@ function mergeWorkspaceRows(current: WorkspaceRecord[], nextRow: WorkspaceRecord
 }
 
 export function WorkbenchModule() {
-  const { openWidgets } = useHUD();
+  const { t } = useLocale();
+  const { openWidgets, startSession, linkSessionTask } = useHUD();
   const streamRef = useRef<ReturnType<typeof streamExecutionRunEvents> | null>(null);
   const runtimePollRef = useRef<number | null>(null);
   const workspaceCursorRef = useRef(0);
@@ -98,7 +103,7 @@ export function WorkbenchModule() {
   const [activeTab, setActiveTab] = useState<"code" | "compute">("code");
   const [prompt, setPrompt] = useState("");
   const [status, setStatus] = useState<"idle" | "running" | "success" | "error">("idle");
-  const [output, setOutput] = useState<string>("No execution yet.");
+  const [output, setOutput] = useState<string>(() => t("workbench.noExecutionYet"));
   const [executionTimeMs, setExecutionTimeMs] = useState<number | undefined>(undefined);
   const [providerModel, setProviderModel] = useState<string>("-");
   const [credentialSummary, setCredentialSummary] = useState<string>("pending");
@@ -117,7 +122,7 @@ export function WorkbenchModule() {
   const [workspaceCommand, setWorkspaceCommand] = useState("");
   const [workspaceShell, setWorkspaceShell] = useState("");
   const [workspaceStdIn, setWorkspaceStdIn] = useState("");
-  const [workspaceLog, setWorkspaceLog] = useState("No workspace output yet.");
+  const [workspaceLog, setWorkspaceLog] = useState<string>(() => t("workbench.workspace.noOutput"));
   const [workspaceCursor, setWorkspaceCursor] = useState(0);
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [workspaceLoading, setWorkspaceLoading] = useState(true);
@@ -144,6 +149,27 @@ export function WorkbenchModule() {
     return `${credential.selected_credential_mode} (${credential.source}) · ${credential.credential_priority}`;
   };
 
+  const buildWorkspaceName = useCallback(
+    (kind: "current" | "worktree" | "devcontainer") => {
+      if (kind === "worktree") {
+        return activeTab === "code" ? t("workbench.workspace.name.codeWorktree") : t("workbench.workspace.name.computeWorktree");
+      }
+      if (kind === "devcontainer") {
+        return activeTab === "code"
+          ? t("workbench.workspace.name.codeDevcontainer")
+          : t("workbench.workspace.name.computeDevcontainer");
+      }
+      return activeTab === "code" ? t("workbench.workspace.name.codeRuntime") : t("workbench.workspace.name.computeRuntime");
+    },
+    [activeTab, t]
+  );
+
+  const formatProviderModel = useCallback(
+    (provider: string | null | undefined, model: string | null | undefined) =>
+      `${provider ?? t("workbench.pending")}/${model ?? t("workbench.pending")}`,
+    [t]
+  );
+
   const refreshWorkspaces = useCallback(
     async (preferredWorkspaceId?: string | null) => {
       const result = await listWorkspaces();
@@ -168,18 +194,19 @@ export function WorkbenchModule() {
     });
     setWorkspaces((current) => mergeWorkspaceRows(current, result.workspace));
     if (reset) {
-      const nextLog = result.chunks.length > 0 ? result.chunks.map(formatWorkspaceChunk).join("\n") : "No workspace output yet.";
+      const nextLog =
+        result.chunks.length > 0 ? result.chunks.map(formatWorkspaceChunk).join("\n") : t("workbench.workspace.noOutput");
       setWorkspaceLog(nextLog);
     } else if (result.chunks.length > 0) {
       setWorkspaceLog((current) => {
         const appended = result.chunks.map(formatWorkspaceChunk).join("\n");
-        return current === "No workspace output yet." ? appended : `${current}\n${appended}`;
+        return current === t("workbench.workspace.noOutput") ? appended : `${current}\n${appended}`;
       });
     }
     const lastSequence = result.chunks.at(-1)?.sequence ?? afterSequence;
     syncWorkspaceCursor(lastSequence);
     return result.workspace;
-  }, [syncWorkspaceCursor]);
+  }, [syncWorkspaceCursor, t]);
 
   const primeWorkspaceTranscriptBoundary = useCallback(async (workspaceId: string) => {
     const result = await readWorkspaceSession(workspaceId, {
@@ -223,16 +250,16 @@ export function WorkbenchModule() {
 
   useEffect(() => {
     if (!selectedWorkspaceId) {
-      setWorkspaceLog("No workspace selected.");
+      setWorkspaceLog(t("workbench.workspace.noneSelected"));
       syncWorkspaceCursor(0);
       return;
     }
     setWorkspaceError(null);
     void loadWorkspaceTranscript(selectedWorkspaceId, true).catch((err) => {
-      const message = err instanceof ApiRequestError ? `${err.code}: ${err.message}` : "failed to read workspace output";
+      const message = err instanceof ApiRequestError ? `${err.code}: ${err.message}` : t("workbench.error.readWorkspaceOutput");
       setWorkspaceError(message);
     });
-  }, [loadWorkspaceTranscript, selectedWorkspaceId, syncWorkspaceCursor]);
+  }, [loadWorkspaceTranscript, selectedWorkspaceId, syncWorkspaceCursor, t]);
 
   const selectedWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? null,
@@ -276,14 +303,14 @@ export function WorkbenchModule() {
 
   const providerOptions = useMemo(
     () => [
-      { provider: "auto" as const, enabled: true, label: "AUTO" },
+      { provider: "auto" as const, enabled: true, label: t("common.auto").toUpperCase() },
       ...providers.map((item) => ({
         provider: item.provider,
         enabled: item.enabled,
         label: `${item.provider.toUpperCase()}${item.model ? ` (${item.model})` : ""}`,
       })),
     ],
-    [providers]
+    [providers, t]
   );
 
   const selectedProviderModels = useMemo(() => {
@@ -302,9 +329,20 @@ export function WorkbenchModule() {
     setIdempotentReplay(false);
     setCredentialSummary("pending");
 
+    const clientSessionId = startSession(trimmed, {
+      activeWidgets: ["workbench", "tasks"],
+      mountedWidgets: ["workbench", "tasks"],
+      focusedWidget: "workbench",
+      intent: "code",
+      workspacePreset: "studio_code",
+      restoreMode: "full",
+    });
+    dispatchJarvisDataRefresh({ scope: "sessions", source: "workbench" });
+
     try {
       const mode = activeTab === "code" ? "code" : "compute";
       const payload: Parameters<typeof startExecutionRun>[0] = {
+        client_session_id: clientSessionId,
         mode,
         prompt: trimmed,
         create_task: true,
@@ -323,10 +361,14 @@ export function WorkbenchModule() {
 
       setRunId(run.id);
       setTaskId(run.task_id ?? "-");
-      setProviderModel(`${run.provider ?? "pending"}/${run.model}`);
+      setProviderModel(formatProviderModel(run.provider, run.model));
       setCredentialSummary(formatCredentialSummary(run.selected_credential));
-      setOutput(run.output || "Execution run created. Waiting for completion stream...");
+      setOutput(run.output || t("workbench.executionCreated"));
       setExecutionTimeMs(run.duration_ms > 0 ? run.duration_ms : undefined);
+      if (run.task_id) {
+        linkSessionTask(clientSessionId, run.task_id);
+        dispatchJarvisDataRefresh({ scope: "tasks", source: "workbench" });
+      }
       if (run.status === "completed") {
         setStatus("success");
       } else if (run.status === "failed") {
@@ -356,7 +398,7 @@ export function WorkbenchModule() {
             setOutput(body.data.output);
           }
           if (body.data?.provider || body.data?.model) {
-            setProviderModel(`${body.data?.provider ?? "pending"}/${body.data?.model ?? "pending"}`);
+            setProviderModel(formatProviderModel(body.data?.provider, body.data?.model));
           }
           if ("selected_credential" in (body.data ?? {})) {
             setCredentialSummary(formatCredentialSummary(body.data?.selected_credential ?? null));
@@ -406,9 +448,9 @@ export function WorkbenchModule() {
               } | null;
             };
           };
-          setOutput(body.data?.output ?? "execution failed");
+          setOutput(body.data?.output ?? t("workbench.error.executionFailed"));
           if (body.data?.provider || body.data?.model) {
-            setProviderModel(`${body.data?.provider ?? "pending"}/${body.data?.model ?? "pending"}`);
+            setProviderModel(formatProviderModel(body.data?.provider, body.data?.model));
           }
           setCredentialSummary(formatCredentialSummary(body.data?.selected_credential ?? null));
           setStatus("error");
@@ -418,12 +460,12 @@ export function WorkbenchModule() {
         },
         onError: () => {
           setStatus("error");
-          setError("execution event stream failed");
+          setError(t("workbench.error.executionStreamFailed"));
           streamRef.current = null;
         },
       });
     } catch (err) {
-      const message = err instanceof ApiRequestError ? `${err.code}: ${err.message}` : "execution failed";
+      const message = err instanceof ApiRequestError ? `${err.code}: ${err.message}` : t("workbench.error.executionFailed");
       setError(message);
       setOutput(message);
       setStatus("error");
@@ -450,14 +492,7 @@ export function WorkbenchModule() {
   const ensureWorkspace = useCallback(async () => {
     if (selectedWorkspaceId) return selectedWorkspaceId;
     const created = await createWorkspace({
-      name:
-        workspaceCreateKind === "worktree"
-          ? `${activeTab === "code" ? "Code" : "Compute"} Worktree`
-          : workspaceCreateKind === "devcontainer"
-            ? `${activeTab === "code" ? "Code" : "Compute"} Devcontainer`
-          : activeTab === "code"
-            ? "Code Runtime"
-            : "Compute Runtime",
+      name: buildWorkspaceName(workspaceCreateKind),
       cwd: workspaceCreateKind === "current" ? "." : undefined,
       kind: workspaceCreateKind,
       base_ref: workspaceCreateKind === "worktree" ? workspaceBaseRef.trim() || "HEAD" : undefined,
@@ -469,28 +504,25 @@ export function WorkbenchModule() {
     setSelectedWorkspaceId(created.id);
     setWorkspaceNotice(
       created.kind === "worktree"
-        ? `Isolated worktree created from ${created.baseRef ?? "HEAD"}: ${created.name}`
+        ? t("workbench.workspace.notice.worktreeCreated", { baseRef: created.baseRef ?? "HEAD", name: created.name })
         : created.kind === "devcontainer"
-          ? `Devcontainer created${created.containerConfigPath ? " using detected .devcontainer config" : ""}${created.sourceWorkspaceId ? " from selected source workspace" : ""}: ${created.name}`
-        : `Workspace created: ${created.name}`
+          ? t("workbench.workspace.notice.devcontainerCreated", {
+              config: created.containerConfigPath ? t("workbench.workspace.notice.usingDetectedConfig") : "",
+              source: created.sourceWorkspaceId ? t("workbench.workspace.notice.fromSelectedSource") : "",
+              name: created.name,
+            })
+        : t("workbench.workspace.notice.created", { name: created.name })
     );
     syncWorkspaceCursor(0);
     return created.id;
-  }, [activeTab, selectedWorkspaceId, workspaceBaseRef, workspaceCreateKind, sourceWorkspaceForContainer?.id, syncWorkspaceCursor, workspaceImage]);
+  }, [buildWorkspaceName, selectedWorkspaceId, t, workspaceBaseRef, workspaceCreateKind, sourceWorkspaceForContainer?.id, syncWorkspaceCursor, workspaceImage]);
 
   const handleCreateWorkspace = async () => {
     setWorkspaceBusy(true);
     setWorkspaceError(null);
     try {
       const created = await createWorkspace({
-        name:
-          workspaceCreateKind === "worktree"
-            ? `${activeTab === "code" ? "Code" : "Compute"} Worktree`
-            : workspaceCreateKind === "devcontainer"
-              ? `${activeTab === "code" ? "Code" : "Compute"} Devcontainer`
-            : activeTab === "code"
-              ? "Code Runtime"
-              : "Compute Runtime",
+        name: buildWorkspaceName(workspaceCreateKind),
         cwd: workspaceCreateKind === "current" ? "." : undefined,
         kind: workspaceCreateKind,
         base_ref: workspaceCreateKind === "worktree" ? workspaceBaseRef.trim() || "HEAD" : undefined,
@@ -501,16 +533,20 @@ export function WorkbenchModule() {
       setWorkspaces((current) => mergeWorkspaceRows(current, created));
       setSelectedWorkspaceId(created.id);
       syncWorkspaceCursor(0);
-      setWorkspaceLog("No workspace output yet.");
+      setWorkspaceLog(t("workbench.workspace.noOutput"));
       setWorkspaceNotice(
         created.kind === "worktree"
-          ? `Isolated worktree created from ${created.baseRef ?? "HEAD"}: ${created.name}`
+          ? t("workbench.workspace.notice.worktreeCreated", { baseRef: created.baseRef ?? "HEAD", name: created.name })
           : created.kind === "devcontainer"
-            ? `Devcontainer created${created.containerConfigPath ? " using detected .devcontainer config" : ""}${created.sourceWorkspaceId ? " from selected source workspace" : ""}: ${created.name}`
-          : `Workspace created: ${created.name}`
+            ? t("workbench.workspace.notice.devcontainerCreated", {
+                config: created.containerConfigPath ? t("workbench.workspace.notice.usingDetectedConfig") : "",
+                source: created.sourceWorkspaceId ? t("workbench.workspace.notice.fromSelectedSource") : "",
+                name: created.name,
+              })
+          : t("workbench.workspace.notice.created", { name: created.name })
       );
     } catch (err) {
-      setWorkspaceError(err instanceof ApiRequestError ? `${err.code}: ${err.message}` : "failed to create workspace");
+      setWorkspaceError(err instanceof ApiRequestError ? `${err.code}: ${err.message}` : t("workbench.error.createWorkspace"));
     } finally {
       setWorkspaceBusy(false);
     }
@@ -525,8 +561,18 @@ export function WorkbenchModule() {
 
     try {
       const workspaceId = await ensureWorkspace();
+      const clientSessionId = startSession(trimmed, {
+        activeWidgets: ["workbench", "tasks"],
+        mountedWidgets: ["workbench", "tasks"],
+        focusedWidget: "workbench",
+        intent: "code",
+        workspacePreset: "studio_code",
+        restoreMode: "full",
+      });
+      dispatchJarvisDataRefresh({ scope: "sessions", source: "workbench" });
       const result = await spawnWorkspaceSession(workspaceId, {
         command: trimmed,
+        client_session_id: clientSessionId,
         shell: workspaceShell.trim() || undefined,
       });
       setWorkspacePolicy(result.policy);
@@ -535,9 +581,12 @@ export function WorkbenchModule() {
       syncWorkspaceCursor(0);
       if (result.requires_approval) {
         await primeWorkspaceTranscriptBoundary(result.workspace.id);
-        setWorkspaceLog("Approval pending. Existing workspace output is hidden until this command is approved.");
+        setWorkspaceLog(t("workbench.workspace.approvalPending"));
         setWorkspaceNotice(
-          `Approval queued: ${result.action?.title ?? "Workspace command requires approval."} (${result.policy.riskLevel})`
+          t("workbench.workspace.notice.approvalQueued", {
+            title: result.action?.title ?? t("workbench.workspace.requiresApproval"),
+            risk: result.policy.riskLevel,
+          })
         );
         dispatchJarvisDataRefresh({ scope: "approvals", source: "workbench" });
         openWidgets(["workbench", "action_center", "notifications"], {
@@ -550,11 +599,11 @@ export function WorkbenchModule() {
       await loadWorkspaceTranscript(result.workspace.id, true);
       setWorkspaceNotice(
         result.policy.disposition === "auto_run"
-          ? `Workspace command started (${result.policy.riskLevel}, auto-run).`
-          : `Workspace command started with elevated access (${result.policy.riskLevel}).`
+          ? t("workbench.workspace.notice.commandStartedAuto", { risk: result.policy.riskLevel })
+          : t("workbench.workspace.notice.commandStartedElevated", { risk: result.policy.riskLevel })
       );
     } catch (err) {
-      setWorkspaceError(err instanceof ApiRequestError ? `${err.code}: ${err.message}` : "failed to run workspace command");
+      setWorkspaceError(err instanceof ApiRequestError ? `${err.code}: ${err.message}` : t("workbench.error.runWorkspaceCommand"));
     } finally {
       setWorkspaceBusy(false);
     }
@@ -572,7 +621,7 @@ export function WorkbenchModule() {
       setWorkspaceStdIn("");
       await loadWorkspaceTranscript(selectedWorkspaceId, false);
     } catch (err) {
-      setWorkspaceError(err instanceof ApiRequestError ? `${err.code}: ${err.message}` : "failed to write to workspace session");
+      setWorkspaceError(err instanceof ApiRequestError ? `${err.code}: ${err.message}` : t("workbench.error.writeWorkspace"));
     } finally {
       setWorkspaceBusy(false);
     }
@@ -586,9 +635,9 @@ export function WorkbenchModule() {
       const result = await shutdownWorkspace(selectedWorkspaceId);
       setWorkspaces((current) => mergeWorkspaceRows(current, result.workspace));
       await loadWorkspaceTranscript(selectedWorkspaceId, false);
-      setWorkspaceNotice("Workspace session terminated.");
+      setWorkspaceNotice(t("workbench.workspace.notice.terminated"));
     } catch (err) {
-      setWorkspaceError(err instanceof ApiRequestError ? `${err.code}: ${err.message}` : "failed to shutdown workspace");
+      setWorkspaceError(err instanceof ApiRequestError ? `${err.code}: ${err.message}` : t("workbench.error.shutdownWorkspace"));
     } finally {
       setWorkspaceBusy(false);
     }
@@ -602,7 +651,7 @@ export function WorkbenchModule() {
       await refreshWorkspaces(selectedWorkspaceId);
       await loadWorkspaceTranscript(selectedWorkspaceId, true);
     } catch (err) {
-      setWorkspaceError(err instanceof ApiRequestError ? `${err.code}: ${err.message}` : "failed to refresh workspace");
+      setWorkspaceError(err instanceof ApiRequestError ? `${err.code}: ${err.message}` : t("workbench.error.refreshWorkspace"));
     } finally {
       setWorkspaceBusy(false);
     }
@@ -614,14 +663,14 @@ export function WorkbenchModule() {
     setWorkspaceError(null);
     try {
       await deleteWorkspace(selectedWorkspaceId);
-      setWorkspaceNotice("Workspace deleted.");
+      setWorkspaceNotice(t("workbench.workspace.notice.deleted"));
       setWorkspacePolicy(null);
-      setWorkspaceLog("No workspace selected.");
+      setWorkspaceLog(t("workbench.workspace.noneSelected"));
       syncWorkspaceCursor(0);
       const next = await refreshWorkspaces();
       setSelectedWorkspaceId(next[0]?.id ?? null);
     } catch (err) {
-      setWorkspaceError(err instanceof ApiRequestError ? `${err.code}: ${err.message}` : "failed to delete workspace");
+      setWorkspaceError(err instanceof ApiRequestError ? `${err.code}: ${err.message}` : t("workbench.error.deleteWorkspace"));
     } finally {
       setWorkspaceBusy(false);
     }
@@ -631,9 +680,9 @@ export function WorkbenchModule() {
     <main className="w-full h-full bg-transparent text-white p-6 flex flex-col">
       <header className="mb-6 border-l-2 border-emerald-500 pl-4">
         <h1 className="text-2xl font-mono font-bold tracking-widest text-emerald-400 flex items-center gap-3">
-          <Terminal size={24} /> CODE & COMPUTE WORKBENCH
+          <Terminal size={24} /> {t("workbench.title").toUpperCase()}
         </h1>
-        <p className="text-sm font-mono text-white/50 tracking-wide mt-1">AI execution runs + approval-gated workspace runtime</p>
+        <p className="text-sm font-mono text-white/50 tracking-wide mt-1">{t("workbench.subtitle")}</p>
       </header>
 
       <div className="flex bg-white/5 p-1 rounded-lg border border-white/10 font-mono text-xs w-64 mb-4">
@@ -645,7 +694,7 @@ export function WorkbenchModule() {
               : "text-white/50 hover:text-white"
           }`}
         >
-          <Terminal size={14} /> CODE
+          <Terminal size={14} /> {t("workbench.tab.code").toUpperCase()}
         </button>
         <button
           onClick={() => setActiveTab("compute")}
@@ -655,15 +704,15 @@ export function WorkbenchModule() {
               : "text-white/50 hover:text-white"
           }`}
         >
-          <Cpu size={14} /> COMPUTE
+          <Cpu size={14} /> {t("workbench.tab.compute").toUpperCase()}
         </button>
       </div>
 
       <div className="mb-6 p-4 rounded-lg bg-white/5 border border-white/10">
-        <p className="text-[10px] font-mono tracking-widest text-white/40 mb-2 uppercase">Prompt</p>
+        <p className="text-[10px] font-mono tracking-widest text-white/40 mb-2 uppercase">{t("workbench.prompt")}</p>
         <textarea
           className="w-full bg-black/40 border border-white/10 rounded-md px-4 py-3 text-sm text-cyan-50 focus:outline-none focus:border-cyan-500/50 resize-none h-24"
-          placeholder={activeTab === "code" ? "Paste code task request..." : "Describe compute formula or model..."}
+          placeholder={activeTab === "code" ? t("workbench.promptPlaceholder.code") : t("workbench.promptPlaceholder.compute")}
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
         />
@@ -684,7 +733,7 @@ export function WorkbenchModule() {
             type="text"
             value={modelOverride}
             onChange={(event) => setModelOverride(event.target.value)}
-            placeholder="model override (optional)"
+            placeholder={t("workbench.modelOverridePlaceholder")}
             className="h-9 rounded border border-white/15 bg-black/50 px-3 text-xs text-white/90"
           />
           <datalist id="workbench-model-catalog">
@@ -700,7 +749,7 @@ export function WorkbenchModule() {
               disabled={selectedProvider === "auto"}
               className="accent-cyan-400"
             />
-            strict provider
+            {t("council.strictProvider")}
           </label>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -710,7 +759,7 @@ export function WorkbenchModule() {
             disabled={status === "running" || !prompt.trim()}
           >
             {status === "running" && <Loader2 size={12} className="animate-spin" />}
-            RUN
+            {t("workbench.run")}
           </button>
           <button
             className="bg-white/5 text-white/75 border border-white/15 px-4 py-2 rounded-md font-mono font-bold text-xs hover:text-cyan-200 hover:border-cyan-500/35 transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
@@ -718,18 +767,22 @@ export function WorkbenchModule() {
             disabled={!prompt.trim()}
           >
             <Sparkles size={12} />
-            ROUTE VIA SKILL
+            {t("workbench.routeViaSkill")}
           </button>
-          <span className="text-xs font-mono text-white/40">Provider: {providerModel}</span>
-          <span className="text-xs font-mono text-cyan-300/80">Credential: {credentialSummary}</span>
-          <span className="text-xs font-mono text-white/40">Task: {taskId === "-" ? "-" : taskId.slice(0, 8)}</span>
-          <span className="text-xs font-mono text-white/40">Run: {runId === "-" ? "-" : runId.slice(0, 8)}</span>
+          <span className="text-xs font-mono text-white/40">{t("workbench.provider")}: {providerModel}</span>
+          <span className="text-xs font-mono text-cyan-300/80">{t("council.credential")}: {credentialSummary === "pending" ? t("workbench.pending") : credentialSummary === "none" ? t("common.none") : credentialSummary}</span>
+          <span className="text-xs font-mono text-white/40">{t("workbench.task")}: {taskId === "-" ? "-" : taskId.slice(0, 8)}</span>
+          <span className="text-xs font-mono text-white/40">{t("workbench.runId")}: {runId === "-" ? "-" : runId.slice(0, 8)}</span>
         </div>
         <p className="mt-2 text-xs font-mono text-white/50">
-          Requested route: {selectedProvider}/{modelOverride.trim() || "default"} · strict={selectedProvider === "auto" ? "off" : strictProvider ? "on" : "off"}
+          {t("workbench.requestedRoute", {
+            provider: selectedProvider,
+            model: modelOverride.trim() || t("council.defaultModel"),
+            strict: selectedProvider === "auto" ? t("common.off") : strictProvider ? t("common.on") : t("common.off"),
+          })}
         </p>
         {error && <p className="mt-2 text-xs font-mono text-red-400">{error}</p>}
-        {idempotentReplay && <p className="mt-2 text-xs font-mono text-amber-300">Idempotent replay: existing run was reused.</p>}
+        {idempotentReplay && <p className="mt-2 text-xs font-mono text-amber-300">{t("council.idempotentReplay")}</p>}
       </div>
 
       <div className="flex-1 overflow-y-auto pr-4 pb-32 scroll-pb-32 space-y-6">
@@ -737,10 +790,10 @@ export function WorkbenchModule() {
           <div className="space-y-6 w-full">
             <div className="flex items-center gap-6 p-4 rounded-lg bg-emerald-500/5 border border-emerald-500/20 text-sm font-mono text-emerald-100/70">
               <span className="flex items-center gap-2">
-                <Database size={14} className="text-emerald-500" /> Database Access: Task sandbox policy
+                <Database size={14} className="text-emerald-500" /> {t("workbench.info.databaseAccess")}
               </span>
               <span className="flex items-center gap-2">
-                <ShieldAlert size={14} className="text-emerald-500" /> Network: Provider router policy
+                <ShieldAlert size={14} className="text-emerald-500" /> {t("workbench.info.network")}
               </span>
             </div>
 
@@ -749,7 +802,7 @@ export function WorkbenchModule() {
                 language="typescript"
                 status={status}
                 executionTimeMs={executionTimeMs}
-                code={prompt || "// Enter a code task prompt and press RUN"}
+                code={prompt || t("workbench.code.promptFallback")}
                 output={output}
               />
 
@@ -758,20 +811,20 @@ export function WorkbenchModule() {
                 status={status === "error" ? "error" : "success"}
                 executionTimeMs={executionTimeMs}
                 code={`{\n  "mode": "${activeTab}",\n  "provider_model": "${providerModel}",\n  "task_id": "${taskId}",\n  "run_id": "${runId}"\n}`}
-                output={status === "success" ? "Execution metadata captured." : output}
+                output={status === "success" ? t("workbench.executionMetadataCaptured") : output}
               />
             </div>
           </div>
         ) : (
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 w-full">
             <ComputeResultPanel
-              formula={prompt || "Enter compute request and press RUN"}
-              result={status === "idle" ? "N/A" : truncate(output, 180)}
+              formula={prompt || t("workbench.compute.promptFallback")}
+              result={status === "idle" ? t("workbench.na") : truncate(output, 180)}
               confidence={confidence}
             />
             <ComputeResultPanel
-              formula="Execution metadata"
-              result={`task=${taskId === "-" ? "N/A" : taskId.slice(0, 8)} | run=${runId === "-" ? "N/A" : runId.slice(0, 8)} | provider=${providerModel} | time=${executionTimeMs ?? 0}ms`}
+              formula={t("workbench.executionMetadata")}
+              result={`task=${taskId === "-" ? t("workbench.na") : taskId.slice(0, 8)} | run=${runId === "-" ? t("workbench.na") : runId.slice(0, 8)} | provider=${providerModel} | time=${executionTimeMs ?? 0}ms`}
               confidence={Math.max(50, confidence - 10)}
             />
           </div>
@@ -781,10 +834,10 @@ export function WorkbenchModule() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-sm font-mono font-bold tracking-widest text-cyan-300 flex items-center gap-2">
-                <ShieldCheck size={14} /> SAFE WORKSPACE RUNTIME
+                <ShieldCheck size={14} /> {t("workbench.workspace.title")}
               </h2>
               <p className="mt-1 text-[11px] font-mono text-white/45">
-                Read-only commands run directly. Commands outside the allowlist generate approval proposals for members.
+                {t("workbench.workspace.subtitle")}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -795,7 +848,7 @@ export function WorkbenchModule() {
                 className="inline-flex items-center gap-1 rounded border border-white/15 px-3 py-1.5 text-[11px] font-mono text-white/80 disabled:opacity-50"
               >
                 {workspaceBusy ? <Loader2 size={11} className="animate-spin" /> : <Terminal size={11} />}
-                NEW WORKSPACE
+                {t("workbench.workspace.new")}
               </button>
               <button
                 type="button"
@@ -804,7 +857,7 @@ export function WorkbenchModule() {
                 className="inline-flex items-center gap-1 rounded border border-white/15 px-3 py-1.5 text-[11px] font-mono text-white/80 disabled:opacity-50"
               >
                 <RefreshCw size={11} />
-                REFRESH
+                {t("common.refresh").toUpperCase()}
               </button>
               <button
                 type="button"
@@ -813,7 +866,7 @@ export function WorkbenchModule() {
                 className="inline-flex items-center gap-1 rounded border border-rose-500/30 px-3 py-1.5 text-[11px] font-mono text-rose-200 disabled:opacity-50"
               >
                 <Square size={11} />
-                DELETE
+                {t("common.delete").toUpperCase()}
               </button>
             </div>
           </div>
@@ -822,23 +875,23 @@ export function WorkbenchModule() {
             <div className="space-y-3 rounded border border-white/10 bg-black/30 p-3">
               <div className="grid grid-cols-1 gap-2">
                 <label className="block text-[10px] font-mono uppercase tracking-[0.3em] text-white/45">
-                  Workspace Mode
+                  {t("workbench.workspace.mode")}
                 </label>
                 <select
                   value={workspaceCreateKind}
                   onChange={(event) => setWorkspaceCreateKind(event.target.value as "current" | "worktree" | "devcontainer")}
                   className="w-full rounded border border-white/15 bg-black/50 px-3 py-2 text-xs text-white/90"
                 >
-                  <option value="current">Current repo runtime</option>
-                  <option value="worktree">Isolated git worktree</option>
-                  <option value="devcontainer">Docker devcontainer</option>
+                  <option value="current">{t("workbench.workspace.modeCurrent")}</option>
+                  <option value="worktree">{t("workbench.workspace.modeWorktree")}</option>
+                  <option value="devcontainer">{t("workbench.workspace.modeDevcontainer")}</option>
                 </select>
                 {workspaceCreateKind === "worktree" && (
                   <input
                     type="text"
                     value={workspaceBaseRef}
                     onChange={(event) => setWorkspaceBaseRef(event.target.value)}
-                    placeholder="base ref (default HEAD)"
+                    placeholder={t("workbench.workspace.baseRefPlaceholder")}
                     className="w-full rounded border border-white/15 bg-black/50 px-3 py-2 text-xs text-white/90"
                   />
                 )}
@@ -848,24 +901,24 @@ export function WorkbenchModule() {
                       type="text"
                       value={workspaceImage}
                       onChange={(event) => setWorkspaceImage(event.target.value)}
-                      placeholder="container image"
+                      placeholder={t("workbench.workspace.containerImagePlaceholder")}
                       className="w-full rounded border border-white/15 bg-black/50 px-3 py-2 text-xs text-white/90"
                     />
                     <p className="text-[11px] font-mono text-white/45">
-                      source mount: {sourceWorkspaceForContainer ? `${sourceWorkspaceForContainer.name} (${sourceWorkspaceForContainer.kind})` : "repository root"}
+                      {t("workbench.workspace.sourceMount")}: {sourceWorkspaceForContainer ? `${sourceWorkspaceForContainer.name} (${sourceWorkspaceForContainer.kind})` : t("workbench.workspace.repositoryRoot")}
                     </p>
                   </>
                 )}
               </div>
               <label className="block text-[10px] font-mono uppercase tracking-[0.3em] text-white/45">
-                Workspace
+                {t("workbench.workspace.label")}
               </label>
               <select
                 value={selectedWorkspaceId ?? ""}
                 onChange={(event) => setSelectedWorkspaceId(event.target.value || null)}
                 className="w-full rounded border border-white/15 bg-black/50 px-3 py-2 text-xs text-white/90"
               >
-                <option value="">Select workspace</option>
+                <option value="">{t("workbench.workspace.select")}</option>
                 {workspaces.map((workspace) => (
                   <option key={workspace.id} value={workspace.id}>
                     {workspace.name} · {workspace.kind} · {workspace.status}
@@ -873,32 +926,32 @@ export function WorkbenchModule() {
                 ))}
               </select>
               <div className="rounded border border-white/10 bg-black/30 p-3 text-[11px] font-mono text-white/65">
-                {workspaceLoading && <p>Loading runtime state...</p>}
-                {!workspaceLoading && !selectedWorkspace && <p>No workspace selected.</p>}
+                {workspaceLoading && <p>{t("workbench.workspace.loadingState")}</p>}
+                {!workspaceLoading && !selectedWorkspace && <p>{t("workbench.workspace.noneSelected")}</p>}
                 {selectedWorkspace && (
                   <div className="space-y-1">
-                    <p>ID: {selectedWorkspace.id.slice(0, 8)}</p>
-                    <p>Kind: {selectedWorkspace.kind}</p>
-                    <p>Base ref: {selectedWorkspace.baseRef ?? "-"}</p>
-                    <p>Source workspace: {selectedWorkspace.sourceWorkspaceId ? selectedWorkspace.sourceWorkspaceId.slice(0, 8) : "-"}</p>
-                    <p>Container image: {selectedWorkspace.containerImage ?? "-"}</p>
-                    <p>Container source: {selectedWorkspace.containerSource ?? "-"}</p>
-                    <p>Managed image: {selectedWorkspace.containerImageManaged ? "yes" : "no"}</p>
-                    <p>Container name: {selectedWorkspace.containerName ?? "-"}</p>
-                    <p>Build context: {selectedWorkspace.containerBuildContext ?? "-"}</p>
-                    <p>Dockerfile: {selectedWorkspace.containerDockerfile ?? "-"}</p>
-                    <p>Features: {selectedWorkspace.containerFeatures.length > 0 ? selectedWorkspace.containerFeatures.join(", ") : "-"}</p>
-                    <p>Applied features: {selectedWorkspace.containerAppliedFeatures.length > 0 ? selectedWorkspace.containerAppliedFeatures.join(", ") : "-"}</p>
-                    <p>Container workdir: {selectedWorkspace.containerWorkdir ?? "-"}</p>
-                    <p>Config path: {selectedWorkspace.containerConfigPath ?? "-"}</p>
-                    <p>Run args: {selectedWorkspace.containerRunArgs.length > 0 ? selectedWorkspace.containerRunArgs.join(" ") : "-"}</p>
-                    <p>Status: {selectedWorkspace.status}</p>
-                    <p>CWD: {selectedWorkspace.cwd}</p>
-                    <p>Approval: {selectedWorkspace.approvalRequired ? "required" : "disabled"}</p>
-                    <p>Command: {selectedWorkspace.activeCommand ?? "-"}</p>
-                    <p>Exit: {selectedWorkspace.exitCode ?? "-"}</p>
+                    <p>{t("workbench.workspace.meta.id")}: {selectedWorkspace.id.slice(0, 8)}</p>
+                    <p>{t("workbench.workspace.meta.kind")}: {selectedWorkspace.kind}</p>
+                    <p>{t("workbench.workspace.meta.baseRef")}: {selectedWorkspace.baseRef ?? "-"}</p>
+                    <p>{t("workbench.workspace.meta.sourceWorkspace")}: {selectedWorkspace.sourceWorkspaceId ? selectedWorkspace.sourceWorkspaceId.slice(0, 8) : "-"}</p>
+                    <p>{t("workbench.workspace.meta.containerImage")}: {selectedWorkspace.containerImage ?? "-"}</p>
+                    <p>{t("workbench.workspace.meta.containerSource")}: {selectedWorkspace.containerSource ?? "-"}</p>
+                    <p>{t("workbench.workspace.meta.managedImage")}: {selectedWorkspace.containerImageManaged ? t("modelControl.yes") : t("modelControl.no")}</p>
+                    <p>{t("workbench.workspace.meta.containerName")}: {selectedWorkspace.containerName ?? "-"}</p>
+                    <p>{t("workbench.workspace.meta.buildContext")}: {selectedWorkspace.containerBuildContext ?? "-"}</p>
+                    <p>{t("workbench.workspace.meta.dockerfile")}: {selectedWorkspace.containerDockerfile ?? "-"}</p>
+                    <p>{t("workbench.workspace.meta.features")}: {selectedWorkspace.containerFeatures.length > 0 ? selectedWorkspace.containerFeatures.join(", ") : "-"}</p>
+                    <p>{t("workbench.workspace.meta.appliedFeatures")}: {selectedWorkspace.containerAppliedFeatures.length > 0 ? selectedWorkspace.containerAppliedFeatures.join(", ") : "-"}</p>
+                    <p>{t("workbench.workspace.meta.containerWorkdir")}: {selectedWorkspace.containerWorkdir ?? "-"}</p>
+                    <p>{t("workbench.workspace.meta.configPath")}: {selectedWorkspace.containerConfigPath ?? "-"}</p>
+                    <p>{t("workbench.workspace.meta.runArgs")}: {selectedWorkspace.containerRunArgs.length > 0 ? selectedWorkspace.containerRunArgs.join(" ") : "-"}</p>
+                    <p>{t("common.status")}: {selectedWorkspace.status}</p>
+                    <p>{t("workbench.workspace.meta.cwd")}: {selectedWorkspace.cwd}</p>
+                    <p>{t("workbench.workspace.meta.approval")}: {selectedWorkspace.approvalRequired ? t("workbench.workspace.required") : t("common.disabled")}</p>
+                    <p>{t("workbench.workspace.meta.command")}: {selectedWorkspace.activeCommand ?? "-"}</p>
+                    <p>{t("workbench.workspace.meta.exit")}: {selectedWorkspace.exitCode ?? "-"}</p>
                     {selectedWorkspace.containerWarnings.length > 0 && (
-                      <p>Config warnings: {selectedWorkspace.containerWarnings.join(" | ")}</p>
+                      <p>{t("workbench.workspace.meta.configWarnings")}: {selectedWorkspace.containerWarnings.join(" | ")}</p>
                     )}
                   </div>
                 )}
@@ -909,7 +962,7 @@ export function WorkbenchModule() {
                 disabled={!prompt.trim()}
                 className="w-full rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] font-mono text-amber-200 disabled:opacity-50"
               >
-                USE PROMPT AS SHELL COMMAND
+                {t("workbench.workspace.usePromptAsShell")}
               </button>
             </div>
 
@@ -917,28 +970,31 @@ export function WorkbenchModule() {
               <div className="grid grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr)_160px]">
                 <input
                   type="text"
+                  data-testid="workbench-workspace-command"
                   value={workspaceCommand}
                   onChange={(event) => setWorkspaceCommand(event.target.value)}
-                  placeholder="pwd | git status | rg TODO src"
+                  placeholder={t("workbench.workspace.commandPlaceholder")}
                   className="rounded border border-white/15 bg-black/50 px-3 py-2 text-xs text-white/90"
                 />
                 <input
                   type="text"
+                  data-testid="workbench-workspace-shell"
                   value={workspaceShell}
                   onChange={(event) => setWorkspaceShell(event.target.value)}
-                  placeholder="shell override"
+                  placeholder={t("workbench.workspace.shellOverridePlaceholder")}
                   className="rounded border border-white/15 bg-black/50 px-3 py-2 text-xs text-white/90"
                 />
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
+                  data-testid="workbench-run-command"
                   onClick={() => void handleRunWorkspaceCommand()}
                   disabled={workspaceBusy || !workspaceCommand.trim()}
                   className="inline-flex items-center gap-1 rounded border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-[11px] font-mono text-cyan-200 disabled:opacity-50"
                 >
                   {workspaceBusy ? <Loader2 size={11} className="animate-spin" /> : <PlayCircle size={11} />}
-                  RUN COMMAND
+                  {t("workbench.workspace.runCommand")}
                 </button>
                 <button
                   type="button"
@@ -947,27 +1003,27 @@ export function WorkbenchModule() {
                   className="inline-flex items-center gap-1 rounded border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-[11px] font-mono text-rose-200 disabled:opacity-50"
                 >
                   <Square size={11} />
-                  STOP
+                  {t("common.stop")}
                 </button>
                 <span className="text-[11px] font-mono text-white/45">
-                  Auto-run: read-only everywhere, build inside devcontainers. Role-gated on host current runtime: write, network, process control, unknown.
+                  {t("workbench.workspace.autoRunPolicy")}
                 </span>
               </div>
               {workspacePolicy && (
                 <div className="rounded border border-cyan-500/20 bg-cyan-500/5 p-3 text-[11px] font-mono text-cyan-100/80">
-                  <p>risk: {workspacePolicy.riskLevel}</p>
-                  <p>impact profile: {workspacePolicy.impactProfile}</p>
-                  <p>severity: {workspacePolicy.severity}</p>
-                  <p>policy: {workspacePolicy.disposition}</p>
-                  <p>reason: {workspacePolicy.reason}</p>
+                  <p>{t("workbench.workspace.policy.risk")}: {workspacePolicy.riskLevel}</p>
+                  <p>{t("workbench.workspace.policy.impactProfile")}: {workspacePolicy.impactProfile}</p>
+                  <p>{t("workbench.workspace.policy.severity")}: {workspacePolicy.severity}</p>
+                  <p>{t("workbench.workspace.policy.policy")}: {workspacePolicy.disposition}</p>
+                  <p>{t("workbench.workspace.policy.reason")}: {workspacePolicy.reason}</p>
                   <div className="mt-3 space-y-2">
-                    <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">estimated impact</p>
-                    <WorkspaceImpactRow label="files" dimension={workspacePolicy.impact.files} />
-                    <WorkspaceImpactRow label="network" dimension={workspacePolicy.impact.network} />
-                    <WorkspaceImpactRow label="processes" dimension={workspacePolicy.impact.processes} />
+                    <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">{t("workbench.workspace.policy.estimatedImpact")}</p>
+                    <WorkspaceImpactRow label={t("workbench.workspace.policy.files")} dimension={workspacePolicy.impact.files} />
+                    <WorkspaceImpactRow label={t("workbench.workspace.policy.network")} dimension={workspacePolicy.impact.network} />
+                    <WorkspaceImpactRow label={t("workbench.workspace.policy.processes")} dimension={workspacePolicy.impact.processes} />
                     {workspacePolicy.impact.notes.length > 0 && (
                       <div className="rounded border border-white/10 bg-black/20 p-2 text-[10px] text-white/55">
-                        notes: {workspacePolicy.impact.notes.join(" ")}
+                        {t("workbench.workspace.policy.notes")}: {workspacePolicy.impact.notes.join(" ")}
                       </div>
                     )}
                   </div>
@@ -976,7 +1032,10 @@ export function WorkbenchModule() {
               {workspaceError && <p className="text-xs font-mono text-rose-300">{workspaceError}</p>}
               {workspaceNotice && <p className="text-xs font-mono text-cyan-200">{workspaceNotice}</p>}
               <div className="rounded border border-white/10 bg-[#020617] p-3">
-                <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-[11px] font-mono leading-5 text-cyan-50">
+                <pre
+                  data-testid="workbench-workspace-transcript"
+                  className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-[11px] font-mono leading-5 text-cyan-50"
+                >
                   {workspaceLog}
                 </pre>
               </div>
@@ -985,7 +1044,7 @@ export function WorkbenchModule() {
                   type="text"
                   value={workspaceStdIn}
                   onChange={(event) => setWorkspaceStdIn(event.target.value)}
-                  placeholder="stdin payload"
+                  placeholder={t("workbench.workspace.stdinPlaceholder")}
                   className="rounded border border-white/15 bg-black/50 px-3 py-2 text-xs text-white/90"
                 />
                 <button
@@ -994,7 +1053,7 @@ export function WorkbenchModule() {
                   disabled={workspaceBusy || !selectedWorkspaceId || selectedWorkspace?.status !== "running" || !workspaceStdIn.trim()}
                   className="rounded border border-white/15 px-3 py-2 text-[11px] font-mono text-white/80 disabled:opacity-50"
                 >
-                  WRITE STDIN
+                  {t("common.write")}
                 </button>
               </div>
             </div>

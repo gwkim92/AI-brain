@@ -2785,6 +2785,89 @@ describe('API routes', () => {
     await app.close();
   });
 
+  it('links manual council runs into jarvis sessions when client_session_id is provided', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      return new Response(
+        JSON.stringify({
+          output_text: 'Council synthesis output',
+          usage: {
+            input_tokens: 12,
+            output_tokens: 24
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            'content-type': 'application/json'
+          }
+        }
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app } = await buildServer();
+    const userId = '0d1e2f30-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const sessionId = '3f64c09f-fb0d-4be1-b981-6350810c5a20';
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/councils/runs',
+      headers: {
+        'x-user-id': userId,
+        'idempotency-key': 'idem-council-link-001',
+        'x-trace-id': 'trace-council-link-001'
+      },
+      payload: {
+        question: 'Should we centralize retries?',
+        create_task: true,
+        client_session_id: sessionId
+      }
+    });
+
+    expect(create.statusCode).toBe(202);
+    const createBody = create.json() as {
+      data: {
+        id: string;
+        task_id: string | null;
+        session: { id: string; councilRunId: string | null; taskId: string | null; primaryTarget: string; status: string } | null;
+      };
+    };
+    expect(createBody.data.session?.id).toBe(sessionId);
+    expect(createBody.data.session?.primaryTarget).toBe('council');
+    expect(createBody.data.session?.councilRunId).toBe(createBody.data.id);
+    expect(createBody.data.session?.taskId).toBe(createBody.data.task_id);
+
+    const settled = await waitFor(
+      async () =>
+        app.inject({
+          method: 'GET',
+          url: `/api/v1/jarvis/sessions/${sessionId}`,
+          headers: {
+            'x-user-id': userId
+          }
+        }),
+      {
+        until: (response) => {
+          if (response.statusCode !== 200) return false;
+          const body = response.json() as { data: { session: { status: string } } };
+          return body.data.session.status === 'completed' || body.data.session.status === 'failed';
+        }
+      }
+    );
+
+    expect(settled.statusCode).toBe(200);
+    const settledBody = settled.json() as {
+      data: {
+        session: { councilRunId: string | null; status: string };
+      };
+    };
+    expect(settledBody.data.session.councilRunId).toBe(createBody.data.id);
+    expect(settledBody.data.session.status).toBe('completed');
+
+    await app.close();
+  });
+
   it('supports council rerun with excluded providers', async () => {
     process.env.OPENAI_API_KEY = 'test-openai-key';
     process.env.GEMINI_API_KEY = 'test-gemini-key';
@@ -3016,6 +3099,90 @@ describe('API routes', () => {
     expect(list.statusCode).toBe(200);
     const listBody = list.json() as { data: { runs: Array<{ id: string }> } };
     expect(listBody.data.runs.some((row) => row.id === createBody.data.id)).toBe(true);
+
+    await app.close();
+  });
+
+  it('links manual execution runs into jarvis sessions when client_session_id is provided', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          output_text: 'Execution output: return 42;',
+          usage: {
+            input_tokens: 20,
+            output_tokens: 30
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            'content-type': 'application/json'
+          }
+        }
+      )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app } = await buildServer();
+    const userId = '0d1e2f30-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const sessionId = 'a25e43a1-5151-4c0d-a4ec-c2425f79f74a';
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/executions/runs',
+      headers: {
+        'x-user-id': userId,
+        'idempotency-key': 'idem-execution-link-001',
+        'x-trace-id': 'trace-execution-link-001'
+      },
+      payload: {
+        mode: 'code',
+        prompt: 'Write a concise helper.',
+        create_task: true,
+        client_session_id: sessionId
+      }
+    });
+
+    expect(create.statusCode).toBe(202);
+    const createBody = create.json() as {
+      data: {
+        id: string;
+        task_id: string | null;
+        session: { id: string; executionRunId: string | null; taskId: string | null; primaryTarget: string; status: string } | null;
+      };
+    };
+    expect(createBody.data.session?.id).toBe(sessionId);
+    expect(createBody.data.session?.primaryTarget).toBe('execution');
+    expect(createBody.data.session?.executionRunId).toBe(createBody.data.id);
+    expect(createBody.data.session?.taskId).toBe(createBody.data.task_id);
+
+    const settled = await waitFor(
+      async () =>
+        app.inject({
+          method: 'GET',
+          url: `/api/v1/jarvis/sessions/${sessionId}`,
+          headers: {
+            'x-user-id': userId
+          }
+        }),
+      {
+        until: (response) => {
+          if (response.statusCode !== 200) return false;
+          const body = response.json() as { data: { session: { status: string } } };
+          return body.data.session.status === 'completed' || body.data.session.status === 'failed';
+        }
+      }
+    );
+
+    expect(settled.statusCode).toBe(200);
+    const settledBody = settled.json() as {
+      data: {
+        session: { executionRunId: string | null; status: string };
+      };
+    };
+    expect(settledBody.data.session.executionRunId).toBe(createBody.data.id);
+    expect(settledBody.data.session.status).toBe('completed');
 
     await app.close();
   });
@@ -4295,6 +4462,55 @@ describe('API routes', () => {
     await app.close();
   });
 
+  it('forces assistant target when jarvis request target_hint is assistant', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    const { app } = await buildServer();
+    const userId = '45454545-4545-4545-8545-454545454545';
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/jarvis/requests',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        prompt: '오늘 세계 주요 뉴스 정리해줘',
+        client_session_id: '95a18c3b-7593-4c50-85d5-543d93c5df90',
+        target_hint: 'assistant'
+      }
+    });
+
+    expect(create.statusCode).toBe(201);
+    const createBody = create.json() as {
+      data: {
+        session: {
+          id: string;
+          intent: string;
+          primaryTarget: string;
+          assistantContextId: string | null;
+          taskId: string | null;
+          status: string;
+        };
+        delegation: {
+          intent: string;
+          primary_target: string;
+          assistant_context_id?: string;
+          task_id?: string;
+        };
+      };
+    };
+
+    expect(createBody.data.session.intent).toBe('news');
+    expect(createBody.data.session.primaryTarget).toBe('assistant');
+    expect(createBody.data.session.assistantContextId).toBeTruthy();
+    expect(createBody.data.session.taskId).toBeTruthy();
+    expect(createBody.data.delegation.primary_target).toBe('assistant');
+    expect(createBody.data.delegation.assistant_context_id).toBe(createBody.data.session.assistantContextId);
+    expect(createBody.data.delegation.task_id).toBe(createBody.data.session.taskId);
+
+    await app.close();
+  });
+
   it('lists, finds, previews, and executes skills', async () => {
     const { app } = await buildServer();
     const userId = '44444444-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -4563,6 +4779,7 @@ describe('API routes', () => {
     );
     expect(approvedRunSettled.statusCode).toBe(200);
 
+    const lowRiskSessionId = '8386ce13-7c94-4fb9-af65-8b999d4402aa';
     const spawn = await app.inject({
       method: 'POST',
       url: `/api/v1/workspaces/${workspaceId}/pty/spawn`,
@@ -4571,10 +4788,18 @@ describe('API routes', () => {
         'x-user-role': 'member'
       },
       payload: {
-        command: 'pwd'
+        command: 'pwd',
+        client_session_id: lowRiskSessionId
       }
     });
     expect(spawn.statusCode).toBe(202);
+    const spawnBody = spawn.json() as {
+      data: {
+        session?: { id: string; primaryTarget: string } | null;
+      };
+    };
+    expect(spawnBody.data.session?.id).toBe(lowRiskSessionId);
+    expect(spawnBody.data.session?.primaryTarget).toBe('execution');
 
     const settledRead = await waitFor(
       async () =>
@@ -4603,6 +4828,26 @@ describe('API routes', () => {
     };
     expect(readBody.data.workspace.status).toBe('stopped');
     expect(readBody.data.chunks.some((chunk) => chunk.stream === 'stdout')).toBe(true);
+
+    const lowRiskSession = await waitFor(
+      async () =>
+        app.inject({
+          method: 'GET',
+          url: `/api/v1/jarvis/sessions/${lowRiskSessionId}`,
+          headers: {
+            'x-user-id': userId,
+            'x-user-role': 'member'
+          }
+        }),
+      {
+        until: (response) => {
+          if (response.statusCode !== 200) return false;
+          const body = response.json() as { data: { session: { status: string } } };
+          return body.data.session.status === 'completed';
+        }
+      }
+    );
+    expect(lowRiskSession.statusCode).toBe(200);
 
     const approvedSession = await waitFor(
       async () =>

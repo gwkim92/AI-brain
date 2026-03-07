@@ -132,6 +132,7 @@ export function GlassWidget({
 
     return (
         <motion.div
+            data-testid={`glass-widget-${id}`}
             drag={visible}
             dragControls={dragControls}
             dragListener={false}
@@ -175,12 +176,14 @@ export function GlassWidget({
                 <div className="flex items-center gap-2">
                     <GripHorizontal size={14} className="text-white/20 group-hover:text-white/50 transition-colors" />
                     <h3
+                        data-testid={`glass-widget-title-${id}`}
                         className={`font-mono text-[10px] font-bold tracking-widest transition-colors ${isFocused ? "text-cyan-400" : "text-white/40"}`}
                     >
                         {title}
                     </h3>
                 </div>
                 <button
+                    data-testid={`glass-widget-close-${id}`}
                     onClick={(e) => {
                         e.stopPropagation();
                         closeWidget(id);

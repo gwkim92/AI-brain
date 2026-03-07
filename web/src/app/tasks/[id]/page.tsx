@@ -8,6 +8,7 @@ import { ArrowLeft, RefreshCw, Activity } from "lucide-react";
 import { getTask, streamTaskEvents } from "@/lib/api/endpoints";
 import { ApiRequestError } from "@/lib/api/client";
 import type { TaskRecord } from "@/lib/api/types";
+import { useLocale } from "@/components/providers/LocaleProvider";
 import { TaskStatusBadge } from "@/components/ui/TaskStatusBadge";
 
 type TimelineEvent = {
@@ -18,12 +19,6 @@ type TimelineEvent = {
   traceId?: string;
   spanId?: string;
 };
-
-function formatDateTime(value: string): string {
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleString();
-}
 
 function formatShortId(value: string | undefined, size = 8): string {
   if (!value) return "-";
@@ -60,6 +55,7 @@ function parseTimelineEvent(payload: unknown, eventType: string): TimelineEvent 
 export default function TaskDetailPage() {
   const params = useParams<{ id: string }>();
   const taskId = Array.isArray(params?.id) ? params.id[0] : params?.id;
+  const { t, formatDateTime } = useLocale();
 
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [events, setEvents] = useState<TimelineEvent[]>([]);
@@ -81,13 +77,13 @@ export default function TaskDetailPage() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("failed to load task");
+        setError(t("taskDetail.loadFailed"));
       }
       setTask(null);
     } finally {
       setLoading(false);
     }
-  }, [taskId]);
+  }, [taskId, t]);
 
   useEffect(() => {
     void loadTask();
@@ -188,7 +184,7 @@ export default function TaskDetailPage() {
   if (!taskId) {
     return (
       <main className="w-full h-full bg-black text-white p-8">
-        <p className="text-red-400 font-mono text-sm">Invalid task id.</p>
+        <p className="text-red-400 font-mono text-sm">{t("taskDetail.invalidId")}</p>
       </main>
     );
   }
@@ -197,7 +193,7 @@ export default function TaskDetailPage() {
     <main className="w-full h-full bg-black text-white p-8 flex flex-col overflow-y-auto">
       <header className="mb-6 border-l-2 border-cyan-500 pl-4 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-mono font-bold tracking-widest text-white">TASK DETAIL</h1>
+          <h1 className="text-2xl font-mono font-bold tracking-widest text-white">{t("taskDetail.title")}</h1>
           <p className="text-sm font-mono text-white/50 tracking-wide mt-1">{taskId}</p>
         </div>
         <div className="flex items-center gap-3">
@@ -205,55 +201,55 @@ export default function TaskDetailPage() {
             href="/?widget=tasks"
             className="px-3 py-2 text-xs font-mono rounded border border-white/20 text-white/70 hover:text-white hover:border-white/40 flex items-center gap-2"
           >
-            <ArrowLeft size={14} /> BACK
+            <ArrowLeft size={14} /> {t("common.back")}
           </Link>
           <button
             onClick={() => void loadTask()}
             className="px-3 py-2 text-xs font-mono rounded border border-cyan-500/40 text-cyan-300 hover:text-cyan-100 flex items-center gap-2"
           >
-            <RefreshCw size={14} /> REFRESH
+            <RefreshCw size={14} /> {t("common.refresh")}
           </button>
         </div>
       </header>
 
-      {loading && <div className="text-sm font-mono text-white/40">Loading task...</div>}
+      {loading && <div className="text-sm font-mono text-white/40">{t("taskDetail.loading")}</div>}
 
       {!loading && error && <div className="text-sm font-mono text-red-400">{error}</div>}
 
       {!loading && !error && task && (
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
           <section className="xl:col-span-1 bg-white/5 border border-white/10 rounded-lg p-5">
-            <h2 className="text-[10px] font-mono tracking-widest text-white/40 uppercase mb-4">Task Metadata</h2>
+            <h2 className="text-[10px] font-mono tracking-widest text-white/40 uppercase mb-4">{t("taskDetail.metadata")}</h2>
 
             <div className="space-y-3 text-sm">
               <div>
-                <p className="text-white/40 text-xs font-mono">Title</p>
+                <p className="text-white/40 text-xs font-mono">{t("tasks.table.title")}</p>
                 <p className="text-white/90">{task.title}</p>
               </div>
               <div>
-                <p className="text-white/40 text-xs font-mono">Mode</p>
+                <p className="text-white/40 text-xs font-mono">{t("tasks.table.mode")}</p>
                 <p className="text-white/90 uppercase tracking-wide">{task.mode}</p>
               </div>
               <div>
-                <p className="text-white/40 text-xs font-mono">Status</p>
+                <p className="text-white/40 text-xs font-mono">{t("common.status")}</p>
                 <TaskStatusBadge status={task.status} />
               </div>
               <div>
-                <p className="text-white/40 text-xs font-mono">Created</p>
+                <p className="text-white/40 text-xs font-mono">{t("taskDetail.created")}</p>
                 <p className="text-white/90">{formatDateTime(task.createdAt)}</p>
               </div>
               <div>
-                <p className="text-white/40 text-xs font-mono">Updated</p>
+                <p className="text-white/40 text-xs font-mono">{t("taskDetail.updated")}</p>
                 <p className="text-white/90">{formatDateTime(task.updatedAt)}</p>
               </div>
               <div>
-                <p className="text-white/40 text-xs font-mono">Trace</p>
+                <p className="text-white/40 text-xs font-mono">{t("taskDetail.trace")}</p>
                 <p className="text-white/90 font-mono text-xs">{task.traceId ?? "-"}</p>
               </div>
             </div>
 
             <div className="mt-6">
-              <p className="text-white/40 text-xs font-mono mb-2">Input Payload</p>
+              <p className="text-white/40 text-xs font-mono mb-2">{t("taskDetail.inputPayload")}</p>
               <pre className="text-[11px] leading-5 bg-black/50 border border-white/10 rounded p-3 overflow-auto text-cyan-200">
                 {JSON.stringify(task.input, null, 2)}
               </pre>
@@ -263,10 +259,10 @@ export default function TaskDetailPage() {
           <section className="xl:col-span-2 flex flex-col gap-6">
             <div className="bg-white/5 border border-white/10 rounded-lg p-5">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-[10px] font-mono tracking-widest text-white/40 uppercase">Event Timeline (SSE)</h2>
+                <h2 className="text-[10px] font-mono tracking-widest text-white/40 uppercase">{t("taskDetail.timeline")}</h2>
                 <span className="text-xs font-mono text-white/50 flex items-center gap-2">
                   <Activity size={14} className={streamState === "streaming" ? "text-cyan-400 animate-pulse" : "text-white/40"} />
-                  {streamState.toUpperCase()}
+                  {t(`taskDetail.stream.${streamState}` as const)}
                 </span>
               </div>
 
@@ -280,7 +276,7 @@ export default function TaskDetailPage() {
                   }`}
                   onClick={() => setSelectedTraceId(null)}
                 >
-                  ALL TRACES
+                  {t("taskDetail.allTraces")}
                 </button>
                 {traceFilterOptions.map((traceId) => (
                   <button
@@ -299,7 +295,7 @@ export default function TaskDetailPage() {
               </div>
 
               {filteredEvents.length === 0 && (
-                <div className="text-sm font-mono text-white/40">No events were returned for this task.</div>
+                <div className="text-sm font-mono text-white/40">{t("taskDetail.noEvents")}</div>
               )}
 
               <div className="space-y-3 max-h-[320px] overflow-y-auto pr-1">
@@ -319,9 +315,9 @@ export default function TaskDetailPage() {
                         }}
                         className="rounded border border-cyan-500/30 px-2 py-1 text-cyan-200 hover:bg-cyan-500/15"
                       >
-                        trace={formatShortId(event.traceId ?? task.traceId)}
+                        {t("taskDetail.traceLabel")}={formatShortId(event.traceId ?? task.traceId)}
                       </button>
-                      <span>span={formatShortId(event.spanId)}</span>
+                      <span>{t("taskDetail.spanLabel")}={formatShortId(event.spanId)}</span>
                     </div>
                     <pre className="text-[11px] leading-5 text-white/80 overflow-auto">{JSON.stringify(event.data, null, 2)}</pre>
                   </div>
@@ -331,12 +327,12 @@ export default function TaskDetailPage() {
 
             <div className="bg-white/5 border border-white/10 rounded-lg p-5">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-[10px] font-mono tracking-widest text-white/40 uppercase">Trace/Span Timeline</h2>
-                <span className="text-xs font-mono text-white/45">{traceTimeline.length} trace(s)</span>
+                <h2 className="text-[10px] font-mono tracking-widest text-white/40 uppercase">{t("taskDetail.traceTimeline")}</h2>
+                <span className="text-xs font-mono text-white/45">{t("taskDetail.traceCount", { value: traceTimeline.length })}</span>
               </div>
 
               {traceTimeline.length === 0 && (
-                <div className="text-sm font-mono text-white/40">No trace/span metadata exists for this task events stream.</div>
+                <div className="text-sm font-mono text-white/40">{t("taskDetail.noTraceMetadata")}</div>
               )}
 
               <div className="space-y-3 max-h-[230px] overflow-y-auto pr-1">
@@ -352,9 +348,13 @@ export default function TaskDetailPage() {
                     }`}
                   >
                     <div className="flex items-center justify-between gap-3">
-                      <span className="text-xs font-mono text-cyan-300">TRACE {formatShortId(trace.traceId, 12)}</span>
+                      <span className="text-xs font-mono text-cyan-300">{t("taskDetail.tracePrefix")} {formatShortId(trace.traceId, 12)}</span>
                       <span className="text-[10px] font-mono text-white/45">
-                        spans={trace.spanIds.length} · events={trace.events.length} · {formatDateTime(trace.lastTimestamp)}
+                        {t("taskDetail.traceSummary", {
+                          spans: trace.spanIds.length,
+                          events: trace.events.length,
+                          timestamp: formatDateTime(trace.lastTimestamp),
+                        })}
                       </span>
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -362,7 +362,7 @@ export default function TaskDetailPage() {
                         <React.Fragment key={event.id}>
                           <div className="rounded border border-white/10 bg-black/50 px-2 py-1 min-w-[120px]">
                             <p className="text-[10px] font-mono text-white/70">{event.type}</p>
-                            <p className="text-[10px] font-mono text-cyan-300">span {formatShortId(event.spanId, 10)}</p>
+                            <p className="text-[10px] font-mono text-cyan-300">{t("taskDetail.spanLabel")} {formatShortId(event.spanId, 10)}</p>
                           </div>
                           {index < trace.events.length - 1 && <span className="text-cyan-400/50 text-xs">→</span>}
                         </React.Fragment>

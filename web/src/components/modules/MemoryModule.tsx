@@ -8,21 +8,26 @@ import { getMemorySnapshot } from "@/lib/api/endpoints";
 import type { MemorySnapshotEntry } from "@/lib/api/types";
 import { AsyncState } from "@/components/ui/AsyncState";
 import { MemoryItemRow } from "@/components/ui/MemoryItemRow";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
-function formatRelative(value: string): string {
+function formatRelative(
+  value: string,
+  t: (key: "tasks.relative.justNow" | "tasks.relative.minutesAgo" | "tasks.relative.hoursAgo" | "tasks.relative.daysAgo", values?: Record<string, string | number>) => string
+): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
 
   const diffSec = Math.max(1, Math.floor((Date.now() - date.getTime()) / 1000));
-  if (diffSec < 60) return `${diffSec}s ago`;
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-  return `${Math.floor(diffSec / 86400)}d ago`;
+  if (diffSec < 60) return t("tasks.relative.justNow");
+  if (diffSec < 3600) return t("tasks.relative.minutesAgo", { value: Math.floor(diffSec / 60) });
+  if (diffSec < 86400) return t("tasks.relative.hoursAgo", { value: Math.floor(diffSec / 3600) });
+  return t("tasks.relative.daysAgo", { value: Math.floor(diffSec / 86400) });
 }
 
 const MEMORY_PAGE_SIZE = 20;
 
 export function MemoryModule() {
+  const { t, formatDateTime } = useLocale();
   const [rows, setRows] = useState<MemorySnapshotEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -45,7 +50,7 @@ export function MemoryModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("failed to load memory");
+        setError(t("memory.loadFailed"));
       }
       setRows([]);
       setGeneratedAt(null);
@@ -90,7 +95,7 @@ export function MemoryModule() {
     <main className="w-full h-full bg-transparent text-white p-4 flex flex-col">
       <header className="mb-4 border-l-2 border-white pl-3">
         <h2 className="text-sm font-mono font-bold tracking-widest text-white flex items-center gap-2">
-          <Brain size={14} /> SEMANTIC MEMORY
+          <Brain size={14} /> {t("memory.title")}
         </h2>
       </header>
 
@@ -99,21 +104,21 @@ export function MemoryModule() {
         <input
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search memory rows..."
+          placeholder={t("memory.searchPlaceholder")}
           className="w-full bg-black/40 border border-white/10 rounded px-9 py-2 text-xs font-mono text-white focus:outline-none focus:border-cyan-500/40"
         />
       </label>
 
       {generatedAt && (
-        <p className="mb-3 text-[10px] font-mono text-white/40">Generated: {new Date(generatedAt).toLocaleString()}</p>
+        <p className="mb-3 text-[10px] font-mono text-white/40">{t("memory.generated", { date: formatDateTime(generatedAt) })}</p>
       )}
 
       <AsyncState
         loading={loading}
         error={error}
         empty={!loading && !error && filtered.length === 0}
-        emptyText="No memory rows found."
-        loadingText="Loading memory..."
+        emptyText={t("memory.empty")}
+        loadingText={t("memory.loading")}
         onRetry={() => void refresh()}
         className="mb-3"
       />
@@ -128,7 +133,7 @@ export function MemoryModule() {
               category={row.category}
               content={row.content}
               source={row.source}
-              timestamp={formatRelative(row.timestamp)}
+              timestamp={formatRelative(row.timestamp, t)}
             />
           ))}
 
@@ -138,7 +143,7 @@ export function MemoryModule() {
             disabled={loadingMore}
             className="w-full py-2 text-[11px] font-mono text-cyan-400 hover:text-cyan-200 border border-white/10 rounded hover:bg-white/5 transition-colors disabled:opacity-50"
           >
-            {loadingMore ? "Loading..." : "Load More"}
+            {loadingMore ? t("memory.loadingMore") : t("memory.loadMore")}
           </button>
         )}
       </div>

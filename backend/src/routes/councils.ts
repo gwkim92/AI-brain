@@ -13,6 +13,7 @@ import {
 
 const CouncilRunCreateSchema = z.object({
   question: z.string().min(1).max(4000),
+  client_session_id: z.string().uuid().optional(),
   system_prompt: z.string().optional(),
   max_rounds: z.coerce.number().int().min(1).max(4).default(2),
   provider: z.enum(['auto', 'openai', 'gemini', 'anthropic', 'local']).optional(),
@@ -86,6 +87,7 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
     try {
       const result = await startCouncilRun(ctx, {
         userId,
+        linkedSessionId: parsed.data.client_session_id,
         traceId,
         idempotencyKey,
         question: parsed.data.question,
@@ -116,10 +118,23 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
         }
       });
 
-      return sendSuccess(reply, request, result.idempotentReplay ? 200 : 202, withRunCredential(result.run), {
+      const linkedSession = parsed.data.client_session_id
+        ? await store.getJarvisSessionById({ userId, sessionId: parsed.data.client_session_id })
+        : null;
+
+      return sendSuccess(
+        reply,
+        request,
+        result.idempotentReplay ? 200 : 202,
+        {
+          ...withRunCredential(result.run),
+          session: linkedSession
+        },
+        {
         accepted: result.idempotentReplay !== true,
         idempotent_replay: result.idempotentReplay
-      });
+        }
+      );
     } catch (error) {
       return sendError(reply, request, 503, 'INTERNAL_ERROR', 'council run failed');
     }

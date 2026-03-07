@@ -147,8 +147,8 @@ export async function apiRequestEnvelope<TData>(
   if (!response.ok) {
     if (response.status === 401 && typeof window !== "undefined") {
       clearAuthSession();
-      const isLoginPage = window.location.pathname === "/login";
-      if (!isLoginPage) {
+      const isAuthPage = window.location.pathname === "/login" || window.location.pathname === "/signup";
+      if (!isAuthPage) {
         window.location.href = "/login?reason=session_expired";
       }
     }

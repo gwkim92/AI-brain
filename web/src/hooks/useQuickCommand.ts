@@ -7,12 +7,14 @@ import { canAccessWidget, useCurrentRole } from "@/lib/auth/role";
 import { ApiRequestError } from "@/lib/api/client";
 import { createJarvisRequest, runAssistantContextWithMeta } from "@/lib/api/endpoints";
 import { dispatchCouncilIntake } from "@/lib/hud/council-intake";
+import { dispatchJarvisDataRefresh } from "@/lib/hud/data-refresh";
 import { buildMissionIntake, dispatchMissionIntake, dispatchMissionIntakeTaskLink } from "@/lib/hud/mission-intake";
 import { classifyPromptComplexity } from "@/lib/hud/complexity";
-import { resolveWorkspaceForIntent } from "@/lib/hud/intent-router";
-import { getHudWorkspacePrimaryWidget } from "@/lib/hud/widget-presets";
+import { buildLaunchWidgetPlan, resolveWorkspaceForIntent } from "@/lib/hud/intent-router";
+import { measureHudViewport, tileWidgetLayouts } from "@/lib/hud/widget-layout";
 import { emitRuntimeEvent } from "@/lib/runtime-events";
 import { isFeatureEnabled } from "@/lib/feature-flags";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
 const DUPLICATE_WINDOW_MS = 800;
 
@@ -32,6 +34,7 @@ function createRequestNonce(prefix = "qc"): string {
 }
 
 export function useQuickCommand() {
+  const { t } = useLocale();
   const { openWidgets, startSession, linkSessionTask } = useHUD();
   const role = useCurrentRole();
   const router = useRouter();
@@ -102,23 +105,11 @@ export function useQuickCommand() {
       ? ("mission" as const)
       : resolveWorkspaceForIntent(intake.intent);
 
-    const primaryWidget = getHudWorkspacePrimaryWidget(workspacePreset);
     let activeWidgetsForSession: string[] = [];
     let mountedWidgetsForSession: string[] = [];
     let focusWidgetForSession: string | null = null;
 
-    const shouldShowApprovals = intake.widgetPlan.includes("approvals");
-    const desiredWidgetIds = !forceIntentWorkspace && complexity !== "simple"
-      ? ["assistant", "tasks", ...(canAccessWidget(role, primaryWidget) ? [primaryWidget] : []), ...(shouldShowApprovals ? ["approvals"] : [])]
-      : Array.from(
-          new Set([
-            "assistant",
-            "tasks",
-            primaryWidget,
-            ...intake.widgetPlan,
-            ...(shouldShowApprovals ? ["approvals"] : []),
-          ])
-        );
+    const desiredWidgetIds = buildLaunchWidgetPlan(intake.intent, complexity, trimmed);
 
     const allowed = desiredWidgetIds.filter((widgetId) => canAccessWidget(role, widgetId));
     mountedWidgetsForSession = allowed;
@@ -126,11 +117,14 @@ export function useQuickCommand() {
     if (allowed.length > 0) {
       const focus = allowed.includes("assistant")
         ? "assistant"
-        : allowed.includes(primaryWidget)
-          ? primaryWidget
-          : allowed[0]!;
+        : allowed[0]!;
       focusWidgetForSession = focus;
       activeWidgetsForSession = [...allowed];
+
+      if (allowed.length > 1) {
+        const viewport = measureHudViewport();
+        tileWidgetLayouts(allowed, viewport.width, viewport.height, 24);
+      }
 
       if (pathname !== "/") {
         router.push("/");
@@ -153,6 +147,7 @@ export function useQuickCommand() {
       workspacePreset,
       restoreMode: "full",
     });
+    dispatchJarvisDataRefresh({ scope: "sessions", source: "quick-command:start-session" });
 
     try {
       let linkedTaskId: string | null = null;
@@ -163,6 +158,7 @@ export function useQuickCommand() {
         source: "inbox_quick_command",
         client_session_id: intake.id,
       });
+      dispatchJarvisDataRefresh({ scope: "sessions", source: "quick-command:jarvis-request" });
 
       if (result.delegation.task_id) {
         dispatchMissionIntakeTaskLink({
@@ -170,6 +166,7 @@ export function useQuickCommand() {
           taskId: result.delegation.task_id,
         });
         linkedTaskId = result.delegation.task_id;
+        dispatchJarvisDataRefresh({ scope: "tasks", source: "quick-command:task-linked" });
       }
       if (result.delegation.mission_id) {
         linkedMissionId = result.delegation.mission_id;
@@ -249,13 +246,13 @@ export function useQuickCommand() {
           singleFlightEnabled,
         });
       } else {
-        setError("failed to create task");
+        setError(t("commandBar.error.createTask"));
         emitRuntimeEvent("quick_command_failed", {
           intakeId: intake.id,
           requestNonce,
           prompt: trimmed,
           code: "unknown",
-          message: "failed to create task",
+          message: t("commandBar.error.createTask"),
           taskMode: intake.taskMode,
           singleFlightEnabled,
         });
@@ -266,7 +263,7 @@ export function useQuickCommand() {
         inFlightRef.current = false;
       }
     }
-  }, [commandInput, isSubmitting, linkSessionTask, openWidgets, pathname, role, router, startSession]);
+  }, [commandInput, isSubmitting, linkSessionTask, openWidgets, pathname, role, router, startSession, t]);
 
   return {
     commandInput,

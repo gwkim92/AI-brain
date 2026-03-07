@@ -7,7 +7,10 @@ import { Network, AlertCircle, Loader2 } from "lucide-react";
 
 import { getCouncilRun, listProviderModels, listProviders, startCouncilRun, streamCouncilRunEvents } from "@/lib/api/endpoints";
 import { ApiRequestError } from "@/lib/api/client";
+import { useHUD } from "@/components/providers/HUDProvider";
+import { useLocale } from "@/components/providers/LocaleProvider";
 import { subscribeCouncilIntake } from "@/lib/hud/council-intake";
+import { dispatchJarvisDataRefresh } from "@/lib/hud/data-refresh";
 import type { AgentRole } from "@/components/ui/AgentArgumentCard";
 import type {
   CouncilConsensusStatus,
@@ -86,17 +89,22 @@ function parseRoundLogCount(summary: string): number | null {
 }
 
 export function CouncilModule() {
-  const streamRef = React.useRef<ReturnType<typeof streamCouncilRunEvents> | null>(null);
-  const [query, setQuery] = useState("Should we rewrite the legacy payment microservice from Node.js to Go?");
-  const [cards, setCards] = useState<CouncilCard[]>(() =>
-    ROLES.map((role) => ({
-      role,
-      stance: "neutral",
-      confidence: 50,
-      argument: "Waiting for council execution.",
-    }))
+  const { t } = useLocale();
+  const { startSession, linkSessionTask } = useHUD();
+  const defaultCards = React.useMemo<CouncilCard[]>(
+    () =>
+      ROLES.map((role) => ({
+        role,
+        stance: "neutral",
+        confidence: 50,
+        argument: t("council.waiting"),
+      })),
+    [t]
   );
-  const [summary, setSummary] = useState("Run a council query to produce a grounded recommendation.");
+  const streamRef = React.useRef<ReturnType<typeof streamCouncilRunEvents> | null>(null);
+  const [query, setQuery] = useState(() => t("council.queryDefault"));
+  const [cards, setCards] = useState<CouncilCard[]>(defaultCards);
+  const [summary, setSummary] = useState(() => t("council.summary.idle"));
   const [status, setStatus] = useState<ConsensusStatus>("Escalated to Human");
   const [rounds, setRounds] = useState(0);
   const [running, setRunning] = useState(false);
@@ -124,14 +132,14 @@ export function CouncilModule() {
   const canRetryExcludingFailures = useMemo(() => retryExcludedProviders.length > 0 && retryExcludedProviders.length < 4, [retryExcludedProviders]);
   const providerOptions = useMemo(
     () => [
-      { provider: "auto" as const, enabled: true, label: "AUTO" },
+      { provider: "auto" as const, enabled: true, label: t("common.auto").toUpperCase() },
       ...providers.map((item) => ({
         provider: item.provider,
         enabled: item.enabled,
         label: `${item.provider.toUpperCase()}${item.model ? ` (${item.model})` : ""}`,
       })),
     ],
-    [providers]
+    [providers, t]
   );
   const selectedProviderModels = useMemo(() => {
     if (selectedProvider === "auto") {
@@ -139,6 +147,13 @@ export function CouncilModule() {
     }
     return providerModelCatalog.find((row) => row.provider === selectedProvider)?.models ?? [];
   }, [providerModelCatalog, selectedProvider]);
+
+  React.useEffect(() => {
+    if (!running && rounds === 0 && providerAttempts.length === 0) {
+      setCards(defaultCards);
+      setSummary(t("council.summary.idle"));
+    }
+  }, [defaultCards, providerAttempts.length, rounds, running, t]);
 
   React.useEffect(() => {
     void (async () => {
@@ -193,12 +208,12 @@ export function CouncilModule() {
           role,
           stance: "neutral",
           confidence: 50,
-          argument: "Council is running...",
+          argument: t("council.running"),
         }))
       );
       setStatus("Escalated to Human");
       setRounds(progress?.round ?? 1);
-      setSummary(result.summary || "Council run is in progress.");
+      setSummary(result.summary || t("council.summary.running"));
       setLastTaskId(result.task_id);
       setProviderAttempts(result.attempts);
       setSelectedCredentialSummary(credentialSummary);
@@ -242,7 +257,7 @@ export function CouncilModule() {
     setLastTaskId(result.task_id);
     setProviderAttempts(result.attempts);
     setSelectedCredentialSummary(credentialSummary);
-  }, []);
+  }, [t]);
 
   const attachCouncilStream = React.useCallback((runId: string) => {
     streamRef.current?.close();
@@ -303,12 +318,12 @@ export function CouncilModule() {
         setRunning(false);
       },
       onError: () => {
-        setError("council event stream failed");
+        setError(t("council.error.streamFailed"));
         streamRef.current = null;
         setRunning(false);
       },
     });
-  }, [applyCouncilResult]);
+  }, [applyCouncilResult, t]);
 
   React.useEffect(() => {
     return subscribeCouncilIntake((payload) => {
@@ -330,13 +345,13 @@ export function CouncilModule() {
           if (err instanceof ApiRequestError) {
             setError(`${err.code}: ${err.message}`);
           } else {
-            setError("failed to load council run");
+            setError(t("council.error.loadRunFailed"));
           }
           setRunning(false);
         }
       })();
     });
-  }, [attachCouncilStream]);
+  }, [attachCouncilStream, applyCouncilResult, t]);
 
   const runCouncil = React.useCallback(async (
     createTask: boolean,
@@ -354,8 +369,18 @@ export function CouncilModule() {
     setLastExcludedProviders(options?.excludeProviders ?? []);
     setSelectedCredentialSummary("pending");
 
+    const clientSessionId = startSession(prompt, {
+      activeWidgets: ["council", "tasks"],
+      mountedWidgets: ["council", "tasks"],
+      focusedWidget: "council",
+      intent: "council",
+      restoreMode: "full",
+    });
+    dispatchJarvisDataRefresh({ scope: "sessions", source: "council" });
+
     try {
       const payload: Parameters<typeof startCouncilRun>[0] = {
+        client_session_id: clientSessionId,
         question: prompt,
         exclude_providers: options?.excludeProviders,
         create_task: createTask,
@@ -372,6 +397,11 @@ export function CouncilModule() {
       const result = await startCouncilRun(payload);
       setIdempotentReplay(result.idempotent_replay === true);
 
+      if (result.task_id) {
+        linkSessionTask(clientSessionId, result.task_id);
+        dispatchJarvisDataRefresh({ scope: "tasks", source: "council" });
+      }
+
       applyCouncilResult(result);
 
       if (result.status === "completed" || result.status === "failed") {
@@ -384,11 +414,11 @@ export function CouncilModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("failed to run council query");
+        setError(t("council.error.runFailed"));
       }
       setStatus("Escalated to Human");
       setRounds(1);
-      setSummary("Council execution failed. Human review is required.");
+      setSummary(t("council.summary.failed"));
       setLastTaskId(null);
       setIdempotentReplay(false);
       setProviderAttempts([]);
@@ -398,20 +428,20 @@ export function CouncilModule() {
         setRunning(false);
       }
     }
-  }, [applyCouncilResult, attachCouncilStream, modelOverride, query, running, selectedProvider, strictProvider]);
+  }, [applyCouncilResult, attachCouncilStream, modelOverride, query, running, selectedProvider, strictProvider, t]);
 
   return (
     <main className="w-full h-full relative overflow-hidden bg-transparent text-white flex">
       <div className="relative z-10 w-full h-full p-6 flex flex-col">
         <header className="mb-6 border-l-2 border-purple-500 pl-4">
           <h1 className="text-2xl font-mono font-bold tracking-widest text-purple-400 flex items-center gap-3">
-            <Network size={24} /> AGENT COUNCIL ROOM
+            <Network size={24} /> {t("council.title").toUpperCase()}
           </h1>
-          <p className="text-sm font-mono text-white/50 tracking-wide mt-1">MULTI-AGENT CONSENSUS PROTOCOL ACTIVE</p>
+          <p className="text-sm font-mono text-white/50 tracking-wide mt-1">{t("council.subtitle").toUpperCase()}</p>
         </header>
 
         <div className="bg-black/40 border border-white/10 p-4 rounded-lg mb-6 font-mono text-sm border-l-4 border-l-cyan-500">
-          <span className="text-white/40 mr-2">QUERY:</span>
+          <span className="text-white/40 mr-2">{t("council.query")}:</span>
           <textarea
             className="mt-3 w-full bg-black/50 border border-white/10 rounded p-3 text-sm text-white resize-none h-24"
             value={query}
@@ -434,7 +464,7 @@ export function CouncilModule() {
               type="text"
               value={modelOverride}
               onChange={(event) => setModelOverride(event.target.value)}
-              placeholder="model override (optional)"
+              placeholder={t("council.modelOverridePlaceholder")}
               className="h-9 rounded border border-white/15 bg-black/50 px-3 text-xs text-white/90"
             />
             <datalist id="council-model-catalog">
@@ -450,7 +480,7 @@ export function CouncilModule() {
                 disabled={selectedProvider === "auto"}
                 className="accent-cyan-400"
               />
-              strict provider
+              {t("council.strictProvider")}
             </label>
           </div>
           <div className="mt-3 flex gap-3">
@@ -460,26 +490,37 @@ export function CouncilModule() {
               className="bg-cyan-500 hover:bg-cyan-400 text-black font-mono font-bold text-xs py-2 px-4 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
             >
               {running && <Loader2 size={12} className="animate-spin" />}
-              RUN COUNCIL
+              {t("council.run")}
             </button>
             <button
               onClick={() => void runCouncil(true)}
               disabled={running || !query.trim()}
               className="bg-white/10 hover:bg-white/20 text-white font-mono font-bold text-xs py-2 px-4 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              RUN + TASK
+              {t("council.runTask")}
             </button>
           </div>
           {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
-          {lastTaskId && <p className="mt-2 text-xs text-cyan-300">Task queued: {lastTaskId.slice(0, 8)}</p>}
+          {lastTaskId && <p className="mt-2 text-xs text-cyan-300">{t("council.taskQueued", { value: lastTaskId.slice(0, 8) })}</p>}
           <p className="mt-2 text-xs text-white/60">
-            Requested route: {selectedProvider}/{modelOverride.trim() || "default"} · strict={selectedProvider === "auto" ? "off" : strictProvider ? "on" : "off"}
+            {t("council.requestedRoute", {
+              provider: selectedProvider,
+              model: modelOverride.trim() || t("council.defaultModel"),
+              strict: selectedProvider === "auto" ? t("common.off") : strictProvider ? t("common.on") : t("common.off"),
+            })}
           </p>
-          <p className="mt-2 text-xs text-cyan-200/80">Credential: {selectedCredentialSummary}</p>
+          <p className="mt-2 text-xs text-cyan-200/80">
+            {t("council.credential")}:{" "}
+            {selectedCredentialSummary === "pending"
+              ? t("workbench.pending")
+              : selectedCredentialSummary === "none"
+                ? t("common.none")
+                : selectedCredentialSummary}
+          </p>
           {lastExcludedProviders.length > 0 && (
-            <p className="mt-2 text-xs text-amber-300">Excluded providers: {lastExcludedProviders.join(", ")}</p>
+            <p className="mt-2 text-xs text-amber-300">{t("council.excludedProviders", { value: lastExcludedProviders.join(", ") })}</p>
           )}
-          {idempotentReplay && <p className="mt-2 text-xs text-amber-300">Idempotent replay: existing run was reused.</p>}
+          {idempotentReplay && <p className="mt-2 text-xs text-amber-300">{t("council.idempotentReplay")}</p>}
         </div>
 
         <div className="flex-1 flex flex-col lg:flex-row gap-6 overflow-hidden pb-8 relative lg:pr-4">
@@ -499,11 +540,11 @@ export function CouncilModule() {
             <CouncilConsensusPanel status={status} rounds={rounds} summary={summary} />
 
             <div className="glass-panel p-5 rounded-lg border-l-4 border-red-500">
-              <h4 className="font-mono text-xs font-bold text-red-400 tracking-widest mb-2">PROVIDER FAILURE REASONS</h4>
+              <h4 className="font-mono text-xs font-bold text-red-400 tracking-widest mb-2">{t("council.providerFailureReasons")}</h4>
               {providerAttempts.length === 0 ? (
-                <p className="text-xs text-white/55">No provider routing attempts captured yet.</p>
+                <p className="text-xs text-white/55">{t("council.noProviderAttempts")}</p>
               ) : providerFailures.length === 0 ? (
-                <p className="text-xs text-emerald-300">No failed/skipped providers in this run.</p>
+                <p className="text-xs text-emerald-300">{t("council.noProviderFailures")}</p>
               ) : (
                 <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
                   {providerFailures.map((attempt, index) => (
@@ -515,10 +556,10 @@ export function CouncilModule() {
                           {typeof attempt.latencyMs === "number" ? ` · ${attempt.latencyMs}ms` : ""}
                         </span>
                       </div>
-                      <p className="mt-1 text-[11px] leading-relaxed text-white/85">{truncate(attempt.error ?? "No error reason returned.", 160)}</p>
+                      <p className="mt-1 text-[11px] leading-relaxed text-white/85">{truncate(attempt.error ?? t("council.noErrorReason"), 160)}</p>
                       {attempt.credential?.selectedCredentialMode && (
                         <p className="mt-1 text-[10px] text-cyan-100/80">
-                          credential {attempt.credential.selectedCredentialMode} ({attempt.credential.source}) · {attempt.credential.credentialPriority}
+                          {t("council.credential")} {attempt.credential.selectedCredentialMode} ({attempt.credential.source}) · {attempt.credential.credentialPriority}
                         </p>
                       )}
                     </div>
@@ -530,30 +571,30 @@ export function CouncilModule() {
                 onClick={() => void runCouncil(false, { excludeProviders: retryExcludedProviders })}
                 disabled={running || !query.trim() || !canRetryExcludingFailures}
               >
-                RETRY EXCLUDING FAILED
+                {t("council.retryExcludingFailed")}
               </button>
               {!canRetryExcludingFailures && providerFailures.length > 0 && (
                 <p className="mt-2 text-[11px] text-red-300/90">
-                  Cannot reroute: all providers are already excluded or unavailable.
+                  {t("council.cannotReroute")}
                 </p>
               )}
             </div>
 
             <div className="glass-panel p-5 rounded-lg border-l-4 border-amber-500">
               <h4 className="font-mono text-xs font-bold text-amber-500 tracking-widest mb-2 flex items-center gap-2">
-                <AlertCircle size={14} /> RECOMMENDED ACTION
+                <AlertCircle size={14} /> {t("council.recommendedAction")}
               </h4>
               <p className="text-sm text-white/80 mb-4">
                 {hasResult
-                  ? "If result quality is acceptable, create an execution task and run follow-up validation."
-                  : "Run the council first to produce evidence-backed recommendation."}
+                  ? t("council.recommendedActionReady")
+                  : t("council.recommendedActionIdle")}
               </p>
               <button
                 className="w-full bg-cyan-500 hover:bg-cyan-400 text-black font-mono font-bold text-xs py-2 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 onClick={() => void runCouncil(true)}
                 disabled={!query.trim() || running}
               >
-                INITIATE FOLLOW-UP TASK
+                {t("council.initiateFollowup")}
               </button>
             </div>
           </div>

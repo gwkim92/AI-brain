@@ -7,19 +7,24 @@ import { Brain, Search, DatabaseBackup } from "lucide-react";
 import { ApiRequestError } from "@/lib/api/client";
 import { getMemorySnapshot } from "@/lib/api/endpoints";
 import type { MemorySnapshotEntry } from "@/lib/api/types";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
-function formatRelative(value: string): string {
+function formatRelative(
+  value: string,
+  t: (key: "tasks.relative.justNow" | "tasks.relative.minutesAgo" | "tasks.relative.hoursAgo" | "tasks.relative.daysAgo", values?: Record<string, string | number>) => string
+): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
 
   const diffSec = Math.max(1, Math.floor((Date.now() - date.getTime()) / 1000));
-  if (diffSec < 60) return `${diffSec}s ago`;
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-  return `${Math.floor(diffSec / 86400)}d ago`;
+  if (diffSec < 60) return t("tasks.relative.justNow");
+  if (diffSec < 3600) return t("tasks.relative.minutesAgo", { value: Math.floor(diffSec / 60) });
+  if (diffSec < 86400) return t("tasks.relative.hoursAgo", { value: Math.floor(diffSec / 3600) });
+  return t("tasks.relative.daysAgo", { value: Math.floor(diffSec / 86400) });
 }
 
 export default function MemoryPage() {
+  const { t, formatDateTime } = useLocale();
   const [searchTerm, setSearchTerm] = useState("");
   const [rows, setRows] = useState<MemorySnapshotEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -39,7 +44,7 @@ export default function MemoryPage() {
         if (err instanceof ApiRequestError) {
           setError(`${err.code}: ${err.message}`);
         } else {
-          setError("failed to load memory snapshot");
+          setError(t("memory.loadFailedPage"));
         }
         setRows([]);
         setGeneratedAt(null);
@@ -68,13 +73,13 @@ export default function MemoryPage() {
       <header className="mb-8 border-l-2 border-white pl-4 flex justify-between items-end">
         <div>
           <h1 className="text-2xl font-mono font-bold tracking-widest text-white flex items-center gap-3">
-            <Brain size={24} /> MEMORY MANAGER
+            <Brain size={24} /> {t("memory.pageTitle")}
           </h1>
-          <p className="text-sm font-mono text-white/50 tracking-wide mt-1">MEMORY SNAPSHOT FROM BACKEND API</p>
+          <p className="text-sm font-mono text-white/50 tracking-wide mt-1">{t("memory.pageSubtitle")}</p>
         </div>
 
         <button className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-md text-xs font-mono font-bold transition-colors">
-          <DatabaseBackup size={14} /> EXPORT KNOWLEDGE BASE
+          <DatabaseBackup size={14} /> {t("memory.export")}
         </button>
       </header>
 
@@ -82,7 +87,7 @@ export default function MemoryPage() {
         <Search size={16} className="absolute left-4 top-3 text-white/30" />
         <input
           type="text"
-          placeholder="Search semantic memory..."
+          placeholder={t("memory.searchPlaceholderPage")}
           className="w-full bg-white/5 border border-white/10 rounded-lg py-2.5 pl-11 pr-4 text-sm font-mono text-white focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/50 transition-all placeholder:text-white/20"
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
@@ -91,15 +96,15 @@ export default function MemoryPage() {
 
       {generatedAt && (
         <div className="mb-4 text-xs font-mono text-white/40">
-          Snapshot generated at {new Date(generatedAt).toLocaleString()}.
+          {t("memory.generatedPage", { date: formatDateTime(generatedAt) })}
         </div>
       )}
 
       <div className="flex-1 overflow-y-auto pr-4 pb-8 space-y-3">
-        {loading && <p className="text-sm font-mono text-white/40">Loading memory snapshot...</p>}
+        {loading && <p className="text-sm font-mono text-white/40">{t("memory.loadingPage")}</p>}
         {!loading && error && <p className="text-sm font-mono text-red-400">{error}</p>}
         {!loading && !error && filteredRows.length === 0 && (
-          <p className="text-sm font-mono text-white/40">No memory rows matched your search.</p>
+          <p className="text-sm font-mono text-white/40">{t("memory.emptyPage")}</p>
         )}
 
         {!loading && !error && filteredRows.map((row) => (
@@ -109,7 +114,7 @@ export default function MemoryPage() {
             category={row.category}
             content={row.content}
             source={row.source}
-            timestamp={formatRelative(row.timestamp)}
+            timestamp={formatRelative(row.timestamp, t)}
           />
         ))}
       </div>

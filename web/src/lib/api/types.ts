@@ -215,6 +215,7 @@ export type JarvisRequest = {
   prompt: string;
   source?: string;
   client_session_id?: string;
+  target_hint?: "assistant";
   provider?: ProviderName | "auto";
   strict_provider?: boolean;
   model?: string;
@@ -614,12 +615,14 @@ export type CouncilRunRecord = ApiSchemas["CouncilRun"] & {
   selected_credential?: RuntimeSelectedCredential | null;
   attempts: ProviderAttempt[];
   idempotent_replay?: boolean;
+  session?: JarvisSessionRecord | null;
 };
 
 export type CouncilRunRequest = OptionalByDefault<
   ApiSchemas["CouncilRunCreateRequest"],
   "provider" | "strict_provider" | "create_task"
 > & {
+  client_session_id?: string;
   idempotency_key?: string;
   trace_id?: string;
 };
@@ -630,12 +633,14 @@ export type ExecutionRunRecord = ApiSchemas["ExecutionRun"] & {
   selected_credential?: RuntimeSelectedCredential | null;
   attempts: ProviderAttempt[];
   idempotent_replay?: boolean;
+  session?: JarvisSessionRecord | null;
 };
 
 export type ExecutionRunRequest = OptionalByDefault<
   ApiSchemas["ExecutionRunCreateRequest"],
   "provider" | "strict_provider" | "create_task"
 > & {
+  client_session_id?: string;
   idempotency_key?: string;
   trace_id?: string;
 };

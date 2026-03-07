@@ -99,3 +99,30 @@ export function tileWidgetLayouts(
     });
   });
 }
+
+export function spotlightWidgetLayout(
+  widgetId: string,
+  viewportWidth: number,
+  viewportHeight: number,
+  topOffset = 52,
+): void {
+  const gap = 24;
+  const safeWidth = Math.max(320, viewportWidth);
+  const safeHeight = Math.max(320, viewportHeight);
+  const availableHeight = Math.max(240, safeHeight - topOffset - gap * 2);
+  const preferredWidth = Math.floor(safeWidth * 0.72);
+  const preferredHeight = Math.floor(availableHeight * 0.82);
+  const maxWidth = Math.max(320, safeWidth - gap * 2);
+  const maxHeight = Math.max(240, safeHeight - topOffset - gap * 2);
+  const width = Math.max(480, Math.min(preferredWidth, maxWidth));
+  const height = Math.max(360, Math.min(preferredHeight, maxHeight));
+  const x = Math.max(gap, Math.floor((safeWidth - width) / 2));
+  const y = Math.max(topOffset + gap, Math.floor(topOffset + (availableHeight - height) / 2));
+
+  saveWidgetLayout(widgetId, {
+    x,
+    y,
+    w: width,
+    h: height,
+  });
+}

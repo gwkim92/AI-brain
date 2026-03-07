@@ -2,10 +2,18 @@
 
 import React, { Component, type ReactNode } from "react";
 
-type Props = {
+import { useLocale } from "@/components/providers/LocaleProvider";
+
+type WidgetErrorBoundaryProps = {
   widgetId: string;
   widgetTitle: string;
   children: ReactNode;
+};
+
+type LocalizedWidgetErrorBoundaryProps = WidgetErrorBoundaryProps & {
+  crashLabel: string;
+  unknownErrorLabel: string;
+  retryLabel: string;
 };
 
 type State = {
@@ -13,8 +21,8 @@ type State = {
   error: Error | null;
 };
 
-export class WidgetErrorBoundary extends Component<Props, State> {
-  constructor(props: Props) {
+class LocalizedWidgetErrorBoundary extends Component<LocalizedWidgetErrorBoundaryProps, State> {
+  constructor(props: LocalizedWidgetErrorBoundaryProps) {
     super(props);
     this.state = { hasError: false, error: null };
   }
@@ -34,19 +42,17 @@ export class WidgetErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex flex-col items-center justify-center h-full gap-3 p-4 text-center">
-          <div className="text-red-400 text-lg">⚠</div>
-          <p className="text-xs text-white/70 font-medium">
-            {this.props.widgetTitle} crashed
-          </p>
-          <p className="text-[10px] text-white/40 max-w-[200px] truncate">
-            {this.state.error?.message || "Unknown error"}
+        <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
+          <div className="text-lg text-red-400">⚠</div>
+          <p className="text-xs font-medium text-white/70">{this.props.crashLabel}</p>
+          <p className="max-w-[200px] truncate text-[10px] text-white/40">
+            {this.state.error?.message || this.props.unknownErrorLabel}
           </p>
           <button
             onClick={this.handleRetry}
-            className="px-3 py-1 text-[10px] rounded bg-white/10 hover:bg-white/20 text-white/80 transition-colors"
+            className="rounded bg-white/10 px-3 py-1 text-[10px] text-white/80 transition-colors hover:bg-white/20"
           >
-            Retry
+            {this.props.retryLabel}
           </button>
         </div>
       );
@@ -54,4 +60,17 @@ export class WidgetErrorBoundary extends Component<Props, State> {
 
     return this.props.children;
   }
+}
+
+export function WidgetErrorBoundary(props: WidgetErrorBoundaryProps) {
+  const { t } = useLocale();
+
+  return (
+    <LocalizedWidgetErrorBoundary
+      {...props}
+      crashLabel={t("widgetError.title", { widgetTitle: props.widgetTitle })}
+      unknownErrorLabel={t("widgetError.unknown")}
+      retryLabel={t("widgetError.retry")}
+    />
+  );
 }

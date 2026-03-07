@@ -230,6 +230,7 @@ function dedupeRuntimeSessions(sessions: HudSession[]): HudSession[] {
 }
 
 interface HUDContextType {
+    hydrated: boolean;
     activeWidgets: string[];
     mountedWidgets: string[];
     focusedWidget: string | null;
@@ -283,6 +284,7 @@ interface HUDContextType {
 const HUDContext = createContext<HUDContextType | undefined>(undefined);
 
 export function HUDProvider({ children }: { children: ReactNode }) {
+    const [hydrated, setHydrated] = useState(false);
     const [activeWidgets, setActiveWidgets] = useState<string[]>([FALLBACK_WIDGET]);
     const [mountedWidgets, setMountedWidgets] = useState<string[]>([FALLBACK_WIDGET]);
     const [focusedWidget, setFocusedWidget] = useState<string | null>(FALLBACK_WIDGET);
@@ -307,6 +309,7 @@ export function HUDProvider({ children }: { children: ReactNode }) {
         setMountedWidgets(normalized.mountedWidgets);
         setFocusedWidget(normalized.focusedWidget);
         setActiveWorkspacePreset(savedPreset);
+        setHydrated(true);
     }, []);
 
     // Persist to localStorage when state changes (skip the initial restore frame)
@@ -829,6 +832,7 @@ export function HUDProvider({ children }: { children: ReactNode }) {
 
     return (
         <HUDContext.Provider value={{
+            hydrated,
             activeWidgets,
             mountedWidgets,
             focusedWidget,

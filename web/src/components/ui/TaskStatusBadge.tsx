@@ -1,8 +1,12 @@
+"use client";
+
 import React from "react";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
 export type TaskStatus = "queued" | "running" | "blocked" | "retrying" | "done" | "failed" | "cancelled";
 
 export function TaskStatusBadge({ status }: { status: TaskStatus }) {
+    const { t } = useLocale();
     const getStyles = () => {
         switch (status) {
             case "queued": return "text-white/40 border-white/20";
@@ -32,7 +36,7 @@ export function TaskStatusBadge({ status }: { status: TaskStatus }) {
                     <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${status === 'running' ? 'bg-cyan-500' : 'bg-purple-500'}`}></span>
                 </span>
             )}
-            {status}
+            {t(`taskStatus.${status}`)}
         </div>
     );
 }

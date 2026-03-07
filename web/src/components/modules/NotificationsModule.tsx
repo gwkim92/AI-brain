@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import { useLocale } from "@/components/providers/LocaleProvider";
 import { streamNotifications } from "@/lib/api/endpoints";
 import type { SystemNotification } from "@/lib/api/types";
 
@@ -35,6 +36,7 @@ function formatTargetLabel(value: string): string {
 }
 
 export function NotificationsModule() {
+  const { t, formatTime } = useLocale();
   const [items, setItems] = useState<SystemNotification[]>([]);
   const [streamState, setStreamState] = useState<"connecting" | "idle" | "live" | "error">("connecting");
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>("all");
@@ -95,11 +97,11 @@ export function NotificationsModule() {
     <div className="h-full w-full overflow-hidden rounded-[28px] border border-white/10 bg-black/30 p-5 text-white">
       <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-3">
         <div>
-          <p className="font-mono text-[11px] uppercase tracking-[0.35em] text-cyan-300/80">Alert Tray</p>
-          <h2 className="mt-2 text-xl font-semibold text-white">Live Notifications</h2>
+          <p className="font-mono text-[11px] uppercase tracking-[0.35em] text-cyan-300/80">{t("notifications.kicker")}</p>
+          <h2 className="mt-2 text-xl font-semibold text-white">{t("notifications.title")}</h2>
         </div>
         <div className="text-right font-mono text-[11px] uppercase tracking-[0.28em] text-white/55">
-          <div>{streamState}</div>
+          <div>{t(`notifications.${streamState}` as const)}</div>
           <div className="mt-1">n:{summary.total} i:{summary.info} w:{summary.warning} c:{summary.critical}</div>
         </div>
       </div>
@@ -114,7 +116,7 @@ export function NotificationsModule() {
               severityFilter === value ? "border-cyan-400/40 bg-cyan-500/10 text-cyan-100" : "border-white/10 text-white/55"
             }`}
           >
-            {value}
+            {value === "all" ? "all" : value}
           </button>
         ))}
       </div>
@@ -129,7 +131,7 @@ export function NotificationsModule() {
               targetFilter === value ? "border-cyan-400/40 bg-cyan-500/10 text-cyan-100" : "border-white/10 text-white/55"
             }`}
           >
-            {value === "all" ? "all targets" : formatTargetLabel(value)}
+            {value === "all" ? t("notifications.allTargets") : formatTargetLabel(value)}
           </button>
         ))}
       </div>
@@ -137,7 +139,7 @@ export function NotificationsModule() {
       <div className="mt-4 grid gap-3 overflow-y-auto pr-1" style={{ maxHeight: "calc(100% - 150px)" }}>
         {visibleItems.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-white/15 bg-white/[0.03] px-4 py-6 text-sm text-white/50">
-            No notifications for this filter yet.
+            {t("notifications.none")}
           </div>
         ) : (
           visibleItems.map((item) => (
@@ -151,7 +153,7 @@ export function NotificationsModule() {
                   <h3 className="mt-1 text-sm font-semibold text-white">{item.title}</h3>
                 </div>
                 <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-white/60">
-                  {new Date(item.createdAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}
+                  {formatTime(item.createdAt)}
                 </span>
               </div>
               <p className="mt-2 text-sm leading-6 text-white/80">{item.message}</p>
@@ -165,7 +167,7 @@ export function NotificationsModule() {
                     href={item.actionUrl}
                     className="rounded-full border border-white/20 px-3 py-1 text-cyan-200 transition hover:border-cyan-300/50 hover:text-cyan-100"
                   >
-                    Open
+                    {t("notifications.open")}
                   </a>
                 ) : null}
               </div>

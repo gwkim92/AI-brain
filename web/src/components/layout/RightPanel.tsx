@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { AlertCircle, Clock3, PlayCircle, Sparkles, Layers, X } from "lucide-react";
 import { useHUD } from "@/components/providers/HUDProvider";
+import { useLocale } from "@/components/providers/LocaleProvider";
 import { ApiRequestError } from "@/lib/api/client";
 import { getDashboardOverview, streamDashboardOverviewEvents } from "@/lib/api/endpoints";
 import type { TaskRecord, UpgradeProposalRecord } from "@/lib/api/types";
@@ -48,28 +49,31 @@ type RunningTaskCard = {
     taskId?: string | null;
 };
 
-function formatRelativeTime(isoDate: string): string {
+function formatRelativeTime(
+    isoDate: string,
+    t: (key: "tasks.relative.justNow" | "tasks.relative.minutesAgo" | "tasks.relative.hoursAgo" | "tasks.relative.daysAgo", values?: Record<string, string | number>) => string
+): string {
     const target = new Date(isoDate).getTime();
     const diffSeconds = Math.round((Date.now() - target) / 1000);
 
     if (diffSeconds < 60) {
-        return "just now";
+        return t("tasks.relative.justNow");
     }
     if (diffSeconds < 3600) {
-        return `${Math.round(diffSeconds / 60)}m ago`;
+        return t("tasks.relative.minutesAgo", { value: Math.round(diffSeconds / 60) });
     }
     if (diffSeconds < 86400) {
-        return `${Math.round(diffSeconds / 3600)}h ago`;
+        return t("tasks.relative.hoursAgo", { value: Math.round(diffSeconds / 3600) });
     }
-    return `${Math.round(diffSeconds / 86400)}d ago`;
+    return t("tasks.relative.daysAgo", { value: Math.round(diffSeconds / 86400) });
 }
 
-function classifyProposalRisk(proposal: UpgradeProposalRecord): "HIGH RISK" | "REVIEW" {
+function classifyProposalRisk(proposal: UpgradeProposalRecord): "high" | "review" {
     const text = `${proposal.proposalTitle} ${proposal.id}`.toLowerCase();
     if (/(prod|production|deploy|migration|schema|security|auth|payment|rollback)/.test(text)) {
-        return "HIGH RISK";
+        return "high";
     }
-    return "REVIEW";
+    return "review";
 }
 
 function getReasonSeverityClass(severity: VisualCoreReasonSeverity | undefined): string {
@@ -82,21 +86,28 @@ function getReasonSeverityClass(severity: VisualCoreReasonSeverity | undefined):
     return "text-cyan-300 border-cyan-400/30 bg-cyan-500/10";
 }
 
-function formatSessionIntent(intent?: string): string {
+function formatSessionIntent(
+    intent: string | undefined,
+    t: (key: "rightPanel.general") => string
+): string {
     if (!intent || intent.trim().length === 0) {
-        return "GENERAL";
+        return t("rightPanel.general");
     }
     return intent.trim().toUpperCase();
 }
 
-function formatSessionWidget(widgetId: string | null | undefined): string {
+function formatSessionWidget(
+    widgetId: string | null | undefined,
+    t: (key: "rightPanel.none") => string
+): string {
     if (!widgetId || widgetId.trim().length === 0) {
-        return "none";
+        return t("rightPanel.none");
     }
     return widgetId.trim();
 }
 
 export function RightPanel() {
+    const { t } = useLocale();
     const { visualCoreScene, sessions, activeSessionId, switchSession, archiveSession, openWidgets } = useHUD();
     const router = useRouter();
     const pathname = usePathname();
@@ -166,11 +177,11 @@ export function RightPanel() {
             if (err instanceof ApiRequestError) {
                 setError(`${err.code}: ${err.message}`);
             } else {
-                setError("failed to load right-panel data");
+                setError(t("rightPanel.loadFailed"));
             }
             setIsLoading(false);
         }
-    }, [applyOverviewSnapshot]);
+    }, [applyOverviewSnapshot, t]);
 
     const resolveSessionFocus = (session: (typeof sessions)[number]): string => {
         if (session.focusedWidget && session.mountedWidgets.includes(session.focusedWidget)) {
@@ -242,10 +253,19 @@ export function RightPanel() {
     };
 
     const overlayLabel =
-        visualCoreScene && visualCoreScene.overlayFx.length > 0 ? visualCoreScene.overlayFx.join(", ") : "none";
+        visualCoreScene && visualCoreScene.overlayFx.length > 0 ? visualCoreScene.overlayFx.join(", ") : t("rightPanel.none");
     const reasonMeta = getVisualCoreReasonMeta(visualCoreScene?.reason);
-    const reasonLabel = reasonMeta?.label ?? "not initialized";
-    const reasonHint = reasonMeta?.operatorHint ?? "Waiting for first scene resolution.";
+    const visualReasonKey = visualCoreScene?.reason ?? "unknown";
+    const reasonLabel = visualCoreScene?.reason
+        ? t(`rightPanel.visualReason.${visualReasonKey}.label` as keyof typeof import("@/lib/locale").translations.en)
+        : t("rightPanel.notInitialized");
+    const translatedReasonHint = visualCoreScene?.reason
+        ? t(`rightPanel.visualReason.${visualReasonKey}.hint` as keyof typeof import("@/lib/locale").translations.en)
+        : t("rightPanel.waitingForScene");
+    const reasonHint =
+        translatedReasonHint.includes("rightPanel.visualReason.") ? (reasonMeta?.operatorHint ?? t("rightPanel.waitingForScene")) : translatedReasonHint;
+    const fallbackReasonLabel =
+        reasonLabel.includes("rightPanel.visualReason.") ? (reasonMeta?.label ?? t("rightPanel.notInitialized")) : reasonLabel;
     const reasonSeverityClass = getReasonSeverityClass(reasonMeta?.severity);
   const approvalCards = useMemo(() => pendingApprovals.slice(0, MAX_APPROVALS), [pendingApprovals]);
   const extraSessionApprovals = useMemo(
@@ -326,7 +346,7 @@ export function RightPanel() {
                                 reconnectDelayMs = Math.min(4_000, Math.max(800, reconnectDelayMs));
                             }
                         } else {
-                            setError("dashboard stream disconnected");
+                            setError(t("rightPanel.streamDisconnected"));
                             reconnectDelayMs = Math.min(4_000, Math.max(1000, reconnectDelayMs));
                         }
                         scheduleReconnect();
@@ -345,7 +365,7 @@ export function RightPanel() {
             clearReconnectTimer();
             stream?.close();
         };
-    }, [applyOverviewSnapshot, refreshOverviewSnapshot]);
+    }, [applyOverviewSnapshot, refreshOverviewSnapshot, t]);
 
     useEffect(() => {
         if (typeof window === "undefined") {
@@ -531,7 +551,7 @@ export function RightPanel() {
                 <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-2">
                         <span className="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(0,255,255,0.6)]"></span>
-                        <h3 className="font-bold tracking-widest text-sm text-white/90">SESSIONS</h3>
+                        <h3 className="font-bold tracking-widest text-sm text-white/90">{t("rightPanel.sessions").toUpperCase()}</h3>
                     </div>
                     <Layers size={14} className="text-cyan-300" />
                 </div>
@@ -539,7 +559,7 @@ export function RightPanel() {
                 <div className="space-y-2">
                     {sessions.length === 0 && (
                         <div className="text-xs font-mono text-white/40 p-3 border border-white/10 rounded-md bg-white/5">
-                            No active sessions. Use the command bar to start one.
+                            {t("rightPanel.sessionsEmpty")}
                         </div>
                     )}
                     {sessions.map((session) => {
@@ -566,42 +586,42 @@ export function RightPanel() {
                                             </p>
                                             <div className="flex items-center gap-2 mt-1.5">
                                                 <span className="text-[10px] font-mono text-white/40">
-                                                    {formatRelativeTime(session.createdAt)}
+                                                    {formatRelativeTime(session.createdAt, t)}
                                                 </span>
                                                 {session.activeWidgets.length > 0 && (
                                                     <span className="text-[10px] font-mono text-white/30">
-                                                        {session.activeWidgets.length} widgets
+                                                        {t("rightPanel.widgetsCount", { value: session.activeWidgets.length })}
                                                     </span>
                                                 )}
                                                 {session.mountedWidgets.length > session.activeWidgets.length && (
                                                     <span className="text-[10px] font-mono text-white/25">
-                                                        +{session.mountedWidgets.length - session.activeWidgets.length} mounted
+                                                        {t("rightPanel.mountedExtra", { value: session.mountedWidgets.length - session.activeWidgets.length })}
                                                     </span>
                                                 )}
                                                 {isActive && (
                                                     <span className="text-[9px] font-mono font-bold tracking-wider text-cyan-400">
-                                                        ACTIVE
+                                                        {t("rightPanel.active")}
                                                     </span>
                                                 )}
                                                 {session.stale && (
                                                     <span className="text-[9px] font-mono font-bold tracking-wider text-amber-300">
-                                                        STALE
+                                                        {t("rightPanel.stale")}
                                                     </span>
                                                 )}
                                             </div>
                                             <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[9px] font-mono">
                                                 <span className="rounded border border-white/15 px-1.5 py-0.5 text-white/50">
-                                                    {formatSessionIntent(session.intent)}
+                                                    {formatSessionIntent(session.intent, t)}
                                                 </span>
                                                 <span className="rounded border border-white/15 px-1.5 py-0.5 text-white/45">
-                                                    focus:{formatSessionWidget(session.focusedWidget)}
+                                                    {t("rightPanel.focus")}:{formatSessionWidget(session.focusedWidget, t)}
                                                 </span>
                                                 <span className="rounded border border-white/15 px-1.5 py-0.5 text-white/45">
-                                                    restore:{session.restoreMode}
+                                                    {t("rightPanel.restore")}:{session.restoreMode}
                                                 </span>
                                                 {session.stale && (
                                                     <span className="rounded border border-amber-400/30 bg-amber-500/10 px-1.5 py-0.5 text-amber-200">
-                                                        stale:{session.staleReason ?? "server_state_lost"}
+                                                        {t("rightPanel.staleReason", { value: session.staleReason ?? "server_state_lost" })}
                                                     </span>
                                                 )}
                                             </div>
@@ -619,7 +639,7 @@ export function RightPanel() {
                                         className="rounded border border-cyan-500/35 bg-cyan-500/10 px-2 py-1 text-[9px] font-mono text-cyan-200 hover:bg-cyan-500/20"
                                         data-testid={`session-restore-full-${session.id}`}
                                     >
-                                        restore full
+                                        {t("rightPanel.restoreFull")}
                                     </button>
                                     <button
                                         type="button"
@@ -631,7 +651,7 @@ export function RightPanel() {
                                         className="rounded border border-white/20 bg-white/5 px-2 py-1 text-[9px] font-mono text-white/70 hover:bg-white/10"
                                         data-testid={`session-restore-focus-${session.id}`}
                                     >
-                                        focus only
+                                        {t("rightPanel.focusOnly")}
                                     </button>
                                     {session.stale && (
                                         <button
@@ -649,7 +669,7 @@ export function RightPanel() {
                                             className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[9px] font-mono text-amber-200 hover:bg-amber-500/20"
                                             data-testid={`session-rerun-${session.id}`}
                                         >
-                                            re-run
+                                            {t("rightPanel.rerun")}
                                         </button>
                                     )}
                                     <button
@@ -676,15 +696,15 @@ export function RightPanel() {
                 <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-2">
                         <span className="w-2 h-2 rounded-full bg-cyan-500 shadow-[0_0_8px_rgba(0,255,255,0.6)] animate-pulse"></span>
-                        <h3 className="font-bold tracking-widest text-sm text-white/90">RUNNING TASKS</h3>
+                        <h3 className="font-bold tracking-widest text-sm text-white/90">{t("rightPanel.runningTasks").toUpperCase()}</h3>
                     </div>
-                    <span className="text-xs data-mono text-white/50">{isLoading ? "..." : `${activeTaskCards.length} Active`}</span>
+                    <span className="text-xs data-mono text-white/50">{isLoading ? "..." : t("rightPanel.activeCount", { value: activeTaskCards.length })}</span>
                 </div>
 
                 <div className="space-y-3">
-                    {isLoading && <div className="text-xs font-mono text-white/50 p-3 border border-white/10 rounded-md bg-white/5">Loading active tasks...</div>}
+                    {isLoading && <div className="text-xs font-mono text-white/50 p-3 border border-white/10 rounded-md bg-white/5">{t("rightPanel.loadingTasks")}</div>}
                     {!isLoading && activeTaskCards.length === 0 && (
-                        <div className="text-xs font-mono text-white/50 p-3 border border-white/10 rounded-md bg-white/5">No active tasks.</div>
+                        <div className="text-xs font-mono text-white/50 p-3 border border-white/10 rounded-md bg-white/5">{t("rightPanel.noActiveTasks")}</div>
                     )}
                     {!isLoading &&
                         activeTaskCards.map((task) => (
@@ -707,7 +727,7 @@ export function RightPanel() {
                                     </div>
                                     <p className="text-sm font-medium text-white/90 line-clamp-2">{task.title}</p>
                                     <p className="text-[10px] font-mono text-white/40 mt-2">
-                                        {task.id.slice(0, 8)} · {formatRelativeTime(task.updatedAt)}{task.isOptimistic ? " · pending sync" : ""}
+                                        {task.id.slice(0, 8)} · {formatRelativeTime(task.updatedAt, t)}{task.isOptimistic ? ` · ${t("rightPanel.pendingSync")}` : ""}
                                     </p>
                                 </button>
                                 {!task.isOptimistic && (
@@ -717,7 +737,7 @@ export function RightPanel() {
                                             className="rounded border border-white/20 bg-black/20 px-2 py-1 text-[9px] font-mono text-white/70 hover:bg-white/10"
                                             data-testid={`running-task-detail-${task.id}`}
                                         >
-                                            task detail
+                                            {t("rightPanel.taskDetail")}
                                         </Link>
                                     </div>
                                 )}
@@ -731,28 +751,28 @@ export function RightPanel() {
                 <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-2">
                         <span className="w-2 h-2 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.6)]"></span>
-                        <h3 className="font-bold tracking-widest text-sm text-white/90">PENDING APPROVALS</h3>
+                        <h3 className="font-bold tracking-widest text-sm text-white/90">{t("rightPanel.pendingApprovals").toUpperCase()}</h3>
                     </div>
-                    <span className="text-xs data-mono text-white/50">{isLoading ? "..." : `${pendingApprovalCount} Req`}</span>
+                    <span className="text-xs data-mono text-white/50">{isLoading ? "..." : t("rightPanel.requestCount", { value: pendingApprovalCount })}</span>
                 </div>
 
                 <div className="space-y-3">
-                    {isLoading && <div className="text-xs font-mono text-white/50 p-3 border border-white/10 rounded-md bg-white/5">Loading approvals...</div>}
+                    {isLoading && <div className="text-xs font-mono text-white/50 p-3 border border-white/10 rounded-md bg-white/5">{t("rightPanel.loadingApprovals")}</div>}
                     {!isLoading && approvalCards.length === 0 && extraSessionApprovals === 0 && (
-                        <div className="text-xs font-mono text-white/50 p-3 border border-white/10 rounded-md bg-white/5">No pending approvals.</div>
+                        <div className="text-xs font-mono text-white/50 p-3 border border-white/10 rounded-md bg-white/5">{t("rightPanel.noPendingApprovals")}</div>
                     )}
                     {!isLoading && extraSessionApprovals > 0 && (
                         <Link
                             href="/?widget=action_center"
                             className="block p-3 rounded-md border border-amber-500/20 bg-amber-950/20 text-xs font-mono text-amber-100/85 hover:bg-amber-900/25"
                         >
-                            {extraSessionApprovals} session approval{extraSessionApprovals === 1 ? "" : "s"} waiting in Action Center.
+                            {t("rightPanel.sessionApprovalsWaiting", { value: extraSessionApprovals, suffix: extraSessionApprovals === 1 ? "" : "s" })}
                         </Link>
                     )}
                     {!isLoading &&
                         approvalCards.map((proposal) => {
                             const risk = classifyProposalRisk(proposal);
-                            const isHighRisk = risk === "HIGH RISK";
+                            const isHighRisk = risk === "high";
 
                             return (
                                 <Link
@@ -762,11 +782,11 @@ export function RightPanel() {
                                 >
                                     <div className={`flex items-center gap-2 mb-2 ${isHighRisk ? "text-amber-500" : "text-blue-400"}`}>
                                         {isHighRisk ? <AlertCircle size={14} /> : <Clock3 size={14} />}
-                                        <span className="text-xs font-bold tracking-wider">{risk}</span>
+                                        <span className="text-xs font-bold tracking-wider">{risk === "high" ? t("rightPanel.risk.high") : t("rightPanel.risk.review")}</span>
                                     </div>
                                     <p className="text-sm font-medium text-white/90">{proposal.proposalTitle}</p>
                                     <p className="text-[10px] font-mono text-white/40 mt-2">
-                                        {proposal.id.slice(0, 8)} · {formatRelativeTime(proposal.createdAt)}
+                                        {proposal.id.slice(0, 8)} · {formatRelativeTime(proposal.createdAt, t)}
                                     </p>
                                 </Link>
                             );
@@ -776,7 +796,7 @@ export function RightPanel() {
                             href="/?widget=action_center"
                             className="block p-3 rounded-md border border-white/10 bg-white/5 text-[10px] font-mono text-white/60 hover:bg-white/10"
                         >
-                            Open Action Center for {pendingSessionApprovalCount} session approval{pendingSessionApprovalCount === 1 ? "" : "s"}.
+                            {t("rightPanel.openActionCenter", { value: pendingSessionApprovalCount, suffix: pendingSessionApprovalCount === 1 ? "" : "s" })}
                         </Link>
                     )}
                 </div>
@@ -787,75 +807,77 @@ export function RightPanel() {
                 <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-2">
                         <span className="w-2 h-2 rounded-full bg-fuchsia-400 shadow-[0_0_8px_rgba(232,121,249,0.6)]"></span>
-                        <h3 className="font-bold tracking-widest text-sm text-white/90">VISUAL CORE</h3>
+                        <h3 className="font-bold tracking-widest text-sm text-white/90">{t("rightPanel.visualCore").toUpperCase()}</h3>
                     </div>
                     <Sparkles size={14} className="text-fuchsia-300" />
                 </div>
 
                 <div className="p-4 rounded-md border border-fuchsia-500/20 bg-fuchsia-950/20 backdrop-blur-md space-y-2">
                     <div className="flex items-center justify-between text-[11px] font-mono">
-                        <span className="text-white/40">BASE MODE</span>
+                        <span className="text-white/40">{t("rightPanel.baseMode")}</span>
                         <span className="text-fuchsia-300">{visualCoreScene?.baseMode ?? "n/a"}</span>
                     </div>
                     <div className="flex items-center justify-between text-[11px] font-mono">
-                        <span className="text-white/40">OVERLAY FX</span>
+                        <span className="text-white/40">{t("rightPanel.overlayFx")}</span>
                         <span className="text-fuchsia-200">{overlayLabel}</span>
                     </div>
                     <div className="flex items-center justify-between text-[11px] font-mono">
-                        <span className="text-white/40">PRIORITY</span>
+                        <span className="text-white/40">{t("rightPanel.priority")}</span>
                         <span className="text-fuchsia-100">{visualCoreScene?.priority ?? "-"}</span>
                     </div>
                     <div className="flex items-center justify-between text-[11px] font-mono">
-                        <span className="text-white/40">RUNTIME STATUS</span>
-                        <span className="text-fuchsia-200">{runtimeStatus}</span>
+                        <span className="text-white/40">{t("rightPanel.runtimeStatus")}</span>
+                        <span className="text-fuchsia-200">
+                            {t(`rightPanel.runtimeStatus.${runtimeStatus}` as keyof typeof import("@/lib/locale").translations.en)}
+                        </span>
                     </div>
                     <div className="flex items-center justify-between text-[11px] font-mono">
-                        <span className="text-white/40">ENGINE</span>
+                        <span className="text-white/40">{t("rightPanel.engine")}</span>
                         <span className="text-fuchsia-200">{runtimeEngine}</span>
                     </div>
                     <div className="flex items-center justify-between text-[11px] font-mono">
-                        <span className="text-white/40">FAILURE CODE</span>
+                        <span className="text-white/40">{t("rightPanel.failureCode")}</span>
                         <span className="text-fuchsia-100 break-all text-right">{runtimeFailureCode}</span>
                     </div>
                     <div className="flex items-center justify-between text-[11px] font-mono">
-                        <span className="text-white/40">SWITCH COUNT</span>
+                        <span className="text-white/40">{t("rightPanel.switchCount")}</span>
                         <span className="text-fuchsia-100">{runtimeSwitchCount}</span>
                     </div>
                     <div className="flex items-center justify-between text-[11px] font-mono">
-                        <span className="text-white/40">RECOVERED</span>
-                        <span className="text-fuchsia-100">{runtimeRecovered ? "yes" : "no"}</span>
+                        <span className="text-white/40">{t("rightPanel.recovered")}</span>
+                        <span className="text-fuchsia-100">{runtimeRecovered ? t("common.yes") : t("common.no")}</span>
                     </div>
                     <div className="pt-2 border-t border-fuchsia-500/20 grid grid-cols-2 gap-2 text-[10px] font-mono">
                         <div className="rounded border border-white/10 bg-black/20 px-2 py-1">
-                            <p className="text-white/40">RUNNING</p>
+                            <p className="text-white/40">{t("rightPanel.running")}</p>
                             <p className="text-white/80">{visualCoreScene?.signals.runningCount ?? 0}</p>
                         </div>
                         <div className="rounded border border-white/10 bg-black/20 px-2 py-1">
-                            <p className="text-white/40">BLOCKED</p>
+                            <p className="text-white/40">{t("rightPanel.blocked")}</p>
                             <p className="text-white/80">{visualCoreScene?.signals.blockedCount ?? 0}</p>
                         </div>
                         <div className="rounded border border-white/10 bg-black/20 px-2 py-1">
-                            <p className="text-white/40">FAILED</p>
+                            <p className="text-white/40">{t("rightPanel.failed")}</p>
                             <p className="text-white/80">{visualCoreScene?.signals.failedCount ?? 0}</p>
                         </div>
                         <div className="rounded border border-white/10 bg-black/20 px-2 py-1">
-                            <p className="text-white/40">PENDING</p>
+                            <p className="text-white/40">{t("rightPanel.pending")}</p>
                             <p className="text-white/80">{visualCoreScene?.signals.pendingApprovalCount ?? 0}</p>
                         </div>
                     </div>
                     <div className="pt-2 border-t border-fuchsia-500/20">
                         <div className="mb-1 flex items-center justify-between">
-                            <p className="text-[10px] font-mono text-white/40">REASON</p>
+                            <p className="text-[10px] font-mono text-white/40">{t("rightPanel.reason")}</p>
                             {reasonMeta && (
                                 <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${reasonSeverityClass}`}>
                                     {reasonMeta.severity.toUpperCase()}
                                 </span>
                             )}
                         </div>
-                        <p className="text-xs font-mono text-white/75 break-words">{reasonLabel}</p>
+                        <p className="text-xs font-mono text-white/75 break-words">{fallbackReasonLabel}</p>
                         <p className="text-[10px] font-mono text-white/45 mt-1 break-words">{reasonHint}</p>
-                        <p className="text-[10px] font-mono text-white/35 mt-1 break-words">{visualCoreScene?.reason ?? "not initialized"}</p>
-                        <p className="text-[10px] font-mono text-white/30 mt-1 break-words">runtime reason: {runtimeReason}</p>
+                        <p className="text-[10px] font-mono text-white/35 mt-1 break-words">{visualCoreScene?.reason ?? t("rightPanel.notInitialized")}</p>
+                        <p className="text-[10px] font-mono text-white/30 mt-1 break-words">{t("rightPanel.runtimeReason")}: {runtimeReason}</p>
                     </div>
                 </div>
             </div>
@@ -865,19 +887,19 @@ export function RightPanel() {
                     <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-2">
                             <span className="w-2 h-2 rounded-full bg-amber-300 shadow-[0_0_8px_rgba(252,211,77,0.7)]"></span>
-                            <h3 className="font-bold tracking-widest text-sm text-white/90">RUNTIME TRACE</h3>
+                            <h3 className="font-bold tracking-widest text-sm text-white/90">{t("rightPanel.runtimeTrace").toUpperCase()}</h3>
                         </div>
-                        <span className="text-[10px] font-mono text-amber-200">DEV ONLY</span>
+                        <span className="text-[10px] font-mono text-amber-200">{t("rightPanel.devOnly")}</span>
                     </div>
                     <div className="rounded-md border border-amber-400/20 bg-amber-950/15 backdrop-blur-md p-3 space-y-2">
                         {runtimeEvents.length === 0 && (
-                            <p className="text-[10px] font-mono text-white/45">No runtime events captured yet.</p>
+                            <p className="text-[10px] font-mono text-white/45">{t("rightPanel.noRuntimeEvents")}</p>
                         )}
                         {runtimeEvents.map((event, index) => (
                             <div key={`${event.timestamp}:${event.name}:${index}`} className="rounded border border-white/10 bg-black/20 px-2 py-1.5">
                                 <div className="flex items-center justify-between gap-2">
                                     <p className="text-[10px] font-mono text-amber-200">{event.name}</p>
-                                    <p className="text-[9px] font-mono text-white/35">{formatRelativeTime(event.timestamp)}</p>
+                                    <p className="text-[9px] font-mono text-white/35">{formatRelativeTime(event.timestamp, t)}</p>
                                 </div>
                                 <p className="mt-1 text-[9px] font-mono text-white/45 break-all">
                                     {JSON.stringify(event.payload)}
@@ -888,7 +910,7 @@ export function RightPanel() {
                 </div>
             )}
 
-            {error && <p className="mt-6 text-[10px] font-mono text-rose-300/80">Data sync warning: {error}</p>}
+            {error && <p className="mt-6 text-[10px] font-mono text-rose-300/80">{t("rightPanel.dataSyncWarning", { value: error })}</p>}
 
         </div>
     );

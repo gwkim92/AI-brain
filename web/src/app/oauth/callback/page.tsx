@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useState } from "react";
+import { useLocale } from "@/components/providers/LocaleProvider";
+
+type OauthCallbackParams = {
+  code: string | null;
+  state: string | null;
+  error: string | null;
+};
 
 function postToOpener(payload: Record<string, unknown>) {
   if (typeof window === "undefined") {
@@ -19,17 +26,20 @@ function postToOpener(payload: Record<string, unknown>) {
 }
 
 export default function OauthCallbackPage() {
-  const params = useMemo(() => {
-    if (typeof window === "undefined") {
-      return { code: null, state: null, error: null };
-    }
+  const { t } = useLocale();
+  const [params, setParams] = useState<OauthCallbackParams>({
+    code: null,
+    state: null,
+    error: null,
+  });
 
+  useEffect(() => {
     const search = new URLSearchParams(window.location.search);
-    return {
+    setParams({
       code: search.get("code"),
       state: search.get("state"),
       error: search.get("error") ?? search.get("error_description"),
-    };
+    });
   }, []);
 
   useEffect(() => {
@@ -47,11 +57,11 @@ export default function OauthCallbackPage() {
   return (
     <main className="min-h-screen bg-black text-white flex items-center justify-center p-6">
       <div className="max-w-md w-full border border-white/15 rounded p-4 bg-black/50 font-mono text-xs">
-        <h1 className="text-sm tracking-widest mb-3">OAUTH CALLBACK</h1>
+        <h1 className="text-sm tracking-widest mb-3">{t("oauth.callbackTitle")}</h1>
         {params.error ? (
-          <p className="text-rose-300">Authorization failed: {params.error}</p>
+          <p className="text-rose-300">{t("oauth.callbackFailed", { error: params.error })}</p>
         ) : (
-          <p className="text-emerald-300">Authorization completed. This window will close automatically.</p>
+          <p className="text-emerald-300">{t("oauth.callbackComplete")}</p>
         )}
       </div>
     </main>

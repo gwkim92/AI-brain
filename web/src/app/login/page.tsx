@@ -9,9 +9,11 @@ import { authConfig as getAuthConfig, authLogin, authStaticTokenLogin } from "@/
 import { Jarvis3DCore } from "@/components/ui/Jarvis3DCore";
 import { saveAuthSession, saveManualToken } from "@/lib/auth/session";
 import type { AuthConfigData } from "@/lib/api/types";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
 export default function LoginPage() {
   const router = useRouter();
+  const { t } = useLocale();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [manualToken, setManualToken] = useState("");
@@ -79,7 +81,7 @@ export default function LoginPage() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("login failed");
+        setError(t("login.error.failed"));
       }
     } finally {
       setLoading(false);
@@ -88,7 +90,7 @@ export default function LoginPage() {
 
   const submitManualToken = async () => {
     if (!manualToken.trim()) {
-      setError("manual token is required");
+      setError(t("login.error.requiredToken"));
       return;
     }
 
@@ -106,7 +108,7 @@ export default function LoginPage() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("static token login failed");
+        setError(t("login.error.tokenFailed"));
       }
     } finally {
       setLoading(false);
@@ -132,21 +134,21 @@ export default function LoginPage() {
       <div className="absolute inset-0 z-10 bg-[radial-gradient(circle_at_center,_rgba(0,0,0,0.6)_0%,_rgba(0,0,0,0.35)_35%,_rgba(0,255,255,0.08)_100%)]" />
       <div className="w-full max-w-xl space-y-6 relative z-20">
         <section className="glass-panel rounded-xl border border-white/10 p-6 bg-black/70 backdrop-blur-xl">
-          <h1 className="text-xl font-mono font-bold tracking-widest text-cyan-300">LOGIN</h1>
-          <p className="text-xs font-mono text-white/50 mt-1">Use account credentials or static bearer token.</p>
+          <h1 className="text-xl font-mono font-bold tracking-widest text-cyan-300">{t("login.title")}</h1>
+          <p className="text-xs font-mono text-white/50 mt-1">{t("login.subtitle")}</p>
 
           <form className="mt-5 space-y-3" onSubmit={handleLoginSubmit}>
             <input
               value={email}
               onChange={(event) => setEmail(event.target.value)}
-              placeholder="email"
+              placeholder={t("login.emailPlaceholder")}
               className="w-full h-10 rounded border border-white/15 bg-black/50 px-3 text-sm font-mono"
             />
             <input
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               type="password"
-              placeholder="password"
+              placeholder={t("login.passwordPlaceholder")}
               className="w-full h-10 rounded border border-white/15 bg-black/50 px-3 text-sm font-mono"
             />
             <button
@@ -154,23 +156,21 @@ export default function LoginPage() {
               disabled={loading || !email.trim() || !password}
               className="w-full h-10 rounded bg-cyan-500/20 border border-cyan-400/40 text-cyan-200 text-xs font-mono tracking-widest disabled:opacity-40"
             >
-              {loading ? "SIGNING IN..." : "SIGN IN"}
+              {loading ? t("login.signingIn") : t("login.signIn")}
             </button>
           </form>
         </section>
 
         {authConfig?.auth_token_configured ? (
           <section className="glass-panel rounded-xl border border-white/10 p-6 bg-black/70 backdrop-blur-xl">
-            <h2 className="text-sm font-mono font-bold tracking-widest text-white/80">STATIC TOKEN MODE</h2>
-            <p className="text-[11px] font-mono text-white/50 mt-1">
-              For admin bootstrap: paste `AUTH_TOKEN` and issue an HttpOnly session cookie.
-            </p>
+            <h2 className="text-sm font-mono font-bold tracking-widest text-white/80">{t("login.staticModeTitle")}</h2>
+            <p className="text-[11px] font-mono text-white/50 mt-1">{t("login.staticModeSubtitle")}</p>
 
             <form className="mt-4 space-y-3" onSubmit={handleManualTokenSubmit}>
               <input
                 value={manualToken}
                 onChange={(event) => setManualToken(event.target.value)}
-                placeholder="Bearer token"
+                placeholder={t("login.bearerTokenPlaceholder")}
                 className="w-full h-10 rounded border border-white/15 bg-black/50 px-3 text-sm font-mono"
               />
               <div className="grid grid-cols-2 gap-2">
@@ -186,7 +186,7 @@ export default function LoginPage() {
                 <input
                   value={manualUserId}
                   onChange={(event) => setManualUserId(event.target.value)}
-                  placeholder="user id (optional)"
+                  placeholder={t("login.userIdPlaceholder")}
                   className="h-10 rounded border border-white/15 bg-black/50 px-3 text-xs font-mono"
                 />
               </div>
@@ -195,13 +195,13 @@ export default function LoginPage() {
                 disabled={loading}
                 className="w-full h-10 rounded bg-white/10 border border-white/20 text-white/80 text-xs font-mono tracking-widest"
               >
-                {loading ? "VERIFYING TOKEN..." : "ENTER WITH TOKEN"}
+                {loading ? t("login.verifyingToken") : t("login.verifyToken")}
               </button>
             </form>
           </section>
         ) : authConfigLoaded ? (
           <section className="glass-panel rounded-xl border border-white/10 p-5 bg-black/60 backdrop-blur-xl">
-            <p className="text-xs font-mono text-white/60">Static token login is disabled on this server.</p>
+            <p className="text-xs font-mono text-white/60">{t("login.staticDisabled")}</p>
           </section>
         ) : null}
 
@@ -209,13 +209,13 @@ export default function LoginPage() {
 
         {authConfig?.auth_allow_signup !== false ? (
           <p className="text-xs font-mono text-white/55">
-            No account yet?{" "}
+            {t("login.noAccount")}{" "}
             <Link href="/signup" className="text-cyan-300 hover:text-cyan-100">
-              Create one
+              {t("login.createOne")}
             </Link>
           </p>
         ) : (
-          <p className="text-xs font-mono text-white/45">Signup is disabled by server policy.</p>
+          <p className="text-xs font-mono text-white/45">{t("login.signupDisabled")}</p>
         )}
       </div>
     </main>

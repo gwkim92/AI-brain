@@ -30,31 +30,31 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("keydown", handler);
   }, [toggle]);
 
-  if (isAuthPage) {
-    return <div className="h-screen w-full overflow-y-auto overflow-x-hidden">{children}</div>;
-  }
-
   return (
     <div className="flex flex-row h-screen w-full overflow-hidden">
       {!isCorePage && (
-        <div className="fixed inset-0 z-0 pointer-events-none">
-          <Jarvis3DCore
-            hideUI
-            baseMode={visualCoreScene?.baseMode ?? "default"}
-            overlayFx={visualCoreScene?.overlayFx ?? []}
-            highVisibility
-          />
+        <div className={`fixed inset-0 z-0 pointer-events-none ${isAuthPage ? "hidden" : ""}`}>
+          {!isAuthPage ? (
+            <Jarvis3DCore
+              hideUI
+              baseMode={visualCoreScene?.baseMode ?? "default"}
+              overlayFx={visualCoreScene?.overlayFx ?? []}
+              highVisibility
+            />
+          ) : null}
         </div>
       )}
-      <div className="fixed top-0 left-0 right-0 z-[80] pointer-events-none">
-        <CommandBar />
+      <div className={`fixed top-0 left-0 right-0 z-[80] pointer-events-none ${isAuthPage ? "hidden" : ""}`}>
+        {!isAuthPage ? <CommandBar /> : null}
       </div>
-      <Sidebar />
-      <div className="flex-1 flex flex-col h-full overflow-hidden relative">
+      <div className={isAuthPage ? "hidden" : ""} aria-hidden={isAuthPage}>
+        {!isAuthPage ? <Sidebar /> : null}
+      </div>
+      <div className={isAuthPage ? "h-screen w-full overflow-y-auto overflow-x-hidden relative" : "flex-1 flex flex-col h-full overflow-hidden relative"}>
         {children}
 
         {/* Overlay trigger for < 2xl */}
-        {!isCorePage && (
+        {!isCorePage && !isAuthPage && (
           <button
             onClick={toggle}
             className="fixed bottom-4 right-4 z-50 2xl:hidden p-2.5 rounded-full bg-black/70 border border-white/15 text-white/60 hover:text-white hover:border-cyan-500/40 backdrop-blur-md shadow-lg transition-all"
@@ -67,8 +67,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* Static panel for >= 2xl */}
       {!isCorePage && (
-        <div className="hidden 2xl:block w-80 shrink-0 h-full border-l border-white/10 bg-black/50 backdrop-blur-xl relative z-40 overflow-y-auto">
-          <RightPanel />
+        <div className={`${isAuthPage ? "hidden" : "hidden 2xl:block"} w-80 shrink-0 h-full border-l border-white/10 bg-black/50 backdrop-blur-xl relative z-40 overflow-y-auto`} aria-hidden={isAuthPage}>
+          {!isAuthPage ? <RightPanel /> : null}
         </div>
       )}
 

@@ -1,5 +1,8 @@
+"use client";
+
 import React from "react";
 import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
 type AsyncStateProps = {
   loading: boolean;
@@ -15,16 +18,20 @@ export function AsyncState({
   loading,
   error,
   empty,
-  loadingText = "Loading...",
-  emptyText = "No data.",
+  loadingText,
+  emptyText,
   onRetry,
   className = "",
 }: AsyncStateProps) {
+  const { t } = useLocale();
+  const resolvedLoadingText = loadingText ?? t("common.loading");
+  const resolvedEmptyText = emptyText ?? t("common.noData");
+
   if (loading) {
     return (
       <div className={`flex items-center gap-2 text-sm font-mono text-white/50 ${className}`}>
         <Loader2 size={14} className="animate-spin" />
-        {loadingText}
+        {resolvedLoadingText}
       </div>
     );
   }
@@ -41,7 +48,7 @@ export function AsyncState({
             className="inline-flex w-fit items-center gap-2 px-3 py-1.5 text-xs font-mono text-cyan-300 border border-cyan-500/40 rounded hover:text-cyan-100"
             onClick={onRetry}
           >
-            <RefreshCw size={12} /> RETRY
+            <RefreshCw size={12} /> {t("common.retry")}
           </button>
         )}
       </div>
@@ -49,7 +56,7 @@ export function AsyncState({
   }
 
   if (empty) {
-    return <div className={`text-sm font-mono text-white/40 ${className}`}>{emptyText}</div>;
+    return <div className={`text-sm font-mono text-white/40 ${className}`}>{resolvedEmptyText}</div>;
   }
 
   return null;

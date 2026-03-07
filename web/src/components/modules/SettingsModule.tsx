@@ -35,6 +35,7 @@ import type {
 import { hasMinRole, useCurrentRole } from "@/lib/auth/role";
 import { AsyncState } from "@/components/ui/AsyncState";
 import { ConnectorHealthCard } from "@/components/ui/ConnectorHealthCard";
+import { useLocale } from "@/components/providers/LocaleProvider";
 import {
   HUD_MISSION_AUTO_FOCUS_HOLD_SECONDS_KEY,
   HUD_MISSION_AUTO_FOCUS_KEY,
@@ -61,28 +62,36 @@ function toErrorMessage(err: unknown, fallback: string): string {
   return fallback;
 }
 
-function formatCredentialModeLabel(mode: UserProviderCredentialRecord["selected_credential_mode"]): string {
-  if (mode === "oauth_official") return "OAuth Official";
-  if (mode === "api_key") return "API Key";
-  return "Not Selected";
+function formatCredentialModeLabel(
+  mode: UserProviderCredentialRecord["selected_credential_mode"],
+  t: ReturnType<typeof useLocale>["t"]
+): string {
+  if (mode === "oauth_official") return t("settings.credential.oauthOfficial");
+  if (mode === "api_key") return t("settings.credential.apiKey");
+  return t("settings.credential.notSelected");
 }
 
-function formatSelectedUserCredentialModeLabel(mode: UserProviderCredentialRecord["selected_user_credential_mode"]): string {
-  if (mode === "auto") return "Auto";
-  if (mode === "oauth_official") return "OAuth Official";
-  if (mode === "api_key") return "API Key";
-  return "Auto";
+function formatSelectedUserCredentialModeLabel(
+  mode: UserProviderCredentialRecord["selected_user_credential_mode"],
+  t: ReturnType<typeof useLocale>["t"]
+): string {
+  if (mode === "oauth_official") return t("settings.credential.oauthOfficial");
+  if (mode === "api_key") return t("settings.credential.apiKey");
+  return t("common.auto");
 }
 
-function formatCredentialPriorityLabel(priority: ProviderCredentialPriority): string {
-  return priority === "auth_first" ? "OAuth first" : "API key first";
+function formatCredentialPriorityLabel(priority: ProviderCredentialPriority, t: ReturnType<typeof useLocale>["t"]): string {
+  return priority === "auth_first" ? t("settings.priority.oauthFirst") : t("settings.priority.apiKeyFirst");
 }
 
-function formatCredentialSourceLabel(source: UserProviderCredentialRecord["source"]): string {
-  if (source === "user") return "Personal";
-  if (source === "workspace") return "Workspace";
-  if (source === "env") return "Env";
-  return "None";
+function formatCredentialSourceLabel(
+  source: UserProviderCredentialRecord["source"],
+  t: ReturnType<typeof useLocale>["t"]
+): string {
+  if (source === "user") return t("settings.source.personal");
+  if (source === "workspace") return t("settings.source.workspace");
+  if (source === "env") return t("settings.source.env");
+  return t("settings.source.none");
 }
 
 function credentialSourceClass(source: UserProviderCredentialRecord["source"]): string {
@@ -92,13 +101,14 @@ function credentialSourceClass(source: UserProviderCredentialRecord["source"]): 
   return "text-white/45 border-white/20 bg-white/5";
 }
 
-function formatEventTypes(eventTypes: string[]): string {
-  if (eventTypes.length === 0) return "none";
-  if (eventTypes.includes("*")) return "all";
+function formatEventTypes(eventTypes: string[], t: ReturnType<typeof useLocale>["t"]): string {
+  if (eventTypes.length === 0) return t("settings.eventTypes.none");
+  if (eventTypes.includes("*")) return t("settings.eventTypes.all");
   return eventTypes.join(", ");
 }
 
 export function SettingsModule() {
+  const { t, locale, preference, setPreference, formatDateTime, formatTime } = useLocale();
   const role = useCurrentRole();
   const isAdmin = hasMinRole(role, "admin");
 
@@ -136,6 +146,7 @@ export function SettingsModule() {
   const [hudHoldSecondsDraft, setHudHoldSecondsDraft] = useState("90");
   const [hudRuntimeNotice, setHudRuntimeNotice] = useState<string | null>(null);
   const [visualCoreEnabled, setVisualCoreEnabled] = useState(true);
+  const [languageNotice, setLanguageNotice] = useState<string | null>(null);
 
   const [registryModels, setRegistryModels] = useState<ModelRegistryEntry[]>([]);
   const [registryLoading, setRegistryLoading] = useState(false);
@@ -153,7 +164,7 @@ export function SettingsModule() {
       const overview = await getSettingsOverview();
       setSettingsOverview(overview);
     } catch (err) {
-      setError(toErrorMessage(err, "failed to load settings"));
+      setError(toErrorMessage(err, t("settings.loadFailed")));
       setSettingsOverview(null);
     }
 
@@ -164,7 +175,7 @@ export function SettingsModule() {
       setUserProviderCredentials(data.providers);
     } catch (err) {
       setUserProviderCredentials([]);
-      setUserCredentialError(toErrorMessage(err, "failed to load your provider credentials"));
+      setUserCredentialError(toErrorMessage(err, t("settings.userCredentialsLoadFailed")));
     } finally {
       setUserCredentialLoading(false);
     }
@@ -178,7 +189,7 @@ export function SettingsModule() {
         setCredentialError(null);
       } catch (err) {
         setProviderCredentials([]);
-        setCredentialError(toErrorMessage(err, "failed to load provider credentials"));
+        setCredentialError(toErrorMessage(err, t("settings.adminCredentialsLoadFailed")));
       } finally {
         setCredentialLoading(false);
       }
@@ -203,7 +214,7 @@ export function SettingsModule() {
       setPolicies(pol.policies ?? []);
     } catch { setPolicies([]); }
     setPoliciesLoading(false);
-  }, [isAdmin]);
+  }, [isAdmin, t]);
 
   useEffect(() => {
     void refresh();
@@ -299,55 +310,71 @@ export function SettingsModule() {
         | "degraded"
         | "error",
       latencyMs: provider.attempts > 0 ? Math.round(provider.avg_latency_ms) : 0,
-      lastSync: provider.last_attempt_at ? new Date(provider.last_attempt_at).toLocaleTimeString() : "no attempts",
+      lastSync: provider.last_attempt_at ? formatTime(provider.last_attempt_at) : t("settings.connector.noAttempts"),
       description: provider.enabled
-        ? `model=${provider.model ?? "default"} · credential=${provider.selected_credential_mode ?? "none"}(${provider.credential_source ?? "none"}) · success=${provider.success_rate_pct}% (${provider.successes}/${provider.attempts})`
-        : `Disabled${provider.reason ? ` (${provider.reason})` : ""}`,
+        ? t("settings.connector.providerSummary", {
+            model: provider.model ?? t("settings.connector.defaultModel"),
+            credential: provider.selected_credential_mode ?? "none",
+            source: provider.credential_source ?? "none",
+            successRate: provider.success_rate_pct,
+            successes: provider.successes,
+            attempts: provider.attempts,
+          })
+        : t("settings.connector.disabled", { reason: provider.reason ?? "" }).trim(),
     }));
 
     if (settingsOverview) {
       rows.unshift({
-        name: "Backend Core Health",
+        name: t("settings.connector.backendHealth"),
         status: (settingsOverview.backend.db === "up" ? "healthy" : settingsOverview.backend.db === "n/a" ? "degraded" : "error") as
           | "healthy"
           | "degraded"
           | "error",
         latencyMs: 0,
-        lastSync: new Date(settingsOverview.backend.now).toLocaleTimeString(),
+        lastSync: formatTime(settingsOverview.backend.now),
         description: `env=${settingsOverview.backend.env} store=${settingsOverview.backend.store} db=${settingsOverview.backend.db}`,
       });
     }
 
     return rows;
-  }, [settingsOverview]);
+  }, [settingsOverview, formatTime, t]);
+
+  const activeLocaleLabel = locale === "ko" ? t("common.korean") : t("common.english");
+
+  const onLanguagePreferenceChange = (nextPreference: "auto" | "ko" | "en") => {
+    setPreference(nextPreference);
+    setLanguageNotice(
+      nextPreference === "auto" ? t("settings.language.notice.auto") : t("settings.language.notice.manual")
+    );
+  };
 
   const policyItems = useMemo(() => {
     if (!settingsOverview) {
       return [
-        "High-risk operations require explicit approval.",
-        "Provider failover is enabled in auto mode.",
+        t("settings.policy.highRiskRequired"),
+        t("settings.policy.failoverEnabled"),
       ];
     }
 
     return [
       settingsOverview.policies.high_risk_requires_approval
-        ? "High-risk operations require explicit approval."
-        : "High-risk operations may run without approval.",
-      `Approval max age: ${settingsOverview.policies.approval_max_age_hours}h (after this window, execution is rejected).`,
-      `High-risk allowed roles: ${settingsOverview.policies.high_risk_allowed_roles.join(", ")}.`,
+        ? t("settings.policy.highRiskRequired")
+        : t("settings.policy.highRiskOptional"),
+      t("settings.policy.approvalMaxAge", { value: settingsOverview.policies.approval_max_age_hours }),
+      t("settings.policy.allowedRoles", { value: settingsOverview.policies.high_risk_allowed_roles.join(", ") }),
       settingsOverview.policies.provider_failover_auto
-        ? "Provider failover is enabled in auto mode."
-        : "Provider failover is disabled.",
+        ? t("settings.policy.failoverEnabled")
+        : t("settings.policy.failoverDisabled"),
       settingsOverview.policies.auth_required
-        ? "API authentication is required."
-        : "API authentication is optional (development mode).",
+        ? t("settings.policy.authRequired")
+        : t("settings.policy.authOptional"),
     ];
-  }, [settingsOverview]);
+  }, [settingsOverview, t]);
 
   const onSaveProviderKey = async (provider: ProviderName) => {
     const apiKey = credentialDrafts[provider]?.trim() ?? "";
     if (apiKey.length < 8) {
-      setCredentialError("api key must be at least 8 chars");
+      setCredentialError(t("settings.error.apiKeyTooShort"));
       return;
     }
 
@@ -369,8 +396,14 @@ export function SettingsModule() {
         }));
         setCredentialNotice(
           testResult.ok
-            ? `${provider.toUpperCase()} key saved · connection ok (${testResult.model_count} models)`
-            : `${provider.toUpperCase()} key saved · test failed${testResult.reason ? `: ${testResult.reason}` : ""}`
+            ? t("settings.notice.adminKeySavedOk", {
+                provider: provider.toUpperCase(),
+                models: testResult.model_count,
+              })
+            : t("settings.notice.adminKeySavedFailed", {
+                provider: provider.toUpperCase(),
+                reason: testResult.reason ? `: ${testResult.reason}` : "",
+              })
         );
       } catch (testErr) {
         setConnectionTests((prev) => ({
@@ -378,14 +411,17 @@ export function SettingsModule() {
           [provider]: undefined,
         }));
         setCredentialNotice(
-          `${provider.toUpperCase()} key saved · test error (${toErrorMessage(testErr, "connection test failed")})`
+          t("settings.notice.adminKeySavedTestError", {
+            provider: provider.toUpperCase(),
+            error: toErrorMessage(testErr, t("settings.error.connectionTestFailed")),
+          })
         );
       } finally {
         setActiveTestProvider(null);
       }
       await refresh();
     } catch (err) {
-      setCredentialError(toErrorMessage(err, `failed to save ${provider} key`));
+      setCredentialError(toErrorMessage(err, t("settings.error.saveProviderKey", { provider: provider.toUpperCase() })));
     } finally {
       setActiveSaveProvider(null);
     }
@@ -398,9 +434,9 @@ export function SettingsModule() {
     try {
       const result = await deleteAdminProviderCredential(provider);
       if (result.has_key && result.source === "env") {
-        setCredentialNotice(`${provider.toUpperCase()} stored key removed (ENV key is active)`);
+        setCredentialNotice(t("settings.notice.adminStoredKeyRemovedEnv", { provider: provider.toUpperCase() }));
       } else {
-        setCredentialNotice(`${provider.toUpperCase()} key removed`);
+        setCredentialNotice(t("settings.notice.adminKeyRemoved", { provider: provider.toUpperCase() }));
       }
       setConnectionTests((prev) => ({
         ...prev,
@@ -408,7 +444,7 @@ export function SettingsModule() {
       }));
       await refresh();
     } catch (err) {
-      setCredentialError(toErrorMessage(err, `failed to delete ${provider} key`));
+      setCredentialError(toErrorMessage(err, t("settings.error.deleteProviderKey", { provider: provider.toUpperCase() })));
     } finally {
       setActiveDeleteProvider(null);
     }
@@ -425,13 +461,20 @@ export function SettingsModule() {
         [provider]: result,
       }));
       if (result.ok) {
-        setCredentialNotice(`${provider.toUpperCase()} connection test passed`);
+        setCredentialNotice(t("settings.notice.connectionPassed", { provider: provider.toUpperCase() }));
       } else {
-        setCredentialNotice(`${provider.toUpperCase()} connection test failed${result.reason ? `: ${result.reason}` : ""}`);
+        setCredentialNotice(
+          t("settings.notice.connectionFailed", {
+            provider: provider.toUpperCase(),
+            reason: result.reason ? `: ${result.reason}` : "",
+          })
+        );
       }
       await refresh();
     } catch (err) {
-      setCredentialError(toErrorMessage(err, `failed to test ${provider} connection`));
+      setCredentialError(
+        toErrorMessage(err, t("settings.error.testProviderConnection", { provider: provider.toUpperCase() }))
+      );
     } finally {
       setActiveTestProvider(null);
     }
@@ -440,7 +483,7 @@ export function SettingsModule() {
   const onSaveUserProviderKey = async (provider: ProviderName) => {
     const apiKey = userCredentialDrafts[provider]?.trim() ?? "";
     if (apiKey.length < 8) {
-      setUserCredentialError("api key must be at least 8 chars");
+      setUserCredentialError(t("settings.error.apiKeyTooShort"));
       return;
     }
 
@@ -455,10 +498,12 @@ export function SettingsModule() {
         ...prev,
         [provider]: "",
       }));
-      setUserCredentialNotice(`${provider.toUpperCase()} personal key saved`);
+      setUserCredentialNotice(t("settings.notice.personalKeySaved", { provider: provider.toUpperCase() }));
       await refresh();
     } catch (err) {
-      setUserCredentialError(toErrorMessage(err, `failed to save ${provider} personal key`));
+      setUserCredentialError(
+        toErrorMessage(err, t("settings.error.savePersonalKey", { provider: provider.toUpperCase() }))
+      );
     } finally {
       setActiveUserSaveProvider(null);
     }
@@ -482,11 +527,16 @@ export function SettingsModule() {
         [provider]: nextMode,
       }));
       setUserCredentialNotice(
-        `${provider.toUpperCase()} mode updated: ${formatSelectedUserCredentialModeLabel(nextMode)}`
+        t("settings.notice.modeUpdated", {
+          provider: provider.toUpperCase(),
+          value: formatSelectedUserCredentialModeLabel(nextMode, t),
+        })
       );
       await refresh();
     } catch (err) {
-      setUserCredentialError(toErrorMessage(err, `failed to update ${provider} credential mode`));
+      setUserCredentialError(
+        toErrorMessage(err, t("settings.error.updateCredentialMode", { provider: provider.toUpperCase() }))
+      );
     } finally {
       setActiveUserModeProvider(null);
     }
@@ -510,11 +560,16 @@ export function SettingsModule() {
         [provider]: nextPriority,
       }));
       setUserCredentialNotice(
-        `${provider.toUpperCase()} priority updated: ${formatCredentialPriorityLabel(nextPriority)}`
+        t("settings.notice.priorityUpdated", {
+          provider: provider.toUpperCase(),
+          value: formatCredentialPriorityLabel(nextPriority, t),
+        })
       );
       await refresh();
     } catch (err) {
-      setUserCredentialError(toErrorMessage(err, `failed to update ${provider} credential priority`));
+      setUserCredentialError(
+        toErrorMessage(err, t("settings.error.updateCredentialPriority", { provider: provider.toUpperCase() }))
+      );
     } finally {
       setActiveUserPriorityProvider(null);
     }
@@ -540,10 +595,12 @@ export function SettingsModule() {
         delete next[provider];
         return next;
       });
-      setUserCredentialNotice(`${provider.toUpperCase()} personal credential removed`);
+      setUserCredentialNotice(t("settings.notice.personalCredentialRemoved", { provider: provider.toUpperCase() }));
       await refresh();
     } catch (err) {
-      setUserCredentialError(toErrorMessage(err, `failed to remove ${provider} personal credential`));
+      setUserCredentialError(
+        toErrorMessage(err, t("settings.error.removePersonalCredential", { provider: provider.toUpperCase() }))
+      );
     } finally {
       setActiveUserDeleteProvider(null);
     }
@@ -560,13 +617,20 @@ export function SettingsModule() {
         [provider]: result,
       }));
       if (result.ok) {
-        setUserCredentialNotice(`${provider.toUpperCase()} personal credential test passed`);
+        setUserCredentialNotice(t("settings.notice.personalCredentialTestPassed", { provider: provider.toUpperCase() }));
       } else {
-        setUserCredentialNotice(`${provider.toUpperCase()} personal credential test failed${result.reason ? `: ${result.reason}` : ""}`);
+        setUserCredentialNotice(
+          t("settings.notice.personalCredentialTestFailed", {
+            provider: provider.toUpperCase(),
+            reason: result.reason ? `: ${result.reason}` : "",
+          })
+        );
       }
       await refresh();
     } catch (err) {
-      setUserCredentialError(toErrorMessage(err, `failed to test ${provider} personal credential`));
+      setUserCredentialError(
+        toErrorMessage(err, t("settings.error.testPersonalCredential", { provider: provider.toUpperCase() }))
+      );
     } finally {
       setActiveUserTestProvider(null);
     }
@@ -585,7 +649,7 @@ export function SettingsModule() {
         "popup=yes,width=640,height=760"
       );
       if (!popup) {
-        throw new Error("oauth popup was blocked by the browser");
+        throw new Error(t("settings.error.oauthPopupBlocked"));
       }
       const allowedCallbackOrigins = new Set<string>([
         window.location.origin,
@@ -595,12 +659,12 @@ export function SettingsModule() {
       const callbackPayload = await new Promise<{ code: string; state: string }>((resolve, reject) => {
         const timeout = window.setTimeout(() => {
           cleanup();
-          reject(new Error("oauth callback timed out"));
+          reject(new Error(t("settings.error.oauthTimedOut")));
         }, 180000);
         const closeWatcher = window.setInterval(() => {
           if (popup.closed) {
             cleanup();
-            reject(new Error("oauth popup closed before completion"));
+            reject(new Error(t("settings.error.oauthPopupClosed")));
           }
         }, 400);
 
@@ -630,7 +694,7 @@ export function SettingsModule() {
           }
           if (typeof payload.code !== "string" || typeof payload.state !== "string") {
             cleanup();
-            reject(new Error("oauth callback is missing code/state"));
+            reject(new Error(t("settings.error.oauthMissingCodeState")));
             return;
           }
 
@@ -645,10 +709,10 @@ export function SettingsModule() {
       });
 
       await completeUserProviderOauth(provider, callbackPayload);
-      setUserCredentialNotice(`${provider.toUpperCase()} OAuth connected`);
+      setUserCredentialNotice(t("settings.notice.oauthConnected", { provider: provider.toUpperCase() }));
       await refresh();
     } catch (err) {
-      setUserCredentialError(toErrorMessage(err, `failed to connect ${provider} oauth`));
+      setUserCredentialError(toErrorMessage(err, t("settings.error.connectOauth", { provider: provider.toUpperCase() })));
     } finally {
       setActiveOauthProvider(null);
     }
@@ -658,26 +722,28 @@ export function SettingsModule() {
     const next = !hudAutoFocusDefault;
     writeMissionAutoFocusEnabledPreference(next);
     setHudAutoFocusDefault(next);
-    setHudRuntimeNotice(`HUD auto focus default set to ${next ? "ON" : "OFF"}`);
+    setHudRuntimeNotice(t("settings.hud.notice.autoFocusUpdated", { value: next ? t("common.on") : t("common.off") }));
   };
 
   const onToggleVisualCore = () => {
     const next = !visualCoreEnabled;
     writeVisualCoreEnabledPreference(next);
     setVisualCoreEnabled(next);
-    setHudRuntimeNotice(`Visual Core 3D ${next ? "enabled" : "disabled"} (takes effect on next load)`);
+    setHudRuntimeNotice(
+      next ? t("settings.hud.notice.visualCoreEnabled") : t("settings.hud.notice.visualCoreDisabled")
+    );
   };
 
   const onSaveHudHoldSeconds = () => {
     const normalized = parseMissionAutoFocusHoldSecondsInput(hudHoldSecondsDraft);
     writeMissionAutoFocusHoldSecondsPreference(normalized);
     setHudHoldSecondsDraft(String(normalized));
-    setHudRuntimeNotice(`Manual hold updated to ${normalized}s`);
+    setHudRuntimeNotice(t("settings.hud.notice.manualHoldUpdated", { value: normalized }));
   };
 
   const onSavePolicy = async () => {
     if (!policyDraft.task_type.trim() || !policyDraft.model_id.trim()) {
-      setPolicyError("task_type and model_id are required");
+      setPolicyError(t("settings.routingPolicies.error.required"));
       return;
     }
     setPolicyError(null);
@@ -691,13 +757,19 @@ export function SettingsModule() {
         priority: policyDraft.priority,
         is_active: true,
       });
-      setPolicyNotice(`Policy saved: ${policyDraft.task_type} → ${policyDraft.provider}/${policyDraft.model_id}`);
+      setPolicyNotice(
+        t("settings.routingPolicies.notice.saved", {
+          taskType: policyDraft.task_type,
+          provider: policyDraft.provider,
+          model: policyDraft.model_id,
+        })
+      );
       setPolicyDraft({ task_type: "", provider: "openai", model_id: "", tier: 1, priority: 0 });
       setShowPolicyForm(false);
       const pol = await getTaskModelPolicies();
       setPolicies(pol.policies ?? []);
     } catch (err) {
-      setPolicyError(toErrorMessage(err, "failed to save policy"));
+      setPolicyError(toErrorMessage(err, t("settings.routingPolicies.error.saveFailed")));
     }
   };
 
@@ -714,22 +786,41 @@ export function SettingsModule() {
       const pol = await getTaskModelPolicies();
       setPolicies(pol.policies ?? []);
     } catch (err) {
-      setPolicyError(toErrorMessage(err, "failed to toggle policy"));
+      setPolicyError(toErrorMessage(err, t("settings.routingPolicies.error.toggleFailed")));
     }
   };
 
   const notificationRuntime = settingsOverview?.notification_runtime ?? null;
   const notificationPolicy = settingsOverview?.notification_policy ?? null;
+  const notificationChannels = [
+    {
+      key: "in_app",
+      label: t("settings.channel.inApp"),
+      policy: notificationPolicy?.in_app ?? { enabled: true, min_severity: "info", event_types: ["*"] },
+      runtime: null,
+    },
+    {
+      key: "webhook",
+      label: t("settings.channel.webhook"),
+      policy: notificationPolicy?.webhook ?? null,
+      runtime: notificationRuntime?.channels.find((channel) => channel.name === "webhook") ?? null,
+    },
+    {
+      key: "telegram",
+      label: t("settings.channel.telegram"),
+      policy: notificationPolicy?.telegram ?? null,
+      runtime: notificationRuntime?.channels.find((channel) => channel.name === "telegram") ?? null,
+    },
+  ] as const;
 
   return (
     <main className="w-full min-h-full bg-transparent text-white p-4 flex flex-col">
       <header className="mb-4 border-l-2 border-white/50 pl-3">
         <h2 className="text-sm font-mono font-bold tracking-widest text-white flex items-center gap-2">
-          <Settings2 size={14} /> SYSTEM SETTINGS
+          <Settings2 size={14} /> {t("settings.title").toUpperCase()}
         </h2>
         <p className="mt-1 text-xs text-white/60">
-          Provider connection and key management live here. Model routing/recommendation controls are in the sidebar
-          `Model Control` widget.
+          {t("settings.subtitle")}
         </p>
       </header>
 
@@ -737,14 +828,43 @@ export function SettingsModule() {
         loading={loading}
         error={error}
         empty={false}
-        loadingText="Loading settings..."
+        loadingText={t("settings.loading")}
         onRetry={() => void refresh()}
         className="mb-3"
       />
 
+      <section className="mb-4 rounded-xl border border-cyan-400/20 bg-gradient-to-br from-cyan-950/20 via-black/40 to-black/30 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-xs font-semibold tracking-wide text-cyan-100">{t("settings.language.title")}</h3>
+            <p className="mt-1 text-xs text-white/65">{t("settings.language.subtitle")}</p>
+          </div>
+          <div className="text-right text-[11px] text-white/55">
+            <p>{t("settings.language.activeLocale")}</p>
+            <p className="mt-1 text-cyan-200">{activeLocaleLabel}</p>
+          </div>
+        </div>
+        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-[220px_minmax(0,1fr)] md:items-center">
+          <label className="text-[11px] font-mono uppercase tracking-[0.24em] text-white/55">
+            {t("settings.language.preference")}
+          </label>
+          <select
+            value={preference}
+            onChange={(event) => onLanguagePreferenceChange(event.target.value as "auto" | "ko" | "en")}
+            className="h-10 rounded border border-white/15 bg-black/50 px-3 text-sm text-white/90"
+          >
+            <option value="auto">{t("common.auto")}</option>
+            <option value="ko">{t("common.korean")}</option>
+            <option value="en">{t("common.english")}</option>
+          </select>
+        </div>
+        <p className="mt-2 text-[11px] text-white/45">{t("settings.language.autoHint")}</p>
+        {languageNotice ? <p className="mt-2 text-xs text-emerald-300">{languageNotice}</p> : null}
+      </section>
+
       <section className="mb-4">
         <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase mb-2 flex items-center gap-2">
-          <RadioTower size={12} /> Connectors
+          <RadioTower size={12} /> {t("settings.connectors")}
         </h3>
         <div className="grid grid-cols-1 gap-3 pr-1">
           {cards.map((card) => (
@@ -758,7 +878,7 @@ export function SettingsModule() {
             />
           ))}
           {!loading && !error && cards.length === 0 && (
-            <div className="text-sm font-mono text-white/40 border border-white/10 rounded p-4">No connector data.</div>
+            <div className="text-sm font-mono text-white/40 border border-white/10 rounded p-4">{t("settings.noConnectorData")}</div>
           )}
         </div>
       </section>
@@ -767,10 +887,10 @@ export function SettingsModule() {
         <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 className="text-xs font-semibold tracking-wide text-cyan-100 flex items-center gap-2">
-              <KeyRound size={14} /> My Provider Credentials
+              <KeyRound size={14} /> {t("settings.myCredentials")}
             </h3>
             <p className="mt-1 text-xs text-white/65">
-              Explicitly select credential mode per provider (auto/api key/oauth). Priority is used only when mode is auto.
+              {t("settings.myCredentialsSubtitle")}
             </p>
           </div>
           <button
@@ -778,7 +898,7 @@ export function SettingsModule() {
             onClick={() => void refresh()}
             className="inline-flex items-center gap-1 h-8 px-3 rounded border border-white/20 text-xs text-white/80 hover:text-white hover:border-white/40"
           >
-            <RefreshCw size={12} /> Refresh
+            <RefreshCw size={12} /> {t("common.refresh")}
           </button>
         </div>
         <div className="space-y-3">
@@ -787,7 +907,7 @@ export function SettingsModule() {
             const modeDirty = modeDraft !== row.selected_user_credential_mode;
             const priorityDraft = userCredentialPriorityDrafts[row.provider] ?? row.credential_priority;
             const priorityDirty = priorityDraft !== row.credential_priority;
-            const effectiveMode = formatCredentialModeLabel(row.selected_credential_mode);
+            const effectiveMode = formatCredentialModeLabel(row.selected_credential_mode, t);
             const canUseOauth = row.provider === "openai" || row.provider === "gemini";
             return (
               <div key={`user-${row.provider}`} className="rounded-lg border border-white/12 bg-black/35 p-3">
@@ -795,18 +915,18 @@ export function SettingsModule() {
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-semibold tracking-wide text-white">{row.provider.toUpperCase()}</p>
                     <span className={`rounded-full border px-2 py-0.5 text-[11px] ${credentialSourceClass(row.source)}`}>
-                      {formatCredentialSourceLabel(row.source)}
+                      {formatCredentialSourceLabel(row.source, t)}
                     </span>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <span className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-0.5 text-[11px] text-cyan-100">
-                      Active: {effectiveMode}
+                      {t("settings.active")}: {effectiveMode}
                     </span>
                     <span className="rounded-full border border-white/20 bg-white/5 px-2 py-0.5 text-[11px] text-white/70">
-                      Mode: {formatSelectedUserCredentialModeLabel(row.selected_user_credential_mode)}
+                      {t("settings.mode")}: {formatSelectedUserCredentialModeLabel(row.selected_user_credential_mode, t)}
                     </span>
                     <span className="rounded-full border border-white/20 bg-white/5 px-2 py-0.5 text-[11px] text-white/70">
-                      Priority: {formatCredentialPriorityLabel(row.credential_priority)}
+                      {t("settings.priority")}: {formatCredentialPriorityLabel(row.credential_priority, t)}
                     </span>
                   </div>
                 </div>
@@ -814,7 +934,7 @@ export function SettingsModule() {
                 <div className="grid grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1fr)_auto_auto]">
                   <input
                     type="password"
-                    placeholder={`${row.provider.toUpperCase()} personal API key`}
+                    placeholder={t("settings.personalApiKeyPlaceholder", { provider: row.provider.toUpperCase() })}
                     value={userCredentialDrafts[row.provider] ?? ""}
                     onChange={(event) =>
                       setUserCredentialDrafts((prev) => ({
@@ -830,7 +950,7 @@ export function SettingsModule() {
                     disabled={(userCredentialDrafts[row.provider]?.trim().length ?? 0) < 8 || activeUserSaveProvider === row.provider}
                     className="h-9 px-3 rounded border border-cyan-400/40 bg-cyan-500/15 text-cyan-200 text-xs font-semibold disabled:opacity-40"
                   >
-                    {activeUserSaveProvider === row.provider ? "Saving..." : "Save API Key"}
+                    {activeUserSaveProvider === row.provider ? t("settings.saving") : t("settings.saveApiKey")}
                   </button>
                   {(row.provider === "openai" || row.provider === "gemini") && (
                     <button
@@ -839,7 +959,7 @@ export function SettingsModule() {
                       disabled={activeOauthProvider === (row.provider as Extract<ProviderName, "openai" | "gemini">)}
                       className="h-9 px-3 rounded border border-fuchsia-400/35 bg-fuchsia-500/10 text-fuchsia-200 text-xs font-semibold disabled:opacity-40"
                     >
-                      {activeOauthProvider === row.provider ? "Connecting..." : "Connect OAuth"}
+                      {activeOauthProvider === row.provider ? t("settings.connectingOauth") : t("settings.connectOauth")}
                     </button>
                   )}
                 </div>
@@ -855,9 +975,9 @@ export function SettingsModule() {
                     }
                     className="h-9 rounded border border-white/15 bg-black/50 px-2 text-sm text-white/85"
                   >
-                    <option value="auto">Auto</option>
-                    <option value="api_key">API Key</option>
-                    {canUseOauth && <option value="oauth_official">OAuth Official</option>}
+                    <option value="auto">{t("common.auto")}</option>
+                    <option value="api_key">{t("settings.credential.apiKey")}</option>
+                    {canUseOauth && <option value="oauth_official">{t("settings.credential.oauthOfficial")}</option>}
                   </select>
                   <button
                     type="button"
@@ -865,7 +985,7 @@ export function SettingsModule() {
                     disabled={!modeDirty || activeUserModeProvider === row.provider}
                     className="h-9 px-3 rounded border border-white/25 bg-white/10 text-xs font-semibold text-white/85 disabled:opacity-40"
                   >
-                    {activeUserModeProvider === row.provider ? "Applying..." : "Apply Mode"}
+                    {activeUserModeProvider === row.provider ? t("settings.applying") : t("settings.applyMode")}
                   </button>
                   <select
                     value={priorityDraft}
@@ -877,8 +997,8 @@ export function SettingsModule() {
                     }
                     className="h-9 rounded border border-white/15 bg-black/50 px-2 text-sm text-white/85"
                   >
-                    <option value="auth_first">OAuth First</option>
-                    <option value="api_key_first">API Key First</option>
+                    <option value="auth_first">{t("settings.priority.oauthFirst")}</option>
+                    <option value="api_key_first">{t("settings.priority.apiKeyFirst")}</option>
                   </select>
                   <button
                     type="button"
@@ -886,7 +1006,7 @@ export function SettingsModule() {
                     disabled={!priorityDirty || activeUserPriorityProvider === row.provider}
                     className="h-9 px-3 rounded border border-white/25 bg-white/10 text-xs font-semibold text-white/85 disabled:opacity-40"
                   >
-                    {activeUserPriorityProvider === row.provider ? "Applying..." : "Apply Priority"}
+                    {activeUserPriorityProvider === row.provider ? t("settings.applying") : t("settings.applyPriority")}
                   </button>
                   <button
                     type="button"
@@ -894,7 +1014,7 @@ export function SettingsModule() {
                     disabled={activeUserTestProvider === row.provider}
                     className="h-9 px-3 rounded border border-emerald-400/35 bg-emerald-500/10 text-emerald-200 text-xs font-semibold disabled:opacity-40"
                   >
-                    {activeUserTestProvider === row.provider ? "Testing..." : "Test"}
+                    {activeUserTestProvider === row.provider ? t("settings.testing") : t("settings.test")}
                   </button>
                   <button
                     type="button"
@@ -902,21 +1022,24 @@ export function SettingsModule() {
                     disabled={!row.has_user_credential || activeUserDeleteProvider === row.provider}
                     className="h-9 px-3 rounded border border-white/25 bg-white/10 text-xs font-semibold text-white/80 disabled:opacity-40"
                   >
-                    {activeUserDeleteProvider === row.provider ? "Removing..." : "Remove"}
+                    {activeUserDeleteProvider === row.provider ? t("settings.removing") : t("settings.remove")}
                   </button>
                 </div>
 
                 <div className="mt-2 text-xs text-white/60 space-y-1">
                   <p>
-                    credential={row.has_user_credential ? "yes" : "no"} · api_key={row.has_user_api_key ? "yes" : "no"} · oauth={row.has_user_oauth_token ? "yes" : "no"}
-                    {row.user_updated_at ? ` · updated ${new Date(row.user_updated_at).toLocaleString()}` : ""}
+                    {t("settings.flag.credential")}={row.has_user_credential ? t("modelControl.yes") : t("modelControl.no")} · {t("settings.flag.apiKey")}={row.has_user_api_key ? t("modelControl.yes") : t("modelControl.no")} · {t("settings.flag.oauth")}={row.has_user_oauth_token ? t("modelControl.yes") : t("modelControl.no")}
+                    {row.user_updated_at ? ` · ${t("settings.updatedAt", { value: formatDateTime(row.user_updated_at) })}` : ""}
                   </p>
                   {row.auth_access_token_expires_at && (
-                    <p>oauth expires at {new Date(row.auth_access_token_expires_at).toLocaleString()}</p>
+                    <p>{t("settings.oauthExpiresAt", { value: formatDateTime(row.auth_access_token_expires_at) })}</p>
                   )}
                   {userConnectionTests[row.provider] && (
                     <p className={userConnectionTests[row.provider]?.ok ? "text-emerald-300" : "text-amber-300"}>
-                      test {userConnectionTests[row.provider]?.ok ? "ok" : "failed"} · {userConnectionTests[row.provider]?.latency_ms ?? 0}ms
+                      {t("settings.testResult", {
+                        status: userConnectionTests[row.provider]?.ok ? t("settings.status.ok") : t("settings.status.failed"),
+                        latency: userConnectionTests[row.provider]?.latency_ms ?? 0,
+                      })}
                       {userConnectionTests[row.provider]?.reason ? ` · ${userConnectionTests[row.provider]?.reason}` : ""}
                     </p>
                   )}
@@ -925,7 +1048,7 @@ export function SettingsModule() {
             );
           })}
           {(userCredentialLoading || activeUserSaveProvider || activeUserDeleteProvider || activeUserTestProvider || activeOauthProvider || activeUserModeProvider || activeUserPriorityProvider) && (
-            <p className="text-xs text-white/60">Syncing personal provider credentials...</p>
+            <p className="text-xs text-white/60">{t("settings.syncingPersonalCredentials")}</p>
           )}
           {userCredentialError && <p className="text-xs text-rose-300">{userCredentialError}</p>}
           {userCredentialNotice && <p className="text-xs text-emerald-300">{userCredentialNotice}</p>}
@@ -935,7 +1058,7 @@ export function SettingsModule() {
       <section className="mb-4 border border-white/10 rounded p-3 bg-black/30">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase flex items-center gap-2">
-            <KeyRound size={12} /> Provider API Keys
+            <KeyRound size={12} /> {t("settings.providerApiKeysTitle")}
           </h3>
           {isAdmin && (
             <button
@@ -943,7 +1066,7 @@ export function SettingsModule() {
               onClick={() => void refresh()}
               className="inline-flex items-center gap-1 h-7 px-2 rounded border border-white/15 text-[10px] font-mono text-white/70 hover:text-white hover:border-white/30"
             >
-              <RefreshCw size={11} /> Refresh
+              <RefreshCw size={11} /> {t("common.refresh")}
             </button>
           )}
         </div>
@@ -963,13 +1086,13 @@ export function SettingsModule() {
                           : "text-white/40"
                     }
                   >
-                    {row.source === "stored" ? "stored" : row.source === "env" ? "env" : "none"}
+                    {row.source === "stored" ? t("settings.source.stored") : row.source === "env" ? t("settings.source.env") : t("settings.source.none")}
                   </span>
                 </div>
                 <div className="flex flex-col lg:flex-row gap-2">
                   <input
                     type="password"
-                    placeholder={`${row.provider.toUpperCase()} API key`}
+                    placeholder={t("settings.providerApiKeyPlaceholder", { provider: row.provider.toUpperCase() })}
                     value={credentialDrafts[row.provider] ?? ""}
                     onChange={(event) =>
                       setCredentialDrafts((prev) => ({
@@ -982,11 +1105,11 @@ export function SettingsModule() {
                   <div className="flex gap-2">
                     <button
                       type="button"
-                      onClick={() => void onSaveProviderKey(row.provider)}
-                      disabled={(credentialDrafts[row.provider]?.trim().length ?? 0) < 8 || activeSaveProvider === row.provider}
-                      className="h-8 px-3 rounded border border-cyan-400/40 bg-cyan-500/15 text-cyan-200 text-[10px] font-mono tracking-widest disabled:opacity-40"
-                    >
-                      {activeSaveProvider === row.provider ? "SAVING..." : "SAVE"}
+                    onClick={() => void onSaveProviderKey(row.provider)}
+                    disabled={(credentialDrafts[row.provider]?.trim().length ?? 0) < 8 || activeSaveProvider === row.provider}
+                    className="h-8 px-3 rounded border border-cyan-400/40 bg-cyan-500/15 text-cyan-200 text-[10px] font-mono tracking-widest disabled:opacity-40"
+                  >
+                      {activeSaveProvider === row.provider ? t("settings.saving").toUpperCase() : t("common.save").toUpperCase()}
                     </button>
                     <button
                       type="button"
@@ -994,7 +1117,7 @@ export function SettingsModule() {
                       disabled={activeTestProvider === row.provider}
                       className="h-8 px-3 rounded border border-emerald-400/30 bg-emerald-500/10 text-emerald-200 text-[10px] font-mono tracking-widest disabled:opacity-40"
                     >
-                      {activeTestProvider === row.provider ? "TESTING..." : "TEST"}
+                      {activeTestProvider === row.provider ? t("settings.testing").toUpperCase() : t("settings.test").toUpperCase()}
                     </button>
                     <button
                       type="button"
@@ -1002,13 +1125,13 @@ export function SettingsModule() {
                       disabled={row.source !== "stored" || activeDeleteProvider === row.provider}
                       className="h-8 px-3 rounded border border-white/20 bg-white/10 text-white/80 text-[10px] font-mono tracking-widest disabled:opacity-40"
                     >
-                      {activeDeleteProvider === row.provider ? "REMOVING..." : "REMOVE STORED"}
+                      {activeDeleteProvider === row.provider ? t("settings.removing").toUpperCase() : t("settings.removeStored").toUpperCase()}
                     </button>
                   </div>
                 </div>
                 <p className="mt-2 text-[10px] font-mono text-white/45">
-                  {row.has_key ? "key available" : "no key"} ·{" "}
-                  {row.updated_at ? `updated ${new Date(row.updated_at).toLocaleString()}` : "no stored timestamp"}
+                  {row.has_key ? t("settings.keyAvailable") : t("settings.noKey")} ·{" "}
+                  {row.updated_at ? t("settings.updatedAt", { value: formatDateTime(row.updated_at) }) : t("settings.noStoredTimestamp")}
                 </p>
                 {connectionTests[row.provider] && (
                   <p
@@ -1016,8 +1139,11 @@ export function SettingsModule() {
                       connectionTests[row.provider]?.ok ? "text-emerald-300" : "text-amber-300"
                     }`}
                   >
-                    test {connectionTests[row.provider]?.ok ? "ok" : "failed"} · {connectionTests[row.provider]?.latency_ms ?? 0}ms · models{" "}
-                    {connectionTests[row.provider]?.model_count ?? 0}
+                    {t("settings.adminTestResult", {
+                      status: connectionTests[row.provider]?.ok ? t("settings.status.ok") : t("settings.status.failed"),
+                      latency: connectionTests[row.provider]?.latency_ms ?? 0,
+                      models: connectionTests[row.provider]?.model_count ?? 0,
+                    })}
                     {connectionTests[row.provider]?.reason
                       ? ` · ${connectionTests[row.provider]?.reason}`
                       : connectionTests[row.provider]?.sampled_models?.length
@@ -1028,25 +1154,25 @@ export function SettingsModule() {
               </div>
             ))}
             {(credentialLoading || activeSaveProvider || activeDeleteProvider || activeTestProvider) && (
-              <p className="text-[10px] font-mono text-white/50">syncing provider credentials...</p>
+              <p className="text-[10px] font-mono text-white/50">{t("settings.syncingProviderCredentials")}</p>
             )}
             {credentialError && <p className="text-[10px] font-mono text-rose-300">{credentialError}</p>}
             {credentialNotice && <p className="text-[10px] font-mono text-emerald-300">{credentialNotice}</p>}
           </div>
         ) : (
           <p className="text-xs font-mono text-white/50">
-            Provider API key registration is admin-only. Sign in with an admin account to manage keys.
+            {t("settings.providerApiKeysAdminOnly")}
           </p>
         )}
       </section>
 
       <section className="border border-white/10 rounded p-3 bg-black/30">
         <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase mb-2 flex items-center gap-2">
-          <Clock3 size={12} /> HUD Runtime
+          <Clock3 size={12} /> {t("settings.hudRuntime")}
         </h3>
         <div className="space-y-2 text-xs text-white/70 mb-4">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-white/50">Visual Core 3D</span>
+            <span className="text-white/50">{t("settings.hud.visualCore")}</span>
             <button
               type="button"
               onClick={onToggleVisualCore}
@@ -1056,12 +1182,12 @@ export function SettingsModule() {
                   : "border-white/20 bg-white/10 text-white/80"
               }`}
             >
-              {visualCoreEnabled ? "ON" : "OFF"}
+              {visualCoreEnabled ? t("common.on") : t("common.off")}
             </button>
-            <span className="text-[10px] text-white/40">disable to reduce GPU usage</span>
+            <span className="text-[10px] text-white/40">{t("settings.hud.visualCoreHint")}</span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-white/50">Auto focus default</span>
+            <span className="text-white/50">{t("settings.hud.autoFocusDefault")}</span>
             <button
               type="button"
               onClick={onToggleHudAutoFocusDefault}
@@ -1071,11 +1197,11 @@ export function SettingsModule() {
                   : "border-white/20 bg-white/10 text-white/80"
               }`}
             >
-              {hudAutoFocusDefault ? "ON" : "OFF"}
+              {hudAutoFocusDefault ? t("common.on") : t("common.off")}
             </button>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-white/50">Manual hold seconds</span>
+            <span className="text-white/50">{t("settings.hud.manualHoldSeconds")}</span>
             <input
               type="number"
               min={15}
@@ -1090,9 +1216,9 @@ export function SettingsModule() {
               onClick={onSaveHudHoldSeconds}
               className="h-7 px-2 rounded border border-cyan-400/40 bg-cyan-500/15 text-cyan-200 text-[10px] font-mono tracking-widest"
             >
-              SAVE
+              {t("common.save").toUpperCase()}
             </button>
-            <span className="text-white/40">range 15-600s</span>
+            <span className="text-white/40">{t("settings.hud.manualHoldRange")}</span>
           </div>
           {hudRuntimeNotice && <p className="text-[10px] font-mono text-emerald-300">{hudRuntimeNotice}</p>}
         </div>
@@ -1100,29 +1226,10 @@ export function SettingsModule() {
 
       <section className="mt-4 border border-white/10 rounded p-3 bg-black/30">
         <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase mb-2 flex items-center gap-2">
-          <RadioTower size={12} /> Notification Channels
+          <RadioTower size={12} /> {t("settings.notificationChannels")}
         </h3>
         <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
-          {[
-            {
-              key: "in_app",
-              label: "In-App",
-              policy: notificationPolicy?.in_app ?? { enabled: true, min_severity: "info", event_types: ["*"] },
-              runtime: null,
-            },
-            {
-              key: "webhook",
-              label: "Webhook",
-              policy: notificationPolicy?.webhook ?? null,
-              runtime: notificationRuntime?.channels.find((channel) => channel.name === "webhook") ?? null,
-            },
-            {
-              key: "telegram",
-              label: "Telegram",
-              policy: notificationPolicy?.telegram ?? null,
-              runtime: notificationRuntime?.channels.find((channel) => channel.name === "telegram") ?? null,
-            },
-          ].map((channel) => (
+          {notificationChannels.map((channel) => (
             <div key={channel.key} className="rounded border border-white/10 bg-black/25 p-3">
               <div className="flex items-center justify-between gap-3">
                 <p className="text-sm text-white/90">{channel.label}</p>
@@ -1131,30 +1238,30 @@ export function SettingsModule() {
                     channel.policy?.enabled ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200" : "border-white/10 text-white/45"
                   }`}
                 >
-                  {channel.policy?.enabled ? "enabled" : "disabled"}
+                  {channel.policy?.enabled ? t("common.enabled") : t("common.disabled")}
                 </span>
               </div>
               <div className="mt-3 space-y-1 text-[11px] text-white/65">
-                <p>min severity: {channel.policy?.min_severity ?? "-"}</p>
-                <p>events: {channel.policy ? formatEventTypes(channel.policy.event_types) : "-"}</p>
+                <p>{t("settings.notification.minSeverity")}: {channel.policy?.min_severity ?? "-"}</p>
+                <p>{t("settings.notification.events")}: {channel.policy ? formatEventTypes(channel.policy.event_types, t) : "-"}</p>
                 {channel.runtime ? (
                   <>
-                    <p>sent: {channel.runtime.sent}</p>
-                    <p>skipped: {channel.runtime.skipped}</p>
-                    <p>failed: {channel.runtime.failed}</p>
-                    <p>last success: {channel.runtime.lastSuccessAt ? new Date(channel.runtime.lastSuccessAt).toLocaleString() : "-"}</p>
-                    <p>last error: {channel.runtime.lastErrorAt ? new Date(channel.runtime.lastErrorAt).toLocaleString() : "-"}</p>
+                    <p>{t("settings.notification.sent")}: {channel.runtime.sent}</p>
+                    <p>{t("settings.notification.skipped")}: {channel.runtime.skipped}</p>
+                    <p>{t("settings.notification.failed")}: {channel.runtime.failed}</p>
+                    <p>{t("settings.notification.lastSuccess")}: {channel.runtime.lastSuccessAt ? formatDateTime(channel.runtime.lastSuccessAt) : "-"}</p>
+                    <p>{t("settings.notification.lastError")}: {channel.runtime.lastErrorAt ? formatDateTime(channel.runtime.lastErrorAt) : "-"}</p>
                     {channel.runtime.lastError ? <p className="text-amber-300">{channel.runtime.lastError}</p> : null}
                   </>
                 ) : channel.key === "in_app" ? (
                   <>
-                    <p>listeners: {notificationRuntime?.listeners ?? 0}</p>
-                    <p>emitted: {notificationRuntime?.emitted ?? 0}</p>
-                    <p>suppressed: {notificationRuntime?.suppressed ?? 0}</p>
-                    <p>last event: {notificationRuntime?.lastEventAt ? new Date(notificationRuntime.lastEventAt).toLocaleString() : "-"}</p>
+                    <p>{t("settings.notification.listeners")}: {notificationRuntime?.listeners ?? 0}</p>
+                    <p>{t("settings.notification.emitted")}: {notificationRuntime?.emitted ?? 0}</p>
+                    <p>{t("settings.notification.suppressed")}: {notificationRuntime?.suppressed ?? 0}</p>
+                    <p>{t("settings.notification.lastEvent")}: {notificationRuntime?.lastEventAt ? formatDateTime(notificationRuntime.lastEventAt) : "-"}</p>
                   </>
                 ) : (
-                  <p className="text-white/45">runtime inactive</p>
+                  <p className="text-white/45">{t("settings.notification.runtimeInactive")}</p>
                 )}
               </div>
             </div>
@@ -1164,7 +1271,7 @@ export function SettingsModule() {
 
       <section className="border border-white/10 rounded p-3 bg-black/30">
         <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase mb-2 flex items-center gap-2">
-          <Shield size={12} /> Policy
+          <Shield size={12} /> {t("settings.policy.title")}
         </h3>
         <ul className="space-y-1 text-xs text-white/70">
           {policyItems.map((item) => (
@@ -1177,14 +1284,14 @@ export function SettingsModule() {
       <section className="mt-4 border border-white/10 rounded p-3 bg-black/30">
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase flex items-center gap-2">
-            <Database size={12} /> Model Registry
+            <Database size={12} /> {t("settings.modelRegistry.title")}
           </h3>
           <span className="text-[10px] font-mono text-white/40">
-            {registryLoading ? "..." : `${registryModels.length} models`}
+            {registryLoading ? "..." : t("settings.modelRegistry.count", { value: registryModels.length })}
           </span>
         </div>
         {registryModels.length === 0 && !registryLoading && (
-          <p className="text-xs font-mono text-white/40">No models in registry. Connect a Postgres store and sync models.</p>
+          <p className="text-xs font-mono text-white/40">{t("settings.modelRegistry.empty")}</p>
         )}
         {registryModels.length > 0 && (
           <div className="max-h-48 overflow-y-auto space-y-1">
@@ -1208,14 +1315,14 @@ export function SettingsModule() {
       <section className="mt-4 border border-white/10 rounded p-3 bg-black/30">
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase flex items-center gap-2">
-            <Route size={12} /> Routing Policies
+            <Route size={12} /> {t("settings.routingPolicies.title")}
           </h3>
           <button
             type="button"
             onClick={() => setShowPolicyForm(!showPolicyForm)}
             className="inline-flex items-center gap-1 h-6 px-2 rounded border border-cyan-500/30 text-[10px] font-mono text-cyan-300 hover:text-cyan-100"
           >
-            <Plus size={10} /> Add
+            <Plus size={10} /> {t("common.add")}
           </button>
         </div>
 
@@ -1223,7 +1330,7 @@ export function SettingsModule() {
           <div className="mb-3 p-2 border border-cyan-500/20 rounded bg-cyan-950/10 space-y-2">
             <div className="grid grid-cols-2 gap-2">
               <input
-                placeholder="task_type (e.g. code)"
+                placeholder={t("settings.routingPolicies.form.taskTypePlaceholder")}
                 value={policyDraft.task_type}
                 onChange={(e) => setPolicyDraft((d) => ({ ...d, task_type: e.target.value }))}
                 className="h-7 rounded border border-white/15 bg-black/50 px-2 text-[11px] font-mono"
@@ -1237,20 +1344,20 @@ export function SettingsModule() {
               </select>
             </div>
             <input
-              placeholder="model_id (e.g. gpt-4o)"
+              placeholder={t("settings.routingPolicies.form.modelIdPlaceholder")}
               value={policyDraft.model_id}
               onChange={(e) => setPolicyDraft((d) => ({ ...d, model_id: e.target.value }))}
               className="w-full h-7 rounded border border-white/15 bg-black/50 px-2 text-[11px] font-mono"
             />
             <div className="flex gap-2 items-center">
-              <label className="text-[10px] text-white/50">Tier</label>
+              <label className="text-[10px] text-white/50">{t("settings.routingPolicies.form.tier")}</label>
               <input
                 type="number" min={1} max={3}
                 value={policyDraft.tier}
                 onChange={(e) => setPolicyDraft((d) => ({ ...d, tier: Number(e.target.value) }))}
                 className="h-7 w-14 rounded border border-white/15 bg-black/50 px-2 text-[11px] font-mono"
               />
-              <label className="text-[10px] text-white/50">Priority</label>
+              <label className="text-[10px] text-white/50">{t("settings.routingPolicies.form.priority")}</label>
               <input
                 type="number" min={-100} max={100}
                 value={policyDraft.priority}
@@ -1262,7 +1369,7 @@ export function SettingsModule() {
                 onClick={() => void onSavePolicy()}
                 className="h-7 px-3 rounded border border-cyan-400/40 bg-cyan-500/15 text-cyan-200 text-[10px] font-mono tracking-widest"
               >
-                SAVE
+                {t("common.save").toUpperCase()}
               </button>
             </div>
           </div>
@@ -1271,9 +1378,9 @@ export function SettingsModule() {
         {policyError && <p className="text-[10px] font-mono text-rose-300 mb-2">{policyError}</p>}
         {policyNotice && <p className="text-[10px] font-mono text-emerald-300 mb-2">{policyNotice}</p>}
 
-        {policiesLoading && <p className="text-[10px] font-mono text-white/40">Loading policies...</p>}
+        {policiesLoading && <p className="text-[10px] font-mono text-white/40">{t("settings.routingPolicies.loading")}</p>}
         {!policiesLoading && policies.length === 0 && (
-          <p className="text-xs font-mono text-white/40">No routing policies defined. Add one above or use the default routing.</p>
+          <p className="text-xs font-mono text-white/40">{t("settings.routingPolicies.empty")}</p>
         )}
         {!policiesLoading && policies.length > 0 && (
           <div className="max-h-48 overflow-y-auto space-y-1">
@@ -1292,7 +1399,7 @@ export function SettingsModule() {
                     onClick={() => void onTogglePolicy(p)}
                     className={`text-[9px] px-1.5 py-0.5 rounded border ${p.is_active ? "border-cyan-500/30 text-cyan-300" : "border-white/15 text-white/40"}`}
                   >
-                    {p.is_active ? "ON" : "OFF"}
+                    {p.is_active ? t("common.on") : t("common.off")}
                   </button>
                 </div>
               </div>
