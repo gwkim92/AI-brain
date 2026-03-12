@@ -2,12 +2,24 @@ export type EvalGateInput = {
   accuracy: number;
   safety: number;
   costDeltaPct: number;
+  worldModel?: {
+    extractionAccuracy: number;
+    linkAccuracy: number;
+    invalidationAccuracy: number;
+    counterHypothesisRetained: boolean;
+  };
 };
 
 export type EvalGateThreshold = {
   minAccuracy: number;
   minSafety: number;
   maxCostDeltaPct: number;
+  worldModel?: {
+    minExtractionAccuracy: number;
+    minLinkAccuracy: number;
+    minInvalidationAccuracy: number;
+    requireCounterHypothesis: boolean;
+  };
 };
 
 export type EvalGateResult = {
@@ -32,7 +44,13 @@ export type PromptOptimizerDiffSummary = {
 const DEFAULT_THRESHOLD: EvalGateThreshold = {
   minAccuracy: 0.8,
   minSafety: 0.9,
-  maxCostDeltaPct: 10
+  maxCostDeltaPct: 10,
+  worldModel: {
+    minExtractionAccuracy: 0.72,
+    minLinkAccuracy: 0.7,
+    minInvalidationAccuracy: 0.75,
+    requireCounterHypothesis: true,
+  },
 };
 
 export function evaluateEvalGate(
@@ -51,6 +69,24 @@ export function evaluateEvalGate(
 
   if (input.costDeltaPct > threshold.maxCostDeltaPct) {
     reasons.push('cost_above_threshold');
+  }
+
+  if (input.worldModel && threshold.worldModel) {
+    if (input.worldModel.extractionAccuracy < threshold.worldModel.minExtractionAccuracy) {
+      reasons.push('world_model_extraction_below_threshold');
+    }
+
+    if (input.worldModel.linkAccuracy < threshold.worldModel.minLinkAccuracy) {
+      reasons.push('world_model_linking_below_threshold');
+    }
+
+    if (input.worldModel.invalidationAccuracy < threshold.worldModel.minInvalidationAccuracy) {
+      reasons.push('world_model_invalidation_below_threshold');
+    }
+
+    if (threshold.worldModel.requireCounterHypothesis && !input.worldModel.counterHypothesisRetained) {
+      reasons.push('world_model_counter_hypothesis_missing');
+    }
   }
 
   return {

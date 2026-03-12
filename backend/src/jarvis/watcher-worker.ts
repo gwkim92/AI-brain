@@ -37,6 +37,7 @@ const runtimeState: JarvisWatcherWorkerStatus = {
   lastRun: null,
   history: []
 };
+const inflightWatcherIds = new Set<string>();
 
 function pushRun(run: JarvisWatcherWorkerRun): void {
   runtimeState.lastRun = run;
@@ -68,6 +69,7 @@ export function startJarvisWatcherWorker(input: {
   runtimeState.inflight = false;
   runtimeState.lastRun = null;
   runtimeState.history = [];
+  inflightWatcherIds.clear();
 
   if (!enabled) {
     return {
@@ -89,36 +91,39 @@ export function startJarvisWatcherWorker(input: {
     runOnce: async (startedAt) => {
       const now = new Date();
       const watchers = await input.store.listActiveWatchers({ limit: batchSize });
-      const dueWatchers = watchers.filter((watcher) => shouldRunWatcherNow(watcher, now));
-      let completed = 0;
-      let failed = 0;
+      const dueWatchers = watchers.filter(
+        (watcher) => shouldRunWatcherNow(watcher, now) && !inflightWatcherIds.has(watcher.id)
+      );
+      let dispatched = 0;
 
       for (const watcher of dueWatchers) {
+        inflightWatcherIds.add(watcher.id);
         const run = await input.store.createWatcherRun({
           watcherId: watcher.id,
           userId: watcher.userId,
           status: 'running',
           summary: 'Scheduled watcher run started'
         });
-        try {
-          await executeWatcherRun({
-            store: input.store,
-            watcher,
-            run,
-            notificationService: input.notificationService
+        dispatched += 1;
+        void executeWatcherRun({
+          store: input.store,
+          watcher,
+          run,
+          notificationService: input.notificationService
+        })
+          .catch((error) => {
+            logger?.warn(
+              {
+                watcher_id: watcher.id,
+                user_id: watcher.userId,
+                error: error instanceof Error ? error.message : String(error)
+              },
+              'jarvis watcher execution failed'
+            );
+          })
+          .finally(() => {
+            inflightWatcherIds.delete(watcher.id);
           });
-          completed += 1;
-        } catch (error) {
-          failed += 1;
-          logger?.warn(
-            {
-              watcher_id: watcher.id,
-              user_id: watcher.userId,
-              error: error instanceof Error ? error.message : String(error)
-            },
-            'jarvis watcher execution failed'
-          );
-        }
       }
 
       const finishedAt = new Date();
@@ -128,8 +133,8 @@ export function startJarvisWatcherWorker(input: {
         status: 'ok',
         scanned: watchers.length,
         due: dueWatchers.length,
-        completed,
-        failed,
+        completed: dispatched,
+        failed: 0,
         durationMs: finishedAt.getTime() - startedAt.getTime()
       };
     },

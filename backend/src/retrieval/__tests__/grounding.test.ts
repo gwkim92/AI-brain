@@ -4,7 +4,8 @@ import {
   buildGroundingSystemInstruction,
   extractGroundingClaimsFromText,
   extractGroundingSourcesFromText,
-  mergeSystemPrompt
+  mergeSystemPrompt,
+  normalizeGroundingUrl
 } from '../grounding';
 import { resolveGroundingPolicy } from '../policy-router';
 
@@ -82,5 +83,10 @@ describe('grounding helpers', () => {
   it('merges system prompt fragments', () => {
     expect(mergeSystemPrompt(undefined, 'B')).toBe('B');
     expect(mergeSystemPrompt('A', 'B')).toBe('A\n\nB');
+  });
+
+  it('normalizes grounding urls by removing fragments and trailing slash', () => {
+    expect(normalizeGroundingUrl('https://example.com/report/#top')).toBe('https://example.com/report');
+    expect(normalizeGroundingUrl('https://example.com/report/')).toBe('https://example.com/report');
   });
 });

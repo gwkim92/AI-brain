@@ -3,6 +3,9 @@ import { getJarvisWatcherWorkerStatus } from '../jarvis/watcher-worker';
 import { sendSuccess } from '../lib/http';
 import { getAiTraceCleanupWorkerStatus } from '../observability/ai-trace-worker';
 import { getProviderTokenRefreshWorkerStatus } from '../providers/token-refresh-worker';
+import { listDefaultRadarFeedSources } from '../radar/feed-sources';
+import { getRadarScannerWorkerStatus } from '../radar/scanner-worker';
+import { getWorldModelOutcomeWorkerStatus } from '../world-model/outcome-worker';
 import { getWorkspaceRuntimeStatus } from '../workspaces/runtime-manager';
 import type { RouteContext } from './types';
 
@@ -17,6 +20,7 @@ export async function settingsRoutes(app: FastifyInstance, ctx: RouteContext) {
   const { store, env, providerRouter, resolveRequestProviderCredentials } = ctx;
 
   app.get('/api/v1/settings/overview', async (request, reply) => {
+    await store.upsertRadarFeedSources({ sources: listDefaultRadarFeedSources() });
     const health = await store.health();
     const runtime = providerRouter.listRuntimeStats();
     const resolvedCredentials = await resolveRequestProviderCredentials(request);
@@ -25,8 +29,15 @@ export async function settingsRoutes(app: FastifyInstance, ctx: RouteContext) {
     const oauthWorker = getProviderTokenRefreshWorkerStatus();
     const aiTraceWorker = getAiTraceCleanupWorkerStatus();
     const jarvisWatcherWorker = getJarvisWatcherWorkerStatus();
+    const radarScannerWorker = getRadarScannerWorkerStatus();
+    const worldModelOutcomeWorker = getWorldModelOutcomeWorkerStatus();
     const workspaceRuntime = getWorkspaceRuntimeStatus();
     const notificationRuntime = ctx.notificationService?.getRuntimeStatus() ?? null;
+    const [radarControl, radarPackMetrics, radarSources] = await Promise.all([
+      store.getRadarControlSettings(),
+      store.listRadarDomainPackMetrics(),
+      store.listRadarFeedSources({ limit: 200 }),
+    ]);
 
     return sendSuccess(reply, request, 200, {
       generated_at: new Date().toISOString(),
@@ -76,6 +87,14 @@ export async function settingsRoutes(app: FastifyInstance, ctx: RouteContext) {
         ...jarvisWatcherWorker,
         history: jarvisWatcherWorker.history.slice(0, 5)
       },
+      radar_scanner_worker: {
+        ...radarScannerWorker,
+        history: radarScannerWorker.history.slice(0, 5)
+      },
+      world_model_outcome_worker: {
+        ...worldModelOutcomeWorker,
+        history: worldModelOutcomeWorker.history.slice(0, 5)
+      },
       workspace_runtime: workspaceRuntime,
       jarvis_skills_enabled: env.JARVIS_SKILLS_ENABLED,
       notification_runtime: notificationRuntime,
@@ -95,6 +114,15 @@ export async function settingsRoutes(app: FastifyInstance, ctx: RouteContext) {
           min_severity: env.NOTIFICATION_TELEGRAM_MIN_SEVERITY,
           event_types: parseChannelEventTypes(env.NOTIFICATION_TELEGRAM_EVENT_TYPES)
         }
+      },
+      radar_policy: {
+        control: radarControl,
+        domain_pack_metrics: radarPackMetrics,
+        sources: radarSources,
+        scanner_worker: {
+          ...radarScannerWorker,
+          history: radarScannerWorker.history.slice(0, 5),
+        },
       }
     });
   });

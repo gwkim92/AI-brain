@@ -41,7 +41,7 @@ const ALIGNMENT_STOPWORDS = new Set([
   'briefing'
 ]);
 
-function normalizeUrl(value: string): string | null {
+export function normalizeGroundingUrl(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
   try {
@@ -68,7 +68,7 @@ function extractNormalizedUrlsFromText(value: string, maxUrls = 10): string[] {
   const markdownPattern = new RegExp(MARKDOWN_LINK_PATTERN.source, MARKDOWN_LINK_PATTERN.flags);
   let markdownMatch: RegExpExecArray | null;
   while ((markdownMatch = markdownPattern.exec(value)) !== null) {
-    const normalized = normalizeUrl(markdownMatch[2] ?? '');
+    const normalized = normalizeGroundingUrl(markdownMatch[2] ?? '');
     if (!normalized || seen.has(normalized)) {
       continue;
     }
@@ -82,7 +82,7 @@ function extractNormalizedUrlsFromText(value: string, maxUrls = 10): string[] {
   const plainPattern = new RegExp(PLAIN_URL_PATTERN.source, PLAIN_URL_PATTERN.flags);
   let plainMatch: RegExpExecArray | null;
   while ((plainMatch = plainPattern.exec(value)) !== null) {
-    const normalized = normalizeUrl(plainMatch[0] ?? '');
+    const normalized = normalizeGroundingUrl(plainMatch[0] ?? '');
     if (!normalized || seen.has(normalized)) {
       continue;
     }
@@ -164,7 +164,7 @@ export function extractGroundingSourcesFromText(output: string, maxSources = 8):
   while ((markdownMatch = markdownPattern.exec(output)) !== null) {
     const title = (markdownMatch[1] ?? '').trim();
     const rawUrl = markdownMatch[2] ?? '';
-    const normalizedUrl = normalizeUrl(rawUrl);
+    const normalizedUrl = normalizeGroundingUrl(rawUrl);
     if (!normalizedUrl || map.has(normalizedUrl)) {
       continue;
     }
@@ -183,7 +183,7 @@ export function extractGroundingSourcesFromText(output: string, maxSources = 8):
   let plainMatch: RegExpExecArray | null;
   while ((plainMatch = plainPattern.exec(output)) !== null) {
     const rawUrl = plainMatch[0] ?? '';
-    const normalizedUrl = normalizeUrl(rawUrl);
+    const normalizedUrl = normalizeGroundingUrl(rawUrl);
     if (!normalizedUrl || map.has(normalizedUrl)) {
       continue;
     }
@@ -208,7 +208,7 @@ export function mergeGroundingSources(
 ): GroundingSource[] {
   const merged = new Map<string, GroundingSource>();
   for (const source of [...primary, ...secondary]) {
-    const normalized = normalizeUrl(source.url);
+    const normalized = normalizeGroundingUrl(source.url);
     if (!normalized || merged.has(normalized)) {
       continue;
     }
@@ -266,7 +266,7 @@ export function extractGroundingClaimsFromText(
   maxCitationsPerClaim = 3
 ): GroundingClaim[] {
   const normalizedSourceUrls = sources
-    .map((source) => normalizeUrl(source.url))
+    .map((source) => normalizeGroundingUrl(source.url))
     .filter((url): url is string => Boolean(url));
   const sourceSet = new Set(normalizedSourceUrls);
   if (normalizedSourceUrls.length === 0) {

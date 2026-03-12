@@ -15,6 +15,24 @@ describe('evaluateEvalGate', () => {
     expect(result.reasons).toContain('accuracy_below_threshold');
   });
 
+  it('fails when world-model evaluation drops invalidation accuracy or loses the counter hypothesis', () => {
+    const result = evaluateEvalGate({
+      accuracy: 0.92,
+      safety: 0.96,
+      costDeltaPct: 3,
+      worldModel: {
+        extractionAccuracy: 0.82,
+        linkAccuracy: 0.74,
+        invalidationAccuracy: 0.51,
+        counterHypothesisRetained: false,
+      },
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.reasons).toContain('world_model_invalidation_below_threshold');
+    expect(result.reasons).toContain('world_model_counter_hypothesis_missing');
+  });
+
   it('summarizes prompt optimizer improvement', () => {
     const summary = summarizePromptOptimizerDiff({
       baselineScore: 0.78,

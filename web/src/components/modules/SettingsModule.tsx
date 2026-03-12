@@ -827,6 +827,57 @@ export function SettingsModule() {
 
   const notificationRuntime = settingsOverview?.notification_runtime ?? null;
   const notificationPolicy = settingsOverview?.notification_policy ?? null;
+  const radarPolicy = settingsOverview?.radar_policy ?? null;
+  const radarScannerWorker = settingsOverview?.radar_scanner_worker ?? radarPolicy?.scanner_worker ?? null;
+  const radarControl = radarPolicy?.control ?? null;
+  const radarSources = useMemo(() => radarPolicy?.sources ?? [], [radarPolicy?.sources]);
+  const radarPackMetrics = useMemo(
+    () =>
+      [...(radarPolicy?.domain_pack_metrics ?? [])].sort((left, right) => {
+        if (right.calibrationScore !== left.calibrationScore) {
+          return right.calibrationScore - left.calibrationScore;
+        }
+        return (right.lastEventAt ? Date.parse(right.lastEventAt) : 0) - (left.lastEventAt ? Date.parse(left.lastEventAt) : 0);
+      }),
+    [radarPolicy]
+  );
+  const radarControlItems = useMemo(() => {
+    if (!radarControl) {
+      return [];
+    }
+    return [
+      {
+        label: t("settings.radar.control.globalKillSwitch"),
+        value: radarControl.globalKillSwitch ? t("common.enabled") : t("common.disabled"),
+        tone: radarControl.globalKillSwitch ? "text-rose-300 border-rose-400/30 bg-rose-500/10" : "text-emerald-300 border-emerald-400/30 bg-emerald-500/10",
+      },
+      {
+        label: t("settings.radar.control.dossierPromotion"),
+        value: radarControl.dossierPromotionEnabled ? t("common.enabled") : t("common.disabled"),
+        tone: radarControl.dossierPromotionEnabled ? "text-cyan-200 border-cyan-400/30 bg-cyan-500/10" : "text-white/55 border-white/15 bg-white/5",
+      },
+      {
+        label: t("settings.radar.control.autoExecution"),
+        value: radarControl.autoExecutionEnabled ? t("common.enabled") : t("common.disabled"),
+        tone: radarControl.autoExecutionEnabled ? "text-amber-200 border-amber-400/30 bg-amber-500/10" : "text-white/55 border-white/15 bg-white/5",
+      },
+      {
+        label: t("settings.radar.control.tier3Escalation"),
+        value: radarControl.tier3EscalationEnabled ? t("common.enabled") : t("common.disabled"),
+        tone: radarControl.tier3EscalationEnabled ? "text-fuchsia-200 border-fuchsia-400/30 bg-fuchsia-500/10" : "text-white/55 border-white/15 bg-white/5",
+      },
+    ];
+  }, [radarControl, t]);
+  const radarSourceSummary = useMemo(() => {
+    const enabledCount = radarSources.filter((source) => source.enabled).length;
+    const failedCount = radarSources.filter((source) => Boolean(source.lastError)).length;
+    return {
+      total: radarSources.length,
+      enabled: enabledCount,
+      disabled: Math.max(0, radarSources.length - enabledCount),
+      failed: failedCount,
+    };
+  }, [radarSources]);
   const notificationChannels = [
     {
       key: "in_app",
@@ -1387,6 +1438,149 @@ export function SettingsModule() {
           <p className="text-xs text-white/55">{t("settings.advanced.hiddenHint")}</p>
         ) : (
           <>
+        <section className="mb-4 border border-white/10 rounded p-3 bg-black/20">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div>
+              <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase flex items-center gap-2">
+                <RadioTower size={12} /> {t("settings.radar.title")}
+              </h3>
+              <p className="mt-1 text-[11px] text-white/45">{t("settings.radar.subtitle")}</p>
+            </div>
+            <span className="text-[10px] font-mono text-white/40">
+              {t("settings.radar.metricsCount", { value: radarPackMetrics.length })}
+            </span>
+          </div>
+          {!radarControl ? (
+            <p className="text-xs font-mono text-white/40">{t("settings.radar.empty")}</p>
+          ) : (
+            <>
+              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                {radarControlItems.map((item) => (
+                  <div key={item.label} className={`rounded border px-2 py-2 ${item.tone}`}>
+                    <p className="text-[10px] font-mono uppercase tracking-widest opacity-70">{item.label}</p>
+                    <p className="mt-1 text-sm font-semibold">{item.value}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded border border-white/10 bg-black/20 px-2 py-2">
+                  <p className="text-[10px] uppercase tracking-widest text-white/35">{t("settings.radar.scanner.status")}</p>
+                  <p className="mt-1 text-white/70">
+                    {radarScannerWorker?.enabled ? t("common.enabled") : t("common.disabled")}
+                    {radarScannerWorker?.inflight ? ` · ${t("settings.radar.scanner.inflight")}` : ""}
+                  </p>
+                </div>
+                <div className="rounded border border-white/10 bg-black/20 px-2 py-2">
+                  <p className="text-[10px] uppercase tracking-widest text-white/35">{t("settings.radar.scanner.lastRun")}</p>
+                  <p className="mt-1 text-white/70">
+                    {radarScannerWorker?.lastRun && typeof radarScannerWorker.lastRun.finishedAt === "string"
+                      ? formatDateTime(radarScannerWorker.lastRun.finishedAt)
+                      : "-"}
+                  </p>
+                </div>
+                <div className="rounded border border-white/10 bg-black/20 px-2 py-2">
+                  <p className="text-[10px] uppercase tracking-widest text-white/35">{t("settings.radar.sources.title")}</p>
+                  <p className="mt-1 text-white/70">
+                    {t("settings.radar.sources.summary", {
+                      enabled: radarSourceSummary.enabled,
+                      total: radarSourceSummary.total,
+                    })}
+                  </p>
+                </div>
+                <div className="rounded border border-white/10 bg-black/20 px-2 py-2">
+                  <p className="text-[10px] uppercase tracking-widest text-white/35">{t("settings.radar.sources.failed")}</p>
+                  <p className="mt-1 text-white/70">{radarSourceSummary.failed}</p>
+                </div>
+              </div>
+              <div className="mt-3 grid gap-2 md:grid-cols-2 text-[11px] font-mono text-white/55">
+                <div className="rounded border border-white/10 bg-black/20 px-2 py-2">
+                  <p className="text-[10px] uppercase tracking-widest text-white/35">{t("settings.radar.disabledSourceTiers")}</p>
+                  <p className="mt-1 text-white/70">
+                    {radarControl.disabledSourceTiers.length > 0 ? radarControl.disabledSourceTiers.join(", ") : t("common.none")}
+                  </p>
+                </div>
+                <div className="rounded border border-white/10 bg-black/20 px-2 py-2">
+                  <p className="text-[10px] uppercase tracking-widest text-white/35">{t("settings.radar.disabledDomains")}</p>
+                  <p className="mt-1 text-white/70">
+                    {radarControl.disabledDomainIds.length > 0 ? radarControl.disabledDomainIds.join(", ") : t("common.none")}
+                  </p>
+                </div>
+                <div className="rounded border border-white/10 bg-black/20 px-2 py-2">
+                  <p className="text-[10px] uppercase tracking-widest text-white/35">{t("settings.radar.updatedBy")}</p>
+                  <p className="mt-1 text-white/70">{radarControl.updatedBy ?? t("common.system")}</p>
+                </div>
+                <div className="rounded border border-white/10 bg-black/20 px-2 py-2">
+                  <p className="text-[10px] uppercase tracking-widest text-white/35">{t("settings.radar.updatedAt")}</p>
+                  <p className="mt-1 text-white/70">{formatDateTime(radarControl.updatedAt)}</p>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <div>
+                  <h4 className="text-[10px] font-mono text-white/45 uppercase tracking-widest">{t("settings.radar.metricsTitle")}</h4>
+                  <p className="mt-1 text-[11px] text-white/40">{t("settings.radar.metricsSubtitle")}</p>
+                </div>
+                {radarPackMetrics.length === 0 ? (
+                  <p className="mt-2 text-xs font-mono text-white/40">{t("settings.radar.metricsEmpty")}</p>
+                ) : (
+                  <div className="mt-2 max-h-64 overflow-y-auto space-y-2">
+                    {radarPackMetrics.map((metric) => (
+                      <div key={metric.domainId} className="rounded border border-white/10 bg-black/20 px-3 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-[11px] font-mono text-white/75 truncate">{metric.domainId}</p>
+                            <p className="mt-1 text-[10px] font-mono text-white/40">
+                              {t("settings.radar.metric.lastEvent")}: {metric.lastEventAt ? formatDateTime(metric.lastEventAt) : "-"}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-[10px] font-mono uppercase tracking-widest text-white/35">{t("settings.radar.metric.calibration")}</p>
+                            <p className="text-base font-semibold text-cyan-200">{Math.round(metric.calibrationScore * 100)}%</p>
+                          </div>
+                        </div>
+                        <div className="mt-2 grid grid-cols-2 gap-2 text-[10px] font-mono text-white/55 md:grid-cols-4 xl:grid-cols-8">
+                          <div>
+                            <p className="text-white/35">{t("settings.radar.metric.promotions")}</p>
+                            <p className="mt-1 text-white/75">{metric.promotionCount}</p>
+                          </div>
+                          <div>
+                            <p className="text-white/35">{t("settings.radar.metric.dossiers")}</p>
+                            <p className="mt-1 text-white/75">{metric.dossierCount}</p>
+                          </div>
+                          <div>
+                            <p className="text-white/35">{t("settings.radar.metric.actions")}</p>
+                            <p className="mt-1 text-white/75">{metric.actionCount}</p>
+                          </div>
+                          <div>
+                            <p className="text-white/35">{t("settings.radar.metric.autoExecute")}</p>
+                            <p className="mt-1 text-white/75">{metric.autoExecuteCount}</p>
+                          </div>
+                          <div>
+                            <p className="text-white/35">{t("settings.radar.metric.confirmed")}</p>
+                            <p className="mt-1 text-emerald-300">{metric.confirmedCount}</p>
+                          </div>
+                          <div>
+                            <p className="text-white/35">{t("settings.radar.metric.invalidated")}</p>
+                            <p className="mt-1 text-rose-300">{metric.invalidatedCount}</p>
+                          </div>
+                          <div>
+                            <p className="text-white/35">{t("settings.radar.metric.mixed")}</p>
+                            <p className="mt-1 text-amber-300">{metric.mixedCount}</p>
+                          </div>
+                          <div>
+                            <p className="text-white/35">{t("settings.radar.metric.unresolved")}</p>
+                            <p className="mt-1 text-white/75">{metric.unresolvedCount}</p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </section>
+
         <section className="mb-4 border border-white/10 rounded p-3 bg-black/20">
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase flex items-center gap-2">

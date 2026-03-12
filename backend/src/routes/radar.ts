@@ -3,8 +3,13 @@ import { z } from 'zod';
 
 import { buildRadarDigestMessage, buildTelegramApprovalActionPayload } from '../integrations/telegram/reporter';
 import { sendError, sendSuccess } from '../lib/http';
+import { listRadarDomainPacks } from '../radar/domain-packs';
+import { executeRadarEvaluationAndPromotion } from '../radar/evaluation-service';
+import { listDefaultRadarFeedSources } from '../radar/feed-sources';
 import { appendOpsPolicyItems, normalizeRadarItems } from '../radar/ingest';
+import type { RawRadarSourceItem } from '../radar/ingest';
 import { buildOpsUpgradeProposals } from '../radar/ops-policy';
+import { getRadarScannerWorkerStatus } from '../radar/scanner-worker';
 import type { RouteContext } from './types';
 import {
   applySseCorsHeaders,
@@ -22,7 +27,15 @@ const RadarIngestSchema = z.object({
         summary: z.string().optional(),
         source_url: z.string().url(),
         published_at: z.string().datetime().optional(),
-        confidence_score: z.number().min(0).max(1).optional()
+        observed_at: z.string().datetime().optional(),
+        confidence_score: z.number().min(0).max(1).optional(),
+        source_type: z
+          .enum(['news', 'filing', 'policy', 'market_tick', 'freight', 'inventory', 'blog', 'forum', 'social', 'manual'])
+          .optional(),
+        source_tier: z.enum(['tier_0', 'tier_1', 'tier_2', 'tier_3']).optional(),
+        raw_metrics: z.record(z.string(), z.unknown()).optional(),
+        entity_hints: z.array(z.string().min(1)).optional(),
+        trust_hint: z.string().min(1).optional()
       })
     )
     .optional()
@@ -34,6 +47,54 @@ const RadarEvaluateSchema = z.object({
 
 const RadarRecommendationQuerySchema = z.object({
   decision: z.enum(['adopt', 'hold', 'discard']).optional()
+});
+
+const RadarEventQuerySchema = z.object({
+  decision: z.enum(['ignore', 'watch', 'dossier', 'action', 'execute_auto_candidate']).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50)
+});
+
+const RadarSourceQuerySchema = z.object({
+  enabled: z.coerce.boolean().optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(100)
+});
+
+const RadarSourceToggleSchema = z.object({
+  enabled: z.boolean()
+});
+
+const RadarRunsQuerySchema = z.object({
+  source_id: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50)
+});
+
+const RadarFeedbackSchema = z.object({
+  note: z.string().max(2000).optional()
+});
+
+const RadarOverrideSchema = z.object({
+  decision: z.enum(['ignore', 'watch', 'dossier', 'action', 'execute_auto_candidate']),
+  note: z.string().max(2000).optional()
+});
+
+const RadarControlUpdateSchema = z.object({
+  global_kill_switch: z.boolean().optional(),
+  auto_execution_enabled: z.boolean().optional(),
+  dossier_promotion_enabled: z.boolean().optional(),
+  tier3_escalation_enabled: z.boolean().optional(),
+  disabled_domain_ids: z
+    .array(
+      z.enum([
+        'geopolitics_energy_lng',
+        'macro_rates_inflation_fx',
+        'shipping_supply_chain',
+        'policy_regulation_platform_ai',
+        'company_earnings_guidance',
+        'commodities_raw_materials'
+      ])
+    )
+    .optional(),
+  disabled_source_tiers: z.array(z.enum(['tier_0', 'tier_1', 'tier_2', 'tier_3'])).optional()
 });
 
 const TelegramReportSchema = z.object({
@@ -52,7 +113,8 @@ const TelegramReportRetrySchema = z
   .optional();
 
 export async function radarRoutes(app: FastifyInstance, ctx: RouteContext): Promise<void> {
-  const { store, env, ensureMinRole, notificationService } = ctx;
+  const { store, env, ensureMinRole, notificationService, resolveRequestUserId } = ctx;
+  const ensureRadarSources = () => store.upsertRadarFeedSources({ sources: listDefaultRadarFeedSources() });
 
   app.post('/api/v1/radar/ingest', async (request, reply) => {
     const roleError = ensureMinRole(request, reply, 'operator');
@@ -67,54 +129,64 @@ export async function radarRoutes(app: FastifyInstance, ctx: RouteContext): Prom
 
     const requestedItems = parsed.data.items;
 
-    const defaults = [
+    const defaults: RawRadarSourceItem[] = [
       {
         title: 'OpenAI platform updates',
         summary: 'Track Responses API, eval, and platform release notes',
-        source_url: 'https://platform.openai.com/docs/changelog',
-        published_at: new Date().toISOString(),
-        confidence_score: 0.95
+        sourceUrl: 'https://platform.openai.com/docs/changelog',
+        publishedAt: new Date().toISOString(),
+        confidenceScore: 0.95
       },
       {
         title: 'MCP spec updates',
         summary: 'Track MCP transport and security changes',
-        source_url: 'https://modelcontextprotocol.io/specification',
-        published_at: new Date().toISOString(),
-        confidence_score: 0.9
+        sourceUrl: 'https://modelcontextprotocol.io/specification',
+        publishedAt: new Date().toISOString(),
+        confidenceScore: 0.9
       }
     ];
 
-    const normalized = normalizeRadarItems(
-      parsed.data.source_name,
-      (requestedItems ?? defaults).map((item) => ({
-        title: item.title,
-        summary: item.summary,
-        sourceUrl: item.source_url,
-        publishedAt: item.published_at,
-        confidenceScore: item.confidence_score
-      }))
-    );
+    const ingestSourceItems: RawRadarSourceItem[] = requestedItems
+      ? requestedItems.map((item) => ({
+          title: item.title,
+          summary: item.summary,
+          sourceUrl: item.source_url,
+          publishedAt: item.published_at,
+          observedAt: item.observed_at,
+          confidenceScore: item.confidence_score,
+          sourceType: item.source_type,
+          sourceTier: item.source_tier,
+          rawMetrics: item.raw_metrics,
+          entityHints: item.entity_hints,
+          trustHint: item.trust_hint
+        }))
+      : defaults;
 
-    const withOps = appendOpsPolicyItems(
-      normalized,
-      buildOpsUpgradeProposals({
-        node: {
-          currentMajor: 22,
-          preferredMajor: 24,
-          maintenanceMajor: 22
-        },
-        postgres: {
-          currentMinor: 0,
-          latestMinor: 2,
-          outOfCycleSecurityNotice: false
-        },
-        valkey: {
-          currentPatch: 0,
-          latestPatch: 2,
-          vulnerabilityNotice: false
-        }
-      })
-    );
+    const normalized = normalizeRadarItems(parsed.data.source_name, ingestSourceItems);
+
+    const withOps =
+      requestedItems && requestedItems.length > 0
+        ? normalized
+        : appendOpsPolicyItems(
+            normalized,
+            buildOpsUpgradeProposals({
+              node: {
+                currentMajor: 22,
+                preferredMajor: 24,
+                maintenanceMajor: 22
+              },
+              postgres: {
+                currentMinor: 0,
+                latestMinor: 2,
+                outOfCycleSecurityNotice: false
+              },
+              valkey: {
+                currentPatch: 0,
+                latestPatch: 2,
+                vulnerabilityNotice: false
+              }
+            })
+          );
 
     const ingestItems = withOps.map((item) => ({
       id: item.id,
@@ -123,11 +195,19 @@ export async function radarRoutes(app: FastifyInstance, ctx: RouteContext): Prom
       sourceUrl: item.sourceUrl,
       sourceName: item.sourceName,
       publishedAt: item.publishedAt,
+      observedAt: item.observedAt,
       confidenceScore: item.confidenceScore,
-      status: 'new' as const
+      status: 'new' as const,
+      sourceType: item.sourceType,
+      sourceTier: item.sourceTier,
+      rawMetrics: item.rawMetrics,
+      entityHints: item.entityHints,
+      trustHint: item.trustHint,
+      payload: item.payload
     }));
 
-    const count = await store.ingestRadarItems(ingestItems);
+    const storedItems = await store.ingestRadarItems(ingestItems);
+    const count = storedItems.length;
     if (count > 0) {
       notificationService?.emitRadarNewItem(count);
     }
@@ -140,7 +220,7 @@ export async function radarRoutes(app: FastifyInstance, ctx: RouteContext): Prom
   });
 
   app.get('/api/v1/radar/items', async (request, reply) => {
-    const roleError = ensureMinRole(request, reply, 'operator');
+    const roleError = ensureMinRole(request, reply, 'member');
     if (roleError) {
       return roleError;
     }
@@ -164,6 +244,149 @@ export async function radarRoutes(app: FastifyInstance, ctx: RouteContext): Prom
     return sendSuccess(reply, request, 200, { items });
   });
 
+  app.get('/api/v1/radar/events', async (request, reply) => {
+    const roleError = ensureMinRole(request, reply, 'member');
+    if (roleError) {
+      return roleError;
+    }
+    const parsed = RadarEventQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid radar event query', parsed.error.flatten());
+    }
+    const events = await store.listRadarEvents({
+      decision: parsed.data.decision,
+      limit: parsed.data.limit
+    });
+    return sendSuccess(reply, request, 200, { events });
+  });
+
+  app.get('/api/v1/radar/events/:eventId', async (request, reply) => {
+    const roleError = ensureMinRole(request, reply, 'member');
+    if (roleError) {
+      return roleError;
+    }
+    const { eventId } = request.params as { eventId: string };
+    const event = await store.getRadarEventById(eventId);
+    if (!event) {
+      return sendError(reply, request, 404, 'NOT_FOUND', 'radar event not found');
+    }
+    const [domainPosteriors, autonomyDecision, feedback] = await Promise.all([
+      store.listRadarDomainPosteriors(eventId),
+      store.getRadarAutonomyDecision(eventId),
+      store.listRadarOperatorFeedback({ eventId, limit: 20 })
+    ]);
+    return sendSuccess(reply, request, 200, {
+      event,
+      domain_posteriors: domainPosteriors,
+      autonomy_decision: autonomyDecision,
+      feedback
+    });
+  });
+
+  app.get('/api/v1/radar/domain-packs', async (request, reply) => {
+    const roleError = ensureMinRole(request, reply, 'member');
+    if (roleError) {
+      return roleError;
+    }
+    return sendSuccess(reply, request, 200, { domain_packs: listRadarDomainPacks() });
+  });
+
+  app.get('/api/v1/radar/sources', async (request, reply) => {
+    const roleError = ensureMinRole(request, reply, 'member');
+    if (roleError) {
+      return roleError;
+    }
+    const parsed = RadarSourceQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid radar source query', parsed.error.flatten());
+    }
+    await ensureRadarSources();
+    const sources = await store.listRadarFeedSources({
+      enabled: parsed.data.enabled,
+      limit: parsed.data.limit,
+    });
+    return sendSuccess(reply, request, 200, { sources });
+  });
+
+  app.post('/api/v1/radar/sources/:sourceId/toggle', async (request, reply) => {
+    const roleError = ensureMinRole(request, reply, 'operator');
+    if (roleError) {
+      return roleError;
+    }
+    const parsed = RadarSourceToggleSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid radar source toggle payload', parsed.error.flatten());
+    }
+    const { sourceId } = request.params as { sourceId: string };
+    const userId = resolveRequestUserId(request);
+    const source = await store.toggleRadarFeedSource({
+      sourceId,
+      enabled: parsed.data.enabled,
+      userId,
+    });
+    if (!source) {
+      return sendError(reply, request, 404, 'NOT_FOUND', 'radar source not found');
+    }
+    return sendSuccess(reply, request, 200, { source });
+  });
+
+  app.get('/api/v1/radar/runs', async (request, reply) => {
+    const roleError = ensureMinRole(request, reply, 'operator');
+    if (roleError) {
+      return roleError;
+    }
+    const parsed = RadarRunsQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid radar runs query', parsed.error.flatten());
+    }
+    const runs = await store.listRadarIngestRuns({
+      sourceId: parsed.data.source_id,
+      limit: parsed.data.limit,
+    });
+    return sendSuccess(reply, request, 200, { runs });
+  });
+
+  app.get('/api/v1/radar/control', async (request, reply) => {
+    const roleError = ensureMinRole(request, reply, 'operator');
+    if (roleError) {
+      return roleError;
+    }
+    await ensureRadarSources();
+    const [control, domainPackMetrics, sources] = await Promise.all([
+      store.getRadarControlSettings(),
+      store.listRadarDomainPackMetrics(),
+      store.listRadarFeedSources({ limit: 200 })
+    ]);
+    return sendSuccess(reply, request, 200, {
+      control,
+      domain_pack_metrics: domainPackMetrics,
+      sources,
+      scanner_worker: getRadarScannerWorkerStatus(),
+    });
+  });
+
+  app.post('/api/v1/radar/control', async (request, reply) => {
+    const roleError = ensureMinRole(request, reply, 'operator');
+    if (roleError) {
+      return roleError;
+    }
+    const parsed = RadarControlUpdateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid radar control payload', parsed.error.flatten());
+    }
+    const userId = resolveRequestUserId(request);
+    const control = await store.updateRadarControlSettings({
+      userId,
+      globalKillSwitch: parsed.data.global_kill_switch,
+      autoExecutionEnabled: parsed.data.auto_execution_enabled,
+      dossierPromotionEnabled: parsed.data.dossier_promotion_enabled,
+      tier3EscalationEnabled: parsed.data.tier3_escalation_enabled,
+      disabledDomainIds: parsed.data.disabled_domain_ids,
+      disabledSourceTiers: parsed.data.disabled_source_tiers,
+    });
+    return sendSuccess(reply, request, 200, { control });
+  });
+
   app.post('/api/v1/radar/evaluate', async (request, reply) => {
     const roleError = ensureMinRole(request, reply, 'operator');
     if (roleError) {
@@ -175,17 +398,34 @@ export async function radarRoutes(app: FastifyInstance, ctx: RouteContext): Prom
       return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid evaluate payload', parsed.error.flatten());
     }
 
-    const recommendations = await store.evaluateRadar({ itemIds: parsed.data.item_ids });
+    const userId = resolveRequestUserId(request);
+    const result = await executeRadarEvaluationAndPromotion({
+      store,
+      userId,
+      itemIds: parsed.data.item_ids,
+      notificationService,
+    });
 
     return sendSuccess(reply, request, 202, {
       evaluation_job_id: `eval_${Date.now()}`,
       status: 'queued',
-      recommendation_count: recommendations.length
+      recommendation_count: result.recommendations.length,
+      promoted_count: result.promotions.length,
+      promotions: result.promotions.map((promotion) => ({
+        event_id: promotion.eventId,
+        decision: promotion.decision,
+        watcher_id: promotion.watcherId,
+        briefing_id: promotion.briefingId,
+        dossier_id: promotion.dossierId,
+        session_id: promotion.sessionId,
+        action_proposal_id: promotion.actionProposalId,
+        auto_executed: promotion.autoExecuted,
+      }))
     });
   });
 
   app.get('/api/v1/radar/recommendations', async (request, reply) => {
-    const roleError = ensureMinRole(request, reply, 'operator');
+    const roleError = ensureMinRole(request, reply, 'member');
     if (roleError) {
       return roleError;
     }
@@ -197,6 +437,49 @@ export async function radarRoutes(app: FastifyInstance, ctx: RouteContext): Prom
 
     const recommendations = await store.listRadarRecommendations(parsed.data.decision);
     return sendSuccess(reply, request, 200, { recommendations });
+  });
+
+  app.post('/api/v1/radar/events/:eventId/ack', async (request, reply) => {
+    const roleError = ensureMinRole(request, reply, 'member');
+    if (roleError) {
+      return roleError;
+    }
+    const parsed = RadarFeedbackSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid radar ack payload', parsed.error.flatten());
+    }
+    const { eventId } = request.params as { eventId: string };
+    const userId = resolveRequestUserId(request);
+    const feedback = await store.createRadarOperatorFeedback({
+      eventId,
+      userId,
+      kind: 'ack',
+      note: parsed.data.note ?? null
+    });
+    const event = await store.getRadarEventById(eventId);
+    return sendSuccess(reply, request, 200, { event, feedback });
+  });
+
+  app.post('/api/v1/radar/events/:eventId/override', async (request, reply) => {
+    const roleError = ensureMinRole(request, reply, 'operator');
+    if (roleError) {
+      return roleError;
+    }
+    const parsed = RadarOverrideSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid radar override payload', parsed.error.flatten());
+    }
+    const { eventId } = request.params as { eventId: string };
+    const userId = resolveRequestUserId(request);
+    const feedback = await store.createRadarOperatorFeedback({
+      eventId,
+      userId,
+      kind: 'override',
+      note: parsed.data.note ?? null,
+      overrideDecision: parsed.data.decision
+    });
+    const event = await store.getRadarEventById(eventId);
+    return sendSuccess(reply, request, 200, { event, feedback });
   });
 
   app.post('/api/v1/radar/reports/telegram', async (request, reply) => {

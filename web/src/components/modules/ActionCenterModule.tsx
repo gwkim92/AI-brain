@@ -8,12 +8,21 @@ import { useLocale } from "@/components/providers/LocaleProvider";
 import { ApiRequestError } from "@/lib/api/client";
 import { approveJarvisAction, getJarvisSession, listJarvisSessions, rejectJarvisAction } from "@/lib/api/endpoints";
 import { dispatchJarvisDataRefresh, subscribeJarvisDataRefresh } from "@/lib/hud/data-refresh";
+import { describeExecutionOption } from "@/lib/jarvis/execution-option";
+import { describeResearchProfile } from "@/lib/research-quality";
+import {
+  formatSignedWorldModelDelta,
+  formatWorldModelStateKey,
+  summarizeWorldModelDelta,
+} from "@/lib/world-model-delta";
 import type {
   ActionProposalRecord,
+  JarvisSessionStageRecord,
   JarvisSessionDetail,
   JarvisSessionPrimaryTarget,
   JarvisSessionRecord,
   JarvisSessionStatus,
+  WatcherWorldModelDelta,
   WorkspaceCommandImpact,
   WorkspaceCommandImpactDimension,
 } from "@/lib/api/types";
@@ -175,11 +184,16 @@ function describeImpactDimension(label: string, dimension: WorkspaceCommandImpac
 function buildWorkspacePreview(
   action: ActionProposalRecord,
   impact: WorkspaceCommandImpact | null,
-  t: (key: TranslationKey, vars?: Record<string, string | number>) => string
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string,
+  executionOption: string | null
 ): SessionActionPreview {
   const riskLevel = String(action.payload.risk_level ?? "unknown");
   const severity = String(action.payload.policy_severity ?? "medium");
   const parts: string[] = [];
+  const executionOptionDescriptor = describeExecutionOption(t, executionOption);
+  if (executionOptionDescriptor) {
+    parts.push(executionOptionDescriptor.label);
+  }
   if (impact) {
     if (impact.network.level !== "none") {
       parts.push(describeImpactDimension(t("common.network"), impact.network));
@@ -200,25 +214,210 @@ function buildWorkspacePreview(
   };
 }
 
+function ExecutionOptionCard({
+  executionOption,
+  t,
+}: {
+  executionOption: string | null;
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string;
+}) {
+  const descriptor = describeExecutionOption(t, executionOption);
+  if (!descriptor) {
+    return null;
+  }
+  return (
+    <div className={`mt-3 rounded border p-2 text-[11px] ${descriptor.toneClassName}`}>
+      <p className="text-[10px] font-mono tracking-widest text-white/60">
+        {t("actionCenter.label.executionOption")}
+      </p>
+      <p className="mt-1">{descriptor.label}</p>
+      <p className="mt-1 text-[10px] text-white/75">{descriptor.hint}</p>
+    </div>
+  );
+}
+
+function readExecutionOptionFromStages(stages: JarvisSessionStageRecord[] | null | undefined): string | null {
+  if (!Array.isArray(stages)) {
+    return null;
+  }
+  for (const stage of stages) {
+    const refs = (stage.artifactRefsJson ?? undefined) as Record<string, unknown> | undefined;
+    const value = refs?.["execution_option"];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function readExecutionOption(
+  action: ActionProposalRecord,
+  detail?: JarvisSessionDetail | null
+): string | null {
+  const payloadValue = action.payload.execution_option;
+  if (typeof payloadValue === "string" && payloadValue.trim().length > 0) {
+    return payloadValue;
+  }
+  if (detail) {
+    return readExecutionOptionFromStages(detail.stages);
+  }
+  return null;
+}
+
+function readChangeScore(action: ActionProposalRecord, detail?: JarvisSessionDetail | null): number | null {
+  const payloadValue = action.payload.change_score;
+  if (typeof payloadValue === "number" && Number.isFinite(payloadValue)) {
+    return payloadValue;
+  }
+  const stages = detail?.stages;
+  if (!Array.isArray(stages)) return null;
+  for (const stage of stages) {
+    const refs = (stage.artifactRefsJson ?? undefined) as Record<string, unknown> | undefined;
+    const value = refs?.["change_score"];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function readChangeReasons(action: ActionProposalRecord, detail?: JarvisSessionDetail | null): string[] {
+  const payloadValue = action.payload.change_reasons;
+  if (Array.isArray(payloadValue)) {
+    return payloadValue.filter((value): value is string => typeof value === "string");
+  }
+  const stages = detail?.stages;
+  if (!Array.isArray(stages)) return [];
+  for (const stage of stages) {
+    const refs = (stage.artifactRefsJson ?? undefined) as Record<string, unknown> | undefined;
+    const value = refs?.["change_reasons"];
+    if (Array.isArray(value)) {
+      return value.filter((item): item is string => typeof item === "string");
+    }
+  }
+  return [];
+}
+
+function describeChangeReason(
+  reason: string,
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string
+): string {
+  return t(`actionCenter.changeReason.${reason}` as TranslationKey);
+}
+
+function isWatcherWorldModelDelta(value: unknown): value is WatcherWorldModelDelta {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  const topStateShift = candidate.topStateShift;
+  const hasValidTopStateShift =
+    topStateShift === null ||
+    (typeof topStateShift === "object" &&
+      topStateShift !== null &&
+      typeof (topStateShift as Record<string, unknown>).key === "string" &&
+      typeof (topStateShift as Record<string, unknown>).delta === "number");
+
+  return (
+    typeof candidate.hasMeaningfulShift === "boolean" &&
+    Array.isArray(candidate.reasons) &&
+    typeof candidate.primaryHypothesisShift === "number" &&
+    typeof candidate.counterHypothesisShift === "number" &&
+    typeof candidate.invalidationHitCount === "number" &&
+    typeof candidate.bottleneckShiftCount === "number" &&
+    hasValidTopStateShift
+  );
+}
+
+function readWorldModelDelta(
+  action: ActionProposalRecord,
+  detail?: JarvisSessionDetail | null
+): WatcherWorldModelDelta | null {
+  const payloadValue = action.payload.world_model_delta;
+  if (isWatcherWorldModelDelta(payloadValue)) {
+    return payloadValue;
+  }
+  const stages = detail?.stages;
+  if (!Array.isArray(stages)) {
+    return null;
+  }
+  for (const stage of stages) {
+    const refs = (stage.artifactRefsJson ?? undefined) as Record<string, unknown> | undefined;
+    const value = refs?.["world_model_delta"];
+    if (isWatcherWorldModelDelta(value)) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function describeWorldModelDelta(
+  delta: WatcherWorldModelDelta | null,
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string
+): string | null {
+  return summarizeWorldModelDelta(delta, t);
+}
+
 function buildActionPreview(
   action: ActionProposalRecord,
-  t: (key: TranslationKey, vars?: Record<string, string | number>) => string
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string,
+  detail?: JarvisSessionDetail | null
 ): SessionActionPreview {
-  if (action.kind === "workspace_prepare") {
-    return buildWorkspacePreview(action, readImpact(action.payload), t);
+  const executionOption = readExecutionOption(action, detail);
+  if (action.kind === "custom" && typeof action.payload.change_class === "string") {
+    const changeClass = String(action.payload.change_class);
+    const severity = String(action.payload.severity ?? "warning");
+    const changeScore = readChangeScore(action, detail);
+    const worldModelDelta = readWorldModelDelta(action, detail);
+    const researchProfile =
+      typeof action.payload.research_profile === "string"
+        ? describeResearchProfile(t, action.payload.research_profile)
+        : null;
+    const badge = t(`actionCenter.changeClass.${changeClass}` as TranslationKey);
+    const summaryParts = [action.summary];
+    const executionOptionDescriptor = describeExecutionOption(t, executionOption);
+    if (executionOptionDescriptor) {
+      summaryParts.push(executionOptionDescriptor.label);
+    }
+    if (researchProfile) {
+      summaryParts.push(`${t("actionCenter.label.researchProfile")}: ${researchProfile}`);
+    }
+    if (changeScore !== null) {
+      summaryParts.push(`${t("actionCenter.label.changeScore")}: ${changeScore}`);
+    }
+    const worldModelSummary = describeWorldModelDelta(worldModelDelta, t);
+    if (worldModelSummary) {
+      summaryParts.push(`${t("actionCenter.label.worldModelDelta")}: ${worldModelSummary}`);
+    }
+    return {
+      badge,
+      summary: summaryParts.join(" · "),
+      tone: getSeverityTone(severity),
+      severity,
+      priority: getSeverityRank(severity),
+    };
   }
-  return {
-    badge: action.kind,
-    summary: action.summary,
-    tone: "border-white/15 bg-white/5 text-white/70",
-    severity: "medium",
-    priority: 2,
+  if (action.kind === "workspace_prepare") {
+    return buildWorkspacePreview(action, readImpact(action.payload), t, executionOption);
+  }
+  const executionOptionDescriptor = describeExecutionOption(t, executionOption);
+    return {
+      badge: action.kind,
+      summary:
+      executionOptionDescriptor
+        ? `${action.summary} · ${executionOptionDescriptor.label}`
+        : action.summary,
+      tone: "border-white/15 bg-white/5 text-white/70",
+      severity: "medium",
+      priority: 2,
   };
 }
 
 export function ActionCenterModule() {
   const { t } = useLocale();
   const searchParams = useSearchParams();
+  const requestedSessionId = searchParams.get("session");
+  const requestedActionId = searchParams.get("action");
   const [sessions, setSessions] = useState<JarvisSessionRecord[]>([]);
   const [sessionPreviews, setSessionPreviews] = useState<Record<string, SessionActionPreview>>({});
   const [selected, setSelected] = useState<JarvisSessionDetail | null>(null);
@@ -251,7 +450,7 @@ export function ActionCenterModule() {
           try {
             const detail = await getJarvisSession(session.id);
             const action = detail.actions.find((item) => item.status === "pending");
-            return [session.id, action ? buildActionPreview(action, t) : null] as const;
+            return [session.id, action ? buildActionPreview(action, t, detail) : null] as const;
           } catch {
             return [session.id, null] as const;
           }
@@ -260,7 +459,7 @@ export function ActionCenterModule() {
       const previewMap = Object.fromEntries(
         previewEntries.filter((entry): entry is readonly [string, SessionActionPreview] => entry[1] !== null)
       );
-      const sortedSessions = [...result.sessions].sort((left, right) => {
+      let sortedSessions = [...result.sessions].sort((left, right) => {
         const leftPriority = previewMap[left.id]?.priority ?? 0;
         const rightPriority = previewMap[right.id]?.priority ?? 0;
         if (leftPriority !== rightPriority) {
@@ -273,14 +472,34 @@ export function ActionCenterModule() {
         }
         return right.updatedAt.localeCompare(left.updatedAt);
       });
+      let requestedDetail: JarvisSessionDetail | null = null;
+      if (requestedSessionId) {
+        const existingRequested = sortedSessions.find((item) => item.id === requestedSessionId);
+        if (!existingRequested) {
+          try {
+            const detail = await getJarvisSession(requestedSessionId);
+            if (detail.actions.some((item) => item.status === "pending")) {
+              requestedDetail = detail;
+              sortedSessions = [detail.session, ...sortedSessions.filter((item) => item.id !== detail.session.id)];
+              const pendingAction = detail.actions.find((item) => item.status === "pending");
+              if (pendingAction) {
+                previewMap[detail.session.id] = buildActionPreview(pendingAction, t, detail);
+              }
+            }
+          } catch {
+            requestedDetail = null;
+          }
+        }
+      }
       setSessions(sortedSessions);
       setSessionPreviews(previewMap);
-      const requestedSessionId = searchParams.get("session");
       const preferredSessionId =
         requestedSessionId && sortedSessions.some((item) => item.id === requestedSessionId)
           ? requestedSessionId
           : sortedSessions[0]?.id;
-      if (preferredSessionId) {
+      if (requestedDetail) {
+        setSelected(requestedDetail);
+      } else if (preferredSessionId) {
         await loadDetail(preferredSessionId);
       } else {
         setSelected(null);
@@ -297,7 +516,7 @@ export function ActionCenterModule() {
     } finally {
       setLoading(false);
     }
-  }, [loadDetail, searchParams, t]);
+  }, [loadDetail, requestedSessionId, t]);
 
   useEffect(() => {
     void refresh();
@@ -312,15 +531,22 @@ export function ActionCenterModule() {
   }, [refresh]);
 
   useEffect(() => {
-    const requestedSessionId = searchParams.get("session");
     if (!requestedSessionId) return;
     if (selected?.session.id === requestedSessionId) return;
-    if (sessions.some((item) => item.id === requestedSessionId)) {
-      void loadDetail(requestedSessionId);
-    }
-  }, [loadDetail, searchParams, selected?.session.id, sessions]);
+    void loadDetail(requestedSessionId);
+  }, [loadDetail, requestedSessionId, selected?.session.id]);
 
-  const pendingActions = useMemo(() => selected?.actions.filter((action) => action.status === "pending") ?? [], [selected]);
+  const pendingActions = useMemo(() => {
+    const actions = selected?.actions.filter((action) => action.status === "pending") ?? [];
+    if (!requestedActionId) {
+      return actions;
+    }
+    return [...actions].sort((left, right) => {
+      if (left.id === requestedActionId) return -1;
+      if (right.id === requestedActionId) return 1;
+      return 0;
+    });
+  }, [requestedActionId, selected]);
   const targetOptions = useMemo(() => {
     const options = new Set<JarvisSessionPrimaryTarget>();
     for (const session of sessions) {
@@ -358,6 +584,9 @@ export function ActionCenterModule() {
   }, [sessionPreviews, severityFilter, visibleSessions]);
 
   useEffect(() => {
+    if (requestedSessionId) {
+      return;
+    }
     if (visibleSessions.length === 0) {
       setSelected(null);
       return;
@@ -365,7 +594,7 @@ export function ActionCenterModule() {
     if (!selected || !visibleSessions.some((session) => session.id === selected.session.id)) {
       void loadDetail(visibleSessions[0].id);
     }
-  }, [loadDetail, selected, visibleSessions]);
+  }, [loadDetail, requestedSessionId, selected, visibleSessions]);
 
   const decide = async (action: ActionProposalRecord, decision: "approve" | "reject") => {
     if (!selected) return;
@@ -520,6 +749,23 @@ export function ActionCenterModule() {
                 {pendingActions.length === 0 && <p className="text-xs font-mono text-white/45">{t("actionCenter.noPendingActions")}</p>}
                 {pendingActions.map((action) => {
                   const impact = action.kind === "workspace_prepare" ? readImpact(action.payload) : null;
+                  const executionOption = readExecutionOption(action, selected);
+                  const customChangeClass =
+                    action.kind === "custom" && typeof action.payload.change_class === "string"
+                      ? String(action.payload.change_class)
+                      : null;
+                  const customSeverity =
+                    action.kind === "custom" && typeof action.payload.severity === "string"
+                      ? String(action.payload.severity)
+                      : "warning";
+                  const customChangeScore = readChangeScore(action, selected);
+                  const customChangeReasons = readChangeReasons(action, selected);
+                  const customWorldModelDelta = readWorldModelDelta(action, selected);
+                  const customWorldModelSummary = describeWorldModelDelta(customWorldModelDelta, t);
+                  const customResearchProfile =
+                    action.kind === "custom" && typeof action.payload.research_profile === "string"
+                      ? describeResearchProfile(t, action.payload.research_profile)
+                      : null;
                   return (
                     <div key={action.id} className="rounded border border-white/10 bg-black/35 p-3">
                     <div className="flex items-start justify-between gap-3">
@@ -553,6 +799,7 @@ export function ActionCenterModule() {
                         <p>{t("actionCenter.label.workspace")}: {String(action.payload.workspace_name ?? action.payload.workspace_id ?? "-")}</p>
                         <p>{t("actionCenter.label.risk")}: {String(action.payload.risk_level ?? "-")}</p>
                         <p>{t("actionCenter.label.reason")}: {String(action.payload.policy_reason ?? "-")}</p>
+                        <ExecutionOptionCard executionOption={executionOption} t={t} />
                         {impact && (
                           <div className="mt-3 space-y-2">
                             <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">{t("common.estimatedImpact")}</p>
@@ -571,6 +818,85 @@ export function ActionCenterModule() {
                         )}
                       </div>
                     )}
+                    {action.kind === "custom" && customChangeClass && (
+                      <div className="mt-3 rounded border border-cyan-500/20 bg-cyan-500/5 p-2 text-[11px] font-mono text-cyan-100/80">
+                        <div className="mb-2 flex flex-wrap items-center gap-2">
+                          <span className={`rounded border px-2 py-0.5 text-[9px] font-mono ${getSeverityTone(customSeverity)}`}>
+                            {t(`actionCenter.severity.${customSeverity}` as TranslationKey)}
+                          </span>
+                          <span className="rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono text-white/70">
+                            {t(`actionCenter.changeClass.${customChangeClass}` as TranslationKey)}
+                          </span>
+                        </div>
+                        <p>
+                          {t("actionCenter.label.change")}: {t(`actionCenter.changeClass.${customChangeClass}` as TranslationKey)}
+                        </p>
+                        <p>
+                          {t("actionCenter.label.severity")}: {t(`actionCenter.severity.${customSeverity}` as TranslationKey)}
+                        </p>
+                        {customChangeScore !== null ? (
+                          <p>
+                            {t("actionCenter.label.changeScore")}: {customChangeScore}
+                          </p>
+                        ) : null}
+                        {customResearchProfile ? (
+                          <p>
+                            {t("actionCenter.label.researchProfile")}: {customResearchProfile}
+                          </p>
+                        ) : null}
+                        {customWorldModelDelta ? (
+                          <div className="mt-2 space-y-1">
+                            {customWorldModelSummary ? (
+                              <p>
+                                {t("actionCenter.label.worldModelDelta")}: {customWorldModelSummary}
+                              </p>
+                            ) : null}
+                            {customWorldModelDelta.topStateShift ? (
+                              <p>
+                                {t("actionCenter.label.worldModelState")}:{" "}
+                                {formatWorldModelStateKey(customWorldModelDelta.topStateShift.key)}{" "}
+                                {formatSignedWorldModelDelta(customWorldModelDelta.topStateShift.delta)}
+                              </p>
+                            ) : null}
+                            <p>
+                              {t("actionCenter.label.worldModelPrimary")}:{" "}
+                              {formatSignedWorldModelDelta(customWorldModelDelta.primaryHypothesisShift)}
+                            </p>
+                            <p>
+                              {t("actionCenter.label.worldModelCounter")}:{" "}
+                              {formatSignedWorldModelDelta(customWorldModelDelta.counterHypothesisShift)}
+                            </p>
+                            <p>
+                              {t("actionCenter.label.worldModelInvalidation")}: {customWorldModelDelta.invalidationHitCount}
+                            </p>
+                            <p>
+                              {t("actionCenter.label.worldModelBottleneck")}: {customWorldModelDelta.bottleneckShiftCount}
+                            </p>
+                          </div>
+                        ) : null}
+                        <ExecutionOptionCard executionOption={executionOption} t={t} />
+                        {action.payload.watcher_id ? (
+                          <p>
+                            {t("actionCenter.label.watcher")}: {String(action.payload.watcher_id)}
+                          </p>
+                        ) : null}
+                        {customChangeReasons.length > 0 ? (
+                          <div className="mt-2">
+                            <p className="text-[10px] uppercase tracking-[0.24em] text-white/50">{t("actionCenter.label.signals")}</p>
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {customChangeReasons.map((reason) => (
+                                <span key={reason} className="rounded border border-white/10 bg-black/25 px-2 py-0.5 text-[10px] text-white/75">
+                                  {describeChangeReason(reason, t)}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
+                    {action.kind !== "workspace_prepare" && action.kind !== "custom" ? (
+                      <ExecutionOptionCard executionOption={executionOption} t={t} />
+                    ) : null}
                     <div className="mt-3 flex items-center gap-2">
                       <button type="button" onClick={() => void decide(action, "approve")} disabled={actingId === action.id} className="inline-flex items-center gap-1 rounded border border-emerald-500/40 px-2 py-1 text-[10px] font-mono text-emerald-300 disabled:opacity-50">
                         <CheckCircle2 size={11} /> {t("actionCenter.approve").toUpperCase()}

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { BellPlus, Play, RefreshCw, PauseCircle, RadioTower } from "lucide-react";
 import { useSearchParams } from "next/navigation";
@@ -8,7 +9,10 @@ import { useLocale } from "@/components/providers/LocaleProvider";
 import { useToast } from "@/components/providers/ToastProvider";
 import { ApiRequestError } from "@/lib/api/client";
 import { createWatcher, listWatchers, runWatcher, updateWatcher } from "@/lib/api/endpoints";
-import type { WatcherKind, WatcherRecord } from "@/lib/api/types";
+import { dispatchJarvisDataRefresh } from "@/lib/hud/data-refresh";
+import { summarizeWorldModelDelta } from "@/lib/world-model-delta";
+import type { WatcherFollowUpRecord, WatcherKind, WatcherRecord } from "@/lib/api/types";
+import type { TranslationKey } from "@/lib/locale";
 
 const WATCHER_KIND_OPTIONS: WatcherKind[] = [
   "external_topic",
@@ -20,6 +24,13 @@ const WATCHER_KIND_OPTIONS: WatcherKind[] = [
   "mission_health",
   "approval_backlog",
 ];
+
+function formatWorldModelDeltaSummary(
+  followUp: WatcherFollowUpRecord | null,
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string
+): string | null {
+  return summarizeWorldModelDelta(followUp?.worldModelDelta, t);
+}
 
 export function WatchersModule() {
   const searchParams = useSearchParams();
@@ -36,6 +47,17 @@ export function WatchersModule() {
   const [runningId, setRunningId] = useState<string | null>(null);
   const [highlightedWatcherId, setHighlightedWatcherId] = useState<string | null>(null);
   const [prefillState, setPrefillState] = useState<"prefilled" | "success" | null>(null);
+  const [runResults, setRunResults] = useState<
+    Record<
+      string,
+      {
+        runAt: string;
+        briefingId: string;
+        dossierId: string;
+        followUp: WatcherFollowUpRecord | null;
+      }
+    >
+  >({});
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const watcherRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const normalizedTitle = title.trim();
@@ -58,7 +80,7 @@ export function WatchersModule() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void refresh();
@@ -163,7 +185,31 @@ export function WatchersModule() {
     setRunningId(watcher.id);
     setError(null);
     try {
-      await runWatcher(watcher.id);
+      const result = await runWatcher(watcher.id);
+      setRunResults((current) => ({
+        ...current,
+        [watcher.id]: {
+          runAt: new Date().toISOString(),
+          briefingId: result.briefing.id,
+          dossierId: result.dossier.id,
+          followUp: result.follow_up,
+        },
+      }));
+      setHighlightedWatcherId(watcher.id);
+      dispatchJarvisDataRefresh({ scope: "all", source: "watcher_run" });
+      if (result.follow_up?.actionProposal) {
+        pushToast({
+          tone: result.follow_up.severity === "critical" ? "error" : "info",
+          title: t("watchers.toast.followUpTitle"),
+          message: t("watchers.toast.followUpMessage"),
+        });
+      } else {
+        pushToast({
+          tone: "success",
+          title: t("watchers.toast.runTitle"),
+          message: t("watchers.toast.runMessage"),
+        });
+      }
       await refresh();
     } catch (err) {
       if (err instanceof ApiRequestError) {
@@ -174,6 +220,28 @@ export function WatchersModule() {
     } finally {
       setRunningId(null);
     }
+  };
+
+  const formatChangeReason = (reason: string) => {
+    const translated = t(`actionCenter.changeReason.${reason}` as never);
+    return translated === `actionCenter.changeReason.${reason}` ? reason.replaceAll("_", " ") : translated;
+  };
+
+  const buildDossierHref = (dossierId: string) =>
+    `/?widgets=watchers,dossier&focus=dossier&replace=1&activation=all&dossier=${encodeURIComponent(dossierId)}`;
+
+  const buildActionCenterHref = (sessionId: string, actionId?: string | null) => {
+    const query = new URLSearchParams({
+      widgets: "watchers,action_center",
+      focus: "action_center",
+      replace: "1",
+      activation: "all",
+      session: sessionId,
+    });
+    if (actionId) {
+      query.set("action", actionId);
+    }
+    return `/?${query.toString()}`;
   };
 
   return (
@@ -208,6 +276,7 @@ export function WatchersModule() {
         )}
         <input
           ref={titleInputRef}
+          data-testid="watcher-form-title"
           value={title}
           onChange={(event) => {
             setTitle(event.target.value);
@@ -218,6 +287,7 @@ export function WatchersModule() {
           className={`rounded border bg-black/40 px-3 py-2 text-xs ${formError && !normalizedTitle ? "border-amber-500/40" : "border-white/10"}`}
         />
         <input
+          data-testid="watcher-form-query"
           value={query}
           onChange={(event) => {
             setQuery(event.target.value);
@@ -229,6 +299,7 @@ export function WatchersModule() {
         />
         <div className="flex gap-2">
           <select
+            data-testid="watcher-form-kind"
             value={kind}
             onChange={(event) => setKind(event.target.value as WatcherKind)}
             className="flex-1 rounded border border-white/10 bg-black/40 px-2 py-2 text-[11px] font-mono"
@@ -241,6 +312,7 @@ export function WatchersModule() {
             type="button"
             onClick={() => void onCreate()}
             disabled={!canCreate}
+            data-testid="watcher-form-submit"
             className="inline-flex items-center gap-1 rounded border border-cyan-500/40 px-3 py-2 text-[10px] font-mono text-cyan-300 disabled:opacity-50"
           >
             <BellPlus size={12} /> {t("common.add").toUpperCase()}
@@ -266,6 +338,7 @@ export function WatchersModule() {
           {watchers.map((watcher) => (
             <div
               key={watcher.id}
+              data-testid={`watcher-card-${watcher.id}`}
               ref={(node) => {
                 watcherRefs.current[watcher.id] = node;
               }}
@@ -294,6 +367,7 @@ export function WatchersModule() {
                   type="button"
                   onClick={() => void onRun(watcher)}
                   disabled={runningId === watcher.id}
+                  data-testid={`watcher-run-${watcher.id}`}
                   className="inline-flex items-center gap-1 rounded border border-cyan-500/40 px-2 py-1 text-[10px] font-mono text-cyan-300 disabled:opacity-50"
                 >
                   <Play size={11} /> {runningId === watcher.id ? t("watchers.running").toUpperCase() : t("watchers.run").toUpperCase()}
@@ -309,6 +383,81 @@ export function WatchersModule() {
               <div className="mt-2 text-[10px] font-mono text-white/35">
                 {t("watchers.lastRun")}: {watcher.lastRunAt ? formatDateTime(watcher.lastRunAt) : t("watchers.never")}
               </div>
+              {runResults[watcher.id] ? (
+                <div
+                  data-testid={`watcher-result-${watcher.id}`}
+                  className="mt-3 rounded border border-cyan-500/20 bg-cyan-500/5 p-3 text-[11px] text-cyan-50"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[10px] font-mono uppercase tracking-[0.24em] text-cyan-200/75">
+                      {t("watchers.result.title")}
+                    </p>
+                    <span className="text-[10px] font-mono text-cyan-100/55">
+                      {formatDateTime(runResults[watcher.id]!.runAt)}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm text-cyan-50">
+                    {runResults[watcher.id]!.followUp?.actionProposal
+                      ? t("watchers.result.followUpCreated")
+                      : t("watchers.result.briefUpdated")}
+                  </p>
+                  {runResults[watcher.id]!.followUp ? (
+                    <div className="mt-2 space-y-2">
+                      <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono uppercase tracking-[0.2em] text-cyan-100/70">
+                        <span className="rounded border border-white/10 px-2 py-0.5">
+                          {t(`notifications.severity.${runResults[watcher.id]!.followUp!.severity}` as never)}
+                        </span>
+                        <span className="rounded border border-white/10 px-2 py-0.5">
+                          {t("watchers.result.score")} {runResults[watcher.id]!.followUp!.score}
+                        </span>
+                      </div>
+                      <p className="text-xs leading-5 text-cyan-100/85">
+                        {runResults[watcher.id]!.followUp!.summary}
+                      </p>
+                      {formatWorldModelDeltaSummary(runResults[watcher.id]!.followUp, t) ? (
+                        <p className="text-[11px] leading-5 text-cyan-200/75">
+                          {formatWorldModelDeltaSummary(runResults[watcher.id]!.followUp, t)}
+                        </p>
+                      ) : null}
+                      {runResults[watcher.id]!.followUp!.reasons.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {runResults[watcher.id]!.followUp!.reasons.map((reason) => (
+                            <span
+                              key={reason}
+                              className="rounded border border-white/10 bg-black/20 px-2 py-0.5 text-[10px] text-cyan-100/75"
+                            >
+                              {formatChangeReason(reason)}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-xs text-cyan-100/75">{t("watchers.result.noFollowUp")}</p>
+                  )}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Link
+                      href={buildDossierHref(runResults[watcher.id]!.dossierId)}
+                      data-testid={`watcher-open-brief-${watcher.id}`}
+                      className="inline-flex items-center rounded border border-cyan-400/35 px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.24em] text-cyan-100 hover:border-cyan-300/55"
+                    >
+                      {t("assistant.openDossier")}
+                    </Link>
+                    {runResults[watcher.id]!.followUp?.actionProposal ? (
+                      <Link
+                        href={buildActionCenterHref(
+                          runResults[watcher.id]!.followUp!.session.id,
+                          runResults[watcher.id]!.followUp!.actionProposal?.id
+                        )}
+                        data-testid={`watcher-open-action-center-${watcher.id}`}
+                        className="inline-flex items-center rounded border border-white/15 px-3 py-1.5 text-[10px] font-mono uppercase tracking-[0.24em] text-white/75 hover:text-white"
+                      >
+                        {t("common.openActionCenter")}
+                      </Link>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
             </div>
           ))}
         </div>

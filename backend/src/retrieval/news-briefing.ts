@@ -9,26 +9,27 @@ export type NewsBriefingFact = {
   sourceUrls: string[];
 };
 
-type BriefingTopic = 'security' | 'economy' | 'policy' | 'technology' | 'disaster' | 'general';
+export type BriefingTopic = 'security' | 'economy' | 'policy' | 'technology' | 'disaster' | 'general';
+export type NewsBriefingQualityProfile = 'standard' | 'major' | 'major_with_war';
 
 type ExtractionShape = {
   facts?: Array<Record<string, unknown>>;
 };
 
 const MAJOR_NEWS_SIGNAL_PATTERN =
-  /(대통령|정부|전쟁|공격|협상|외교|제재|금리|인플레이션|시장|증시|경제|국방|ai|정책|선거|재난|earthquake|war|attack|sanction|economy|market|policy|government|diplomacy)/iu;
+  /(대통령|정부|전쟁|공격|협상|외교|제재|금리|인플레이션|시장|증시|경제|국방|인공지능|정책|선거|재난|earthquake|\bwar\b|\battack\b|\bsanctions?\b|\beconomy\b|\bmarkets?\b|\bpolicy\b|\bgovernment\b|\bdiplomacy\b|\bai\b)/iu;
 const MINOR_NEWS_SIGNAL_PATTERN =
-  /(오피스텔|매물|부동산|가십|연예|scandal|rumor|celebrity|hot tub|epstein)/iu;
+  /(오피스텔|매물|부동산|가십|연예|스캔들|살인|가해자|scandal|rumor|celebrity|hot tub|epstein|murder|killer|crime|trial|life support)/iu;
 const HANGUL_PREFIXED_LATIN_PATTERN = /([가-힣]{1,2})([A-Za-z][A-Za-z0-9-]{2,})([가-힣]{0,2})/gu;
 const URL_DATE_PATTERN = /\/(20\d{2})\/(0[1-9]|1[0-2])\/([0-2]\d|3[01])(?=\/|$)/u;
 const TOKEN_PATTERN = /[a-z0-9가-힣]{2,}/giu;
 const KOREAN_ALLOWED_LATIN_TOKENS = new Set(['openai', 'anthropic', 'ai', 'us', 'uk', 'eu', 'g7', 'g20', 'nato']);
 const TOPIC_PATTERNS: Record<Exclude<BriefingTopic, 'general'>, RegExp> = {
-  security: /(전쟁|공습|공격|미사일|국방|안보|tehran|iran|military|defense|attack|strike|missile|security)/iu,
-  economy: /(금리|물가|인플레이션|증시|시장|환율|경제|economy|inflation|market|stocks|rate)/iu,
-  policy: /(정부|대통령|선거|정책|법안|규제|협상|외교|제재|government|policy|election|regulation|diplomacy|sanction)/iu,
-  technology: /(인공지능|ai|openai|anthropic|technology|tech|반도체|모델)/iu,
-  disaster: /(지진|홍수|산불|태풍|재난|earthquake|flood|wildfire|storm|disaster)/iu
+  security: /(전쟁|공습|공격|미사일|국방|안보|tehran|iran|\bmilitary\b|\bdefense\b|\battack\b|\bstrike\b|\bmissile\b|\bsecurity\b)/iu,
+  economy: /(금리|물가|인플레이션|증시|시장|환율|경제|\beconomy\b|\binflation\b|\bmarkets?\b|\bstocks?\b|\brates?\b)/iu,
+  policy: /(정부|대통령|선거|정책|법안|규제|협상|외교|제재|\bgovernment\b|\bpolicy\b|\belection\b|\bregulation\b|\bdiplomacy\b|\bsanctions?\b)/iu,
+  technology: /(인공지능|반도체|모델|openai|anthropic|\bai\b|\btechnology\b|\btech\b|\bmodels?\b)/iu,
+  disaster: /(지진|홍수|산불|태풍|재난|\bearthquake\b|\bflood\b|\bwildfire\b|\bstorm\b|\bdisaster\b)/iu
 };
 const KNOWN_ENTITY_NORMALIZERS: Array<{ pattern: RegExp; replacement: string }> = [
   { pattern: /오픈아이/gu, replacement: 'OpenAI' },
@@ -474,26 +475,97 @@ function jaccard(left: Set<string>, right: Set<string>): number {
   return union > 0 ? intersection / union : 0;
 }
 
+function detectFactTopic(fact: NewsBriefingFact): BriefingTopic {
+  return detectBriefingTopic(`${fact.headline} ${fact.summary} ${fact.whyItMatters ?? ''}`);
+}
+
+type CoverageTargets = {
+  targetTopicCoverage: number;
+  targetNonSecurityCoverage: number;
+  securityCap: number;
+  perDomainLimit: number;
+  perTopicLimit: number;
+};
+
+function countNonSecurityTopics(topicCounts: Map<BriefingTopic, number>): number {
+  let total = 0;
+  for (const [topic, count] of topicCounts.entries()) {
+    if (count <= 0) continue;
+    if (topic !== 'security' && topic !== 'general') {
+      total += 1;
+    }
+  }
+  return total;
+}
+
+function buildCoverageTargets(
+  profile: NewsBriefingQualityProfile,
+  availableTopics: Set<BriefingTopic>,
+  maxFacts: number
+): CoverageTargets {
+  const availableNonSecurity = Array.from(availableTopics).filter((topic) => topic !== 'security' && topic !== 'general').length;
+
+  if (profile === 'major') {
+    return {
+      targetTopicCoverage: Math.min(Math.max(3, Math.min(availableTopics.size, 4)), maxFacts),
+      targetNonSecurityCoverage: Math.min(Math.max(2, Math.min(availableNonSecurity, 3)), maxFacts),
+      securityCap: 1,
+      perDomainLimit: 2,
+      perTopicLimit: 2
+    };
+  }
+
+  if (profile === 'major_with_war') {
+    return {
+      targetTopicCoverage: Math.min(Math.max(3, Math.min(availableTopics.size, 4)), maxFacts),
+      targetNonSecurityCoverage: Math.min(Math.max(1, Math.min(availableNonSecurity, 2)), maxFacts),
+      securityCap: 2,
+      perDomainLimit: 2,
+      perTopicLimit: 2
+    };
+  }
+
+  return {
+    targetTopicCoverage: Math.min(Math.max(1, availableTopics.size), 3, maxFacts),
+    targetNonSecurityCoverage: 0,
+    securityCap: 2,
+    perDomainLimit: 2,
+    perTopicLimit: 2
+  };
+}
+
 function selectDiverseFacts(
   rows: Array<{ fact: NewsBriefingFact; score: number }>,
   sourceByUrl: Map<string, GroundingSource>,
-  maxFacts: number
+  maxFacts: number,
+  profile: NewsBriefingQualityProfile = 'standard'
 ): NewsBriefingFact[] {
-  const perDomainLimit = 2;
   const selected: NewsBriefingFact[] = [];
   const selectedTokens: Set<string>[] = [];
   const domainCounts = new Map<string, number>();
+  const topicCounts = new Map<BriefingTopic, number>();
+  const selectedIndexes = new Set<number>();
 
   const domains = new Set(rows.map((row) => primarySourceDomain(row.fact, sourceByUrl)).filter(Boolean));
-  const targetDomainCoverage = Math.min(domains.size, 2, maxFacts);
+  const topics = new Set(rows.map((row) => detectFactTopic(row.fact)));
+  const targets = buildCoverageTargets(profile, topics, maxFacts);
+  const targetDomainCoverage = Math.min(domains.size, profile === 'standard' ? 2 : 3, maxFacts);
 
   const canSelect = (fact: NewsBriefingFact): boolean => {
     const factDomain = primarySourceDomain(fact, sourceByUrl);
     if (factDomain) {
       const count = domainCounts.get(factDomain) ?? 0;
-      if (count >= perDomainLimit) {
+      if (count >= targets.perDomainLimit) {
         return false;
       }
+    }
+    const factTopic = detectFactTopic(fact);
+    const topicCount = topicCounts.get(factTopic) ?? 0;
+    if (topicCount >= targets.perTopicLimit) {
+      return false;
+    }
+    if (factTopic === 'security' && topicCount >= targets.securityCap) {
+      return false;
     }
     const currentTokens = tokenize(`${fact.headline} ${fact.summary}`);
     for (const existing of selectedTokens) {
@@ -504,62 +576,173 @@ function selectDiverseFacts(
     return true;
   };
 
-  for (const row of rows) {
-    if (selected.length >= targetDomainCoverage) {
-      break;
-    }
+  const applySelection = (row: { fact: NewsBriefingFact }, rowIndex: number) => {
     const factDomain = primarySourceDomain(row.fact, sourceByUrl);
-    if (!factDomain || (domainCounts.get(factDomain) ?? 0) > 0) {
-      continue;
-    }
-    if (!canSelect(row.fact)) {
-      continue;
-    }
+    const factTopic = detectFactTopic(row.fact);
     selected.push(row.fact);
-    selectedTokens.push(tokenize(`${row.fact.headline} ${row.fact.summary}`));
-    domainCounts.set(factDomain, (domainCounts.get(factDomain) ?? 0) + 1);
-  }
-
-  for (const row of rows) {
-    if (selected.length >= maxFacts) {
-      break;
-    }
-    if (selected.some((item) => item === row.fact)) {
-      continue;
-    }
-    if (!canSelect(row.fact)) {
-      continue;
-    }
-    const factDomain = primarySourceDomain(row.fact, sourceByUrl);
-    selected.push(row.fact);
+    selectedIndexes.add(rowIndex);
     selectedTokens.push(tokenize(`${row.fact.headline} ${row.fact.summary}`));
     if (factDomain) {
       domainCounts.set(factDomain, (domainCounts.get(factDomain) ?? 0) + 1);
     }
+    topicCounts.set(factTopic, (topicCounts.get(factTopic) ?? 0) + 1);
+  };
+
+  while (selected.length < Math.min(maxFacts, rows.length)) {
+    let bestIndex = -1;
+    let bestScore = Number.NEGATIVE_INFINITY;
+
+    for (const [index, row] of rows.entries()) {
+      if (selectedIndexes.has(index) || !canSelect(row.fact)) {
+        continue;
+      }
+
+      const factDomain = primarySourceDomain(row.fact, sourceByUrl);
+      const factTopic = detectFactTopic(row.fact);
+      const hasDomainCoverage = factDomain ? (domainCounts.get(factDomain) ?? 0) > 0 : true;
+      const hasTopicCoverage = (topicCounts.get(factTopic) ?? 0) > 0;
+      const securityCount = topicCounts.get('security') ?? 0;
+      const nonSecurityCount = countNonSecurityTopics(topicCounts);
+      let candidateScore = row.score;
+
+      if (!hasDomainCoverage && domainCounts.size < targetDomainCoverage) {
+        candidateScore += 0.24;
+      }
+      if (!hasTopicCoverage && topicCounts.size < targets.targetTopicCoverage) {
+        candidateScore += 0.18;
+      }
+      if (
+        factTopic !== 'security' &&
+        factTopic !== 'general' &&
+        !hasTopicCoverage &&
+        nonSecurityCount < targets.targetNonSecurityCoverage
+      ) {
+        candidateScore += 0.18;
+      }
+      if (factTopic === 'general') {
+        candidateScore -= 0.03;
+      }
+      if (factTopic === 'security' && securityCount > 0 && topicCounts.size >= 2) {
+        candidateScore -= 0.08;
+      }
+      if (
+        profile !== 'standard' &&
+        factTopic === 'security' &&
+        nonSecurityCount < targets.targetNonSecurityCoverage &&
+        securityCount >= Math.max(1, targets.securityCap - 1)
+      ) {
+        candidateScore -= 0.18;
+      }
+      if (profile !== 'standard' && hasTopicCoverage && topicCounts.size < targets.targetTopicCoverage) {
+        candidateScore -= 0.06;
+      }
+
+      if (candidateScore > bestScore) {
+        bestScore = candidateScore;
+        bestIndex = index;
+      }
+    }
+
+    if (bestIndex === -1) {
+      break;
+    }
+
+    applySelection(rows[bestIndex]!, bestIndex);
   }
 
   return selected.slice(0, maxFacts);
 }
 
-function selectDiverseSources(sources: GroundingSource[], maxFacts: number): GroundingSource[] {
+function selectDiverseSources(
+  sources: GroundingSource[],
+  maxFacts: number,
+  profile: NewsBriefingQualityProfile = 'standard'
+): GroundingSource[] {
   const selected: GroundingSource[] = [];
-  const counts = new Map<string, number>();
-  for (const source of sources) {
-    const domain = source.domain.toLowerCase();
-    const count = counts.get(domain) ?? 0;
-    if (count >= 2) {
-      continue;
+  const used = new Set<string>();
+  const domainCounts = new Map<string, number>();
+  const topicCounts = new Map<BriefingTopic, number>();
+  const availableTopics = new Set(sources.map((source) => detectBriefingTopic(`${source.title} ${source.snippet ?? ''} ${source.domain}`)));
+  const targets = buildCoverageTargets(profile, availableTopics, maxFacts);
+
+  while (selected.length < Math.min(maxFacts, sources.length)) {
+    let bestIndex = -1;
+    let bestScore = Number.NEGATIVE_INFINITY;
+
+    for (const [index, source] of sources.entries()) {
+      if (used.has(source.url)) {
+        continue;
+      }
+
+      const domain = source.domain.toLowerCase();
+      const topic = detectBriefingTopic(`${source.title} ${source.snippet ?? ''} ${source.domain}`);
+      const domainCount = domainCounts.get(domain) ?? 0;
+      const topicCount = topicCounts.get(topic) ?? 0;
+      if (domainCount >= targets.perDomainLimit) {
+        continue;
+      }
+      if (topicCount >= targets.perTopicLimit) {
+        continue;
+      }
+      if (topic === 'security' && topicCount >= targets.securityCap) {
+        continue;
+      }
+
+      const hasDomainCoverage = domainCount > 0;
+      const hasTopicCoverage = topicCount > 0;
+      const nonSecurityCount = countNonSecurityTopics(topicCounts);
+      const securityCount = topicCounts.get('security') ?? 0;
+      let candidateScore = sources.length - index;
+
+      if (!hasDomainCoverage && domainCounts.size < Math.min(profile === 'standard' ? 2 : 3, maxFacts)) {
+        candidateScore += 5;
+      }
+      if (!hasTopicCoverage && topicCounts.size < targets.targetTopicCoverage) {
+        candidateScore += 6;
+      }
+      if (
+        topic !== 'security' &&
+        topic !== 'general' &&
+        !hasTopicCoverage &&
+        nonSecurityCount < targets.targetNonSecurityCoverage
+      ) {
+        candidateScore += 5;
+      }
+      if (topic === 'general' && topicCounts.size < targets.targetTopicCoverage) {
+        candidateScore -= 2;
+      }
+      if (
+        profile !== 'standard' &&
+        topic === 'security' &&
+        nonSecurityCount < targets.targetNonSecurityCoverage &&
+        securityCount >= Math.max(1, targets.securityCap - 1)
+      ) {
+        candidateScore -= 5;
+      }
+
+      if (candidateScore > bestScore) {
+        bestScore = candidateScore;
+        bestIndex = index;
+      }
     }
-    selected.push(source);
-    counts.set(domain, count + 1);
-    if (selected.length >= maxFacts) {
+
+    if (bestIndex === -1) {
       break;
     }
+
+    const selectedSource = sources[bestIndex]!;
+    const domain = selectedSource.domain.toLowerCase();
+    const topic = detectBriefingTopic(`${selectedSource.title} ${selectedSource.snippet ?? ''} ${selectedSource.domain}`);
+    selected.push(selectedSource);
+    used.add(selectedSource.url);
+    domainCounts.set(domain, (domainCounts.get(domain) ?? 0) + 1);
+    topicCounts.set(topic, (topicCounts.get(topic) ?? 0) + 1);
   }
+
   return selected;
 }
 
-function detectBriefingTopic(value: string): BriefingTopic {
+export function detectBriefingTopic(value: string): BriefingTopic {
   for (const [topic, pattern] of Object.entries(TOPIC_PATTERNS) as Array<[Exclude<BriefingTopic, 'general'>, RegExp]>) {
     if (pattern.test(value)) {
       return topic;
@@ -625,14 +808,16 @@ export function buildFallbackNewsFactsFromSources(input: {
   sources: GroundingSource[];
   expectedLanguage: ResponseLanguage | null;
   maxFacts?: number;
+  qualityProfile?: NewsBriefingQualityProfile;
 }): NewsBriefingFact[] {
   const maxFacts = Math.max(1, Math.min(input.maxFacts ?? 5, 8));
-  const selectedSources = selectDiverseSources(input.sources, maxFacts);
+  const selectedSources = selectDiverseSources(input.sources, maxFacts, input.qualityProfile ?? 'standard');
   const english = input.expectedLanguage === 'en';
   const facts: NewsBriefingFact[] = [];
   for (const [index, source] of selectedSources.entries()) {
     const title = sanitizeVisibleText(source.title || source.domain);
     const snippet = sanitizeVisibleText(source.snippet ?? '');
+    const sourceName = source.domain.replace(/^www\./iu, '');
     const date = inferDateFromUrl(source.url) ?? (source.publishedAt ? source.publishedAt.slice(0, 10) : undefined);
     const topic = detectBriefingTopic(`${title} ${snippet} ${source.domain}`);
     const label = topicLabel(topic, english);
@@ -640,8 +825,10 @@ export function buildFallbackNewsFactsFromSources(input: {
     const koHeadline = `[${label}] ${koHeadlineBase}`;
     const koSummary = snippet && hangulRatio(snippet) >= 0.25
       ? truncateText(snippet, 220)
-      : `[${label}] 영문 보도 기반 핵심 업데이트입니다. 기사 제목: "${title}".`;
-    const enSummary = snippet ? truncateText(snippet, 260) : `[${label}] Key update from source report: "${title}".`;
+      : `${sourceName} 보도를 기준으로 ${truncateText(title || '핵심 이슈', 96)} 관련 새 업데이트가 확인됐습니다. 세부 내용은 원문 확인이 필요합니다.`;
+    const enSummary = snippet
+      ? truncateText(snippet, 260)
+      : `${sourceName} reports a new update related to ${truncateText(title || 'this issue', 96)}. Check the source for details.`;
 
     facts.push({
       headline: english ? `[${label}] ${title || `Major update ${index + 1}`}` : koHeadline,
@@ -659,8 +846,10 @@ export function ensureFactDomainCoverage(input: {
   sources: GroundingSource[];
   expectedLanguage: ResponseLanguage | null;
   maxFacts?: number;
+  qualityProfile?: NewsBriefingQualityProfile;
 }): NewsBriefingFact[] {
   const maxFacts = Math.max(1, Math.min(input.maxFacts ?? 5, 8));
+  const qualityProfile = input.qualityProfile ?? 'standard';
   const sourceByUrl = new Map<string, GroundingSource>();
   for (const source of input.sources) {
     const normalized = normalizeUrl(source.url);
@@ -673,44 +862,60 @@ export function ensureFactDomainCoverage(input: {
   const factDomains = new Set(currentFacts.map((fact) => primarySourceDomain(fact, sourceByUrl)).filter(Boolean));
   const sourceDomains = new Set(input.sources.map((source) => source.domain.toLowerCase()).filter(Boolean));
 
-  if (sourceDomains.size < 2 || factDomains.size >= 2 || currentFacts.length >= maxFacts) {
-    return currentFacts;
-  }
-
-  const missingDomains = new Set(Array.from(sourceDomains).filter((domain) => !factDomains.has(domain)));
-  if (missingDomains.size === 0) {
-    return currentFacts;
-  }
-
-  const supplemental = buildFallbackNewsFactsFromSources({
-    sources: input.sources.filter((source) => missingDomains.has(source.domain.toLowerCase())),
-    expectedLanguage: input.expectedLanguage,
-    maxFacts
-  });
-
   const merged = [...currentFacts];
-  const addedDomains = new Set<string>();
-  for (const fact of supplemental) {
-    if (merged.length >= maxFacts) {
-      break;
-    }
-    const key = fact.sourceUrls[0];
-    if (!key) {
-      continue;
-    }
-    const factDomain = primarySourceDomain(fact, sourceByUrl);
-    if (factDomain && addedDomains.has(factDomain)) {
-      continue;
-    }
-    if (merged.some((existing) => existing.sourceUrls[0] === key)) {
-      continue;
-    }
-    merged.push(fact);
-    if (factDomain) {
-      addedDomains.add(factDomain);
-      if (addedDomains.size >= missingDomains.size) {
+
+  const addSupplementalFacts = (supplementalSources: GroundingSource[]) => {
+    const supplemental = buildFallbackNewsFactsFromSources({
+      sources: supplementalSources,
+      expectedLanguage: input.expectedLanguage,
+      maxFacts,
+      qualityProfile
+    });
+
+    for (const fact of supplemental) {
+      if (merged.length >= maxFacts) {
         break;
       }
+      const key = fact.sourceUrls[0];
+      if (!key || merged.some((existing) => existing.sourceUrls[0] === key)) {
+        continue;
+      }
+      merged.push(fact);
+    }
+  };
+
+  if (sourceDomains.size >= 2 && factDomains.size < 2 && merged.length < maxFacts) {
+    const missingDomains = new Set(Array.from(sourceDomains).filter((domain) => !factDomains.has(domain)));
+    if (missingDomains.size > 0) {
+      addSupplementalFacts(input.sources.filter((source) => missingDomains.has(source.domain.toLowerCase())));
+    }
+  }
+
+  if (qualityProfile !== 'standard' && merged.length < maxFacts) {
+    const currentTopics = new Set(merged.map((fact) => detectFactTopic(fact)));
+    const availableTopics = new Set(
+      input.sources.map((source) => detectBriefingTopic(`${source.title} ${source.snippet ?? ''} ${source.domain}`))
+    );
+    const targets = buildCoverageTargets(qualityProfile, availableTopics, maxFacts);
+    const currentNonSecurity = countNonSecurityTopics(
+      merged.reduce((map, fact) => {
+        const topic = detectFactTopic(fact);
+        map.set(topic, (map.get(topic) ?? 0) + 1);
+        return map;
+      }, new Map<BriefingTopic, number>())
+    );
+
+    const needsTopicCoverage =
+      currentTopics.size < targets.targetTopicCoverage || currentNonSecurity < targets.targetNonSecurityCoverage;
+    if (needsTopicCoverage) {
+      const missingTopicSources = input.sources.filter((source) => {
+        const topic = detectBriefingTopic(`${source.title} ${source.snippet ?? ''} ${source.domain}`);
+        if (qualityProfile === 'major' && topic === 'security' && currentNonSecurity < targets.targetNonSecurityCoverage) {
+          return false;
+        }
+        return !currentTopics.has(topic) || (topic !== 'security' && topic !== 'general' && currentNonSecurity < targets.targetNonSecurityCoverage);
+      });
+      addSupplementalFacts(missingTopicSources);
     }
   }
 

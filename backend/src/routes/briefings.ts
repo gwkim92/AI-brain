@@ -3,6 +3,9 @@ import { z } from 'zod';
 
 import { generateResearchArtifact, inferResearchStrictness } from '../jarvis/research';
 import { sendError, sendSuccess } from '../lib/http';
+import { buildWorldModelState } from '../world-model/state-model';
+import { buildHypothesisLedger } from '../world-model/hypothesis-ledger';
+import { persistWorldModelProjection } from '../world-model/persistence';
 import type { RouteContext } from './types';
 
 const BriefingListSchema = z.object({
@@ -61,6 +64,44 @@ export async function briefingRoutes(app: FastifyInstance, ctx: RouteContext) {
       sourceCount: artifact.sources.length,
       qualityJson: artifact.quality
     });
-    return sendSuccess(reply, request, 201, briefing);
+    await persistWorldModelProjection({
+      store,
+      userId,
+      briefingId: briefing.id,
+      extraction: artifact.worldModelExtraction,
+      origin: 'briefing_generate',
+    });
+    const worldModelState = buildWorldModelState({ extraction: artifact.worldModelExtraction });
+    const worldModelLedger = buildHypothesisLedger({
+      extraction: artifact.worldModelExtraction,
+      state: worldModelState,
+    });
+    return sendSuccess(reply, request, 201, {
+      ...briefing,
+      world_model: {
+        state_snapshot: {
+          generated_at: worldModelState.generatedAt,
+          dominant_signals: worldModelState.dominantSignals,
+          variables: Object.fromEntries(
+            Object.entries(worldModelState.variables).map(([key, value]) => [
+              key,
+              {
+                score: value.score,
+                direction: value.direction,
+                drivers: value.drivers,
+              },
+            ])
+          ),
+          notes: worldModelState.notes,
+        },
+        hypotheses: worldModelLedger.map((hypothesis) => ({
+          thesis: hypothesis.thesis,
+          stance: hypothesis.stance,
+          confidence: hypothesis.confidence,
+          status: hypothesis.status,
+          summary: hypothesis.summary,
+        })),
+      },
+    });
   });
 }

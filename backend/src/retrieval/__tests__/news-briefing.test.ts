@@ -167,4 +167,43 @@ describe('news briefing helpers', () => {
     expect(diversified.length).toBeGreaterThanOrEqual(2);
     expect(diversified.some((fact) => fact.sourceUrls[0]?.includes('bbc.com'))).toBe(true);
   });
+
+  it('prioritizes non-security topic coverage for major-news fallback facts', () => {
+    const fallback = buildFallbackNewsFactsFromSources({
+      sources: [
+        {
+          url: 'https://www.reuters.com/world/europe/sanctions',
+          title: 'EU agrees on new sanctions package',
+          domain: 'www.reuters.com',
+          snippet: 'Officials said the sanctions package would tighten strategic export controls.'
+        },
+        {
+          url: 'https://www.bbc.com/news/business-12345678',
+          title: 'Central bank signals pause on rate hikes',
+          domain: 'www.bbc.com',
+          snippet: 'Markets rallied after policymakers signaled a pause in rate moves.'
+        },
+        {
+          url: 'https://www.nytimes.com/2026/03/07/technology/ai-chip-race.html',
+          title: 'AI chip race intensifies as new model launches',
+          domain: 'www.nytimes.com',
+          snippet: 'Technology companies accelerated model releases and chip investment plans.'
+        },
+        {
+          url: 'https://www.ft.com/content/conflict-update',
+          title: 'Regional forces exchange fire near disputed border',
+          domain: 'www.ft.com',
+          snippet: 'Security forces exchanged fire as tensions remained elevated overnight.'
+        }
+      ],
+      expectedLanguage: 'ko',
+      maxFacts: 4,
+      qualityProfile: 'major'
+    });
+
+    const topics = new Set(fallback.map((fact) => fact.headline));
+    expect(topics.size).toBeGreaterThanOrEqual(3);
+    expect(fallback.some((fact) => fact.sourceUrls[0]?.includes('bbc.com'))).toBe(true);
+    expect(fallback.some((fact) => fact.sourceUrls[0]?.includes('nytimes.com'))).toBe(true);
+  });
 });

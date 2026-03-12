@@ -10,6 +10,12 @@ describe('language-policy', () => {
     expect(policy.instruction).toContain('Respond strictly in Korean');
   });
 
+  it('keeps korean for mixed prompts that include english entity names', () => {
+    expect(detectPromptLanguage('openai codex repo 조사해줘')).toBe('ko');
+    const policy = buildLanguageSystemInstruction('openai codex repo 조사해줘');
+    expect(policy.expectedLanguage).toBe('ko');
+  });
+
   it('flags alignment failure when korean prompt returns english-heavy output', () => {
     const result = evaluateLanguageAlignment(
       'ko',

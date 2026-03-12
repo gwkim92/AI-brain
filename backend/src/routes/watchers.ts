@@ -114,7 +114,8 @@ export async function watcherRoutes(app: FastifyInstance, ctx: RouteContext) {
         watcher,
         run: result.run,
         briefing: result.briefing,
-        dossier: result.dossier
+        dossier: result.dossier,
+        follow_up: result.followUp
       });
     } catch (error) {
       const failedRun = await store.listWatcherRuns({

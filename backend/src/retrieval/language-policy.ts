@@ -98,6 +98,13 @@ function scoreAlignment(language: ResponseLanguage, counts: ScriptCounts): numbe
 export function detectPromptLanguage(prompt: string): ResponseLanguage {
   const text = stripNoisySegments(prompt);
   const counts = countScripts(text);
+  const total = counts.hangul + counts.kana + counts.han + counts.latin;
+  if (counts.hangul >= 2 && total > 0) {
+    const hangulShare = counts.hangul / total;
+    if (hangulShare >= 0.18) {
+      return 'ko';
+    }
+  }
   return dominantLanguageFromCounts(counts);
 }
 

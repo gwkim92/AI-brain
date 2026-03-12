@@ -3,6 +3,9 @@ import { z } from 'zod';
 
 import { generateResearchArtifact, inferResearchStrictness } from '../jarvis/research';
 import { sendError, sendSuccess } from '../lib/http';
+import { buildDossierWorldModel } from '../world-model/dossier';
+import { recordWorldModelProjectionOutcomes } from '../world-model/outcomes';
+import { persistWorldModelProjection } from '../world-model/persistence';
 import type { RouteContext } from './types';
 
 const DossierListSchema = z.object({
@@ -41,7 +44,12 @@ export async function dossierRoutes(app: FastifyInstance, ctx: RouteContext) {
       store.listDossierSources({ userId, dossierId, limit: 100 }),
       store.listDossierClaims({ userId, dossierId, limit: 100 })
     ]);
-    return sendSuccess(reply, request, 200, { dossier, sources, claims });
+    const worldModel = buildDossierWorldModel({
+      dossier,
+      sources,
+      claims,
+    });
+    return sendSuccess(reply, request, 200, { dossier, sources, claims, world_model: worldModel });
   });
 
   app.post('/api/v1/dossiers/:dossierId/refresh', async (request, reply) => {
@@ -77,7 +85,34 @@ export async function dossierRoutes(app: FastifyInstance, ctx: RouteContext) {
     if (!updated) return sendError(reply, request, 404, 'NOT_FOUND', 'dossier not found');
     await store.replaceDossierSources({ userId, dossierId, sources: artifact.sources });
     await store.replaceDossierClaims({ userId, dossierId, claims: artifact.claims });
-    return sendSuccess(reply, request, 200, updated);
+    await recordWorldModelProjectionOutcomes({
+      store,
+      userId,
+      dossierId,
+      extraction: artifact.worldModelExtraction,
+      evaluatedAt: updated.updatedAt,
+      now: updated.updatedAt,
+    });
+    await persistWorldModelProjection({
+      store,
+      userId,
+      dossierId,
+      briefingId: updated.briefingId,
+      extraction: artifact.worldModelExtraction,
+      origin: 'dossier_refresh',
+      snapshotTarget: {
+        targetType: 'dossier',
+        targetId: dossierId,
+      },
+    });
+    const sources = await store.listDossierSources({ userId, dossierId, limit: 100 });
+    const claims = await store.listDossierClaims({ userId, dossierId, limit: 100 });
+    const worldModel = buildDossierWorldModel({
+      dossier: updated,
+      sources,
+      claims,
+    });
+    return sendSuccess(reply, request, 200, { ...updated, world_model: worldModel });
   });
 
   app.post('/api/v1/dossiers/:dossierId/export', async (request, reply) => {

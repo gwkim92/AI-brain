@@ -9,6 +9,18 @@ import { exportDossier, getDossier, listDossiers, refreshDossier } from "@/lib/a
 import type { DossierDetail, DossierRecord } from "@/lib/api/types";
 import { useLocale } from "@/components/providers/LocaleProvider";
 import { MarkdownLite } from "@/components/ui/MarkdownLite";
+import {
+  describeResearchProfile,
+  describeResearchProfileReason,
+  describeResearchFormatHint,
+  describeResearchQualityMode,
+  readResearchFormatHint,
+  readResearchProfile,
+  readResearchProfileReasons,
+  readResearchQualityMode,
+  resolveResearchWarningLabels,
+  summarizeResearchQualityDimensions,
+} from "@/lib/research-quality";
 
 type ParsedQuality = {
   sourceCount: number | null;
@@ -18,10 +30,23 @@ type ParsedQuality = {
   citationCoverage: number | null;
   qualityGatePassed: boolean | null;
   softWarnings: string[];
+  softWarningCodes: string[];
   topDomains: Array<{ domain: string; count: number }>;
 };
 
 type SourceFreshnessTone = "recent" | "stale" | "unknown";
+
+function formatFreshnessLabel(
+  value: string | null,
+  t: ReturnType<typeof useLocale>["t"]
+): string {
+  if (!value) return "-";
+  if (value === "recent") return t("dossier.freshness.recent");
+  if (value === "stale") return t("dossier.freshness.stale");
+  if (value === "unknown") return t("dossier.freshness.unknown");
+  if (value === "mixed") return t("dossier.freshness.mixed");
+  return value;
+}
 
 function toNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -48,6 +73,9 @@ function parseQualityJson(record: Record<string, unknown>): ParsedQuality {
     qualityGatePassed: typeof record.quality_gate_passed === "boolean" ? record.quality_gate_passed : null,
     softWarnings: Array.isArray(record.soft_warnings)
       ? record.soft_warnings.filter((entry): entry is string => typeof entry === "string")
+      : [],
+    softWarningCodes: Array.isArray(record.soft_warning_codes)
+      ? record.soft_warning_codes.filter((entry): entry is string => typeof entry === "string")
       : [],
     topDomains,
   };
@@ -81,6 +109,58 @@ function formatRelativeAge(value: string, t: ReturnType<typeof useLocale>["t"]):
   return t("tasks.relative.daysAgo", { value: Math.floor(deltaMs / 86_400_000) });
 }
 
+function worldModelSignalLabel(key: string, t: ReturnType<typeof useLocale>["t"]): string {
+  const labels: Record<string, string> = {
+    route_risk: t("dossier.worldModel.signal.routeRisk"),
+    freight_pressure: t("dossier.worldModel.signal.freightPressure"),
+    insurance_pressure: t("dossier.worldModel.signal.insurancePressure"),
+    contract_urgency: t("dossier.worldModel.signal.contractUrgency"),
+    inflation_passthrough_risk: t("dossier.worldModel.signal.inflationRisk"),
+    rate_repricing_pressure: t("dossier.worldModel.signal.ratePressure"),
+  };
+  return labels[key] ?? key.replace(/_/g, " ");
+}
+
+function worldModelStanceLabel(value: "primary" | "counter", t: ReturnType<typeof useLocale>["t"]): string {
+  return value === "primary" ? t("dossier.worldModel.stance.primary") : t("dossier.worldModel.stance.counter");
+}
+
+function worldModelStatusLabel(value: "active" | "weakened" | "invalidated", t: ReturnType<typeof useLocale>["t"]): string {
+  if (value === "active") return t("dossier.worldModel.status.active");
+  if (value === "weakened") return t("dossier.worldModel.status.weakened");
+  return t("dossier.worldModel.status.invalidated");
+}
+
+function worldModelStatusClass(value: "active" | "weakened" | "invalidated"): string {
+  if (value === "active") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+  if (value === "weakened") return "border-amber-500/30 bg-amber-500/10 text-amber-200";
+  return "border-rose-500/30 bg-rose-500/10 text-rose-200";
+}
+
+function invalidationStatusLabel(value: "pending" | "hit" | "missed", t: ReturnType<typeof useLocale>["t"]): string {
+  if (value === "pending") return t("dossier.worldModel.invalidation.pending");
+  if (value === "hit") return t("dossier.worldModel.invalidation.hit");
+  return t("dossier.worldModel.invalidation.missed");
+}
+
+function invalidationStatusClass(value: "pending" | "hit" | "missed"): string {
+  if (value === "pending") return "border-white/15 bg-white/5 text-white/70";
+  if (value === "hit") return "border-rose-500/30 bg-rose-500/10 text-rose-200";
+  return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+}
+
+function severityClass(value: "low" | "medium" | "high"): string {
+  if (value === "high") return "border-rose-500/30 bg-rose-500/10 text-rose-200";
+  if (value === "medium") return "border-amber-500/30 bg-amber-500/10 text-amber-200";
+  return "border-cyan-500/30 bg-cyan-500/10 text-cyan-200";
+}
+
+function relationLabel(value: "supports" | "contradicts" | "context", t: ReturnType<typeof useLocale>["t"]): string {
+  if (value === "supports") return t("dossier.worldModel.relation.supports");
+  if (value === "contradicts") return t("dossier.worldModel.relation.contradicts");
+  return t("dossier.worldModel.relation.context");
+}
+
 export function DossierModule() {
   const { t, formatDateTime } = useLocale();
   const searchParams = useSearchParams();
@@ -101,7 +181,7 @@ export function DossierModule() {
       setDossiers(result.dossiers);
       const requestedId = searchParams.get("dossier");
       setSelectedId((current) => {
-        if (requestedId && result.dossiers.some((item) => item.id === requestedId)) {
+        if (requestedId) {
           return requestedId;
         }
         return current ?? result.dossiers[0]?.id ?? null;
@@ -149,15 +229,61 @@ export function DossierModule() {
     const requestedId = searchParams.get("dossier");
     if (!requestedId) return;
     if (requestedId === selectedId) return;
-    if (dossiers.some((item) => item.id === requestedId)) {
-      setSelectedId(requestedId);
-    }
+    setSelectedId(requestedId);
   }, [dossiers, searchParams, selectedId]);
+
+  useEffect(() => {
+    if (!detail) {
+      return;
+    }
+    setDossiers((current) => {
+      if (current.some((item) => item.id === detail.dossier.id)) {
+        return current.map((item) => (item.id === detail.dossier.id ? detail.dossier : item));
+      }
+      return [detail.dossier, ...current];
+    });
+  }, [detail]);
 
   const selected = useMemo(() => dossiers.find((item) => item.id === selectedId) ?? null, [dossiers, selectedId]);
   const quality = useMemo(
     () => (detail ? parseQualityJson(detail.dossier.qualityJson) : null),
     [detail]
+  );
+  const localizedQualityWarnings = useMemo(
+    () => (detail ? resolveResearchWarningLabels({ record: detail.dossier.qualityJson, t }) : []),
+    [detail, t]
+  );
+  const dossierResearchProfile = useMemo(
+    () => (detail ? readResearchProfile(detail.dossier.qualityJson) : null),
+    [detail]
+  );
+  const dossierProfileReasons = useMemo(
+    () => (detail ? readResearchProfileReasons(detail.dossier.qualityJson).map((reason) => describeResearchProfileReason(t, reason)) : []),
+    [detail, t]
+  );
+  const dossierFormatHint = useMemo(
+    () => (detail ? readResearchFormatHint(detail.dossier.qualityJson) : null),
+    [detail]
+  );
+  const dossierQualityMode = useMemo(
+    () => (detail ? readResearchQualityMode(detail.dossier.qualityJson) : null),
+    [detail]
+  );
+  const dossierDimensionLines = useMemo(
+    () =>
+      detail
+        ? summarizeResearchQualityDimensions({
+            profile: dossierResearchProfile,
+            dimensions:
+              detail.dossier.qualityJson?.quality_dimensions &&
+              typeof detail.dossier.qualityJson.quality_dimensions === "object" &&
+              !Array.isArray(detail.dossier.qualityJson.quality_dimensions)
+                ? (detail.dossier.qualityJson.quality_dimensions as Record<string, unknown>)
+                : null,
+            t,
+          })
+        : [],
+    [detail, dossierResearchProfile, t]
   );
   const conflictCount = useMemo(() => {
     if (!detail) return null;
@@ -169,6 +295,21 @@ export function DossierModule() {
     const raw = detail.dossier.conflictsJson?.topics;
     return Array.isArray(raw) ? raw.filter((entry): entry is string => typeof entry === "string") : [];
   }, [detail]);
+  const worldModel = useMemo(() => detail?.world_model ?? null, [detail]);
+  const primaryHypotheses = useMemo(
+    () => worldModel?.hypotheses.filter((hypothesis) => hypothesis.stance === "primary") ?? [],
+    [worldModel]
+  );
+  const counterHypotheses = useMemo(
+    () => worldModel?.hypotheses.filter((hypothesis) => hypothesis.stance === "counter") ?? [],
+    [worldModel]
+  );
+  const worldModelSignals = useMemo(() => {
+    if (!worldModel) return [];
+    return Object.entries(worldModel.state_snapshot.variables)
+      .sort((left, right) => right[1].score - left[1].score)
+      .slice(0, 6);
+  }, [worldModel]);
   const sourceUsage = useMemo(() => {
     if (!detail) return new Map<string, number>();
     const counts = new Map<string, number>();
@@ -334,7 +475,7 @@ export function DossierModule() {
                 )}
                 {quality.freshnessBucket && (
                   <span className="rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono text-white/55">
-                    {t("dossier.badge.freshness", { value: quality.freshnessBucket })}
+                    {t("dossier.badge.freshness", { value: formatFreshnessLabel(quality.freshnessBucket, t) })}
                   </span>
                 )}
               </div>
@@ -360,7 +501,7 @@ export function DossierModule() {
                     </span>
                     {quality.freshnessBucket && (
                       <span className="rounded border border-white/10 px-2 py-0.5 text-[10px] font-mono text-white/60">
-                        {t("dossier.badge.freshness", { value: quality.freshnessBucket })}
+                        {t("dossier.badge.freshness", { value: formatFreshnessLabel(quality.freshnessBucket, t) })}
                       </span>
                     )}
                     {conflictCount !== null && (
@@ -370,6 +511,18 @@ export function DossierModule() {
                     )}
                   </div>
                   <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">
+                    <div className="rounded border border-white/10 bg-black/20 p-2">
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">{t("dossier.researchProfile")}</p>
+                      <p className="mt-1 text-sm text-white/90">{describeResearchProfile(t, dossierResearchProfile)}</p>
+                    </div>
+                    <div className="rounded border border-white/10 bg-black/20 p-2">
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">{t("dossier.researchQuality")}</p>
+                      <p className="mt-1 text-sm text-white/90">{describeResearchQualityMode(t, dossierQualityMode)}</p>
+                    </div>
+                    <div className="rounded border border-white/10 bg-black/20 p-2">
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">{t("dossier.researchFormat")}</p>
+                      <p className="mt-1 text-sm text-white/90">{describeResearchFormatHint(t, dossierFormatHint)}</p>
+                    </div>
                     <div className="rounded border border-white/10 bg-black/20 p-2">
                       <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">{t("dossier.quality.sources")}</p>
                       <p className="mt-1 text-sm text-white/90">{quality.sourceCount ?? "-"}</p>
@@ -389,16 +542,40 @@ export function DossierModule() {
                     </div>
                     <div className="rounded border border-white/10 bg-black/20 p-2">
                       <p className="text-[10px] uppercase tracking-[0.24em] text-white/45">{t("dossier.quality.freshness")}</p>
-                      <p className="mt-1 text-sm text-white/90">{quality.freshnessBucket ?? "-"}</p>
+                      <p className="mt-1 text-sm text-white/90">{formatFreshnessLabel(quality.freshnessBucket, t)}</p>
                     </div>
                   </div>
-                  {quality.softWarnings.length > 0 && (
+                  {dossierProfileReasons.length > 0 && (
+                    <div className="rounded border border-cyan-500/20 bg-cyan-500/5 p-3">
+                      <h4 className="text-[11px] font-mono tracking-widest text-cyan-300 mb-2">{t("dossier.profileReasons")}</h4>
+                      <div className="space-y-1">
+                        {dossierProfileReasons.map((reason) => (
+                          <p key={reason} className="text-xs text-cyan-100/80">
+                            - {reason}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {localizedQualityWarnings.length > 0 && (
                     <div className="rounded border border-amber-500/20 bg-amber-500/5 p-3">
                       <h4 className="text-[11px] font-mono tracking-widest text-amber-300 mb-2">{t("dossier.quality.warnings")}</h4>
                       <div className="space-y-1">
-                        {quality.softWarnings.map((warning) => (
+                        {localizedQualityWarnings.map((warning) => (
                           <p key={warning} className="text-xs text-amber-100/80">
                             - {warning}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {dossierDimensionLines.length > 0 && (
+                    <div className="rounded border border-white/10 bg-black/20 p-3">
+                      <h4 className="text-[11px] font-mono tracking-widest text-white/70 mb-2">{t("dossier.profileEvidenceSummary")}</h4>
+                      <div className="space-y-1">
+                        {dossierDimensionLines.map((line) => (
+                          <p key={line} className="text-xs text-white/75">
+                            - {line}
                           </p>
                         ))}
                       </div>
@@ -421,6 +598,211 @@ export function DossierModule() {
               <div className="rounded border border-white/10 bg-black/35 p-3">
                 <MarkdownLite content={detail.dossier.answerMarkdown} />
               </div>
+              {worldModel && (
+                <div className="rounded border border-cyan-500/20 bg-cyan-500/5 p-3 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h4 className="text-[11px] font-mono tracking-widest text-cyan-300">{t("dossier.worldModel.title")}</h4>
+                      <p className="mt-1 text-xs text-cyan-100/70">{t("dossier.worldModel.subtitle")}</p>
+                    </div>
+                    <span className="rounded border border-cyan-500/20 px-2 py-0.5 text-[10px] font-mono text-cyan-200">
+                      {t("dossier.badge.updated", { value: formatRelativeAge(worldModel.state_snapshot.generated_at, t) })}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 xl:grid-cols-3">
+                    {worldModelSignals.map(([key, value]) => (
+                      <div key={key} className="rounded border border-white/10 bg-black/20 p-2">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">
+                          {worldModelSignalLabel(key, t)}
+                        </p>
+                        <p className="mt-1 text-lg text-white/90">{Math.round(value.score * 100)}%</p>
+                        <p className="mt-1 text-[10px] font-mono text-white/45 line-clamp-2">
+                          {value.drivers[0] ?? t("common.none")}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+
+                  {worldModel.state_snapshot.notes.length > 0 && (
+                    <div className="rounded border border-white/10 bg-black/20 p-3">
+                      <h5 className="text-[11px] font-mono tracking-widest text-white/70 mb-2">{t("dossier.worldModel.notes")}</h5>
+                      <div className="space-y-1">
+                        {worldModel.state_snapshot.notes.map((note) => (
+                          <p key={note} className="text-xs text-white/75">- {note}</p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {worldModel.bottlenecks.length > 0 && (
+                    <div className="rounded border border-white/10 bg-black/20 p-3">
+                      <h5 className="text-[11px] font-mono tracking-widest text-white/70 mb-2">{t("dossier.worldModel.bottlenecks")}</h5>
+                      <div className="flex flex-wrap gap-2">
+                        {worldModel.bottlenecks.map((bottleneck) => (
+                          <div key={bottleneck.key} className="rounded border border-white/10 px-2 py-1">
+                            <p className="text-[10px] font-mono text-white/55">{worldModelSignalLabel(bottleneck.key, t)}</p>
+                            <p className="mt-1 text-sm text-white/90">{Math.round(bottleneck.score * 100)}%</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                    <div className="rounded border border-white/10 bg-black/20 p-3">
+                      <h5 className="text-[11px] font-mono tracking-widest text-cyan-300 mb-2">{t("dossier.worldModel.primaryHypotheses")}</h5>
+                      <div className="space-y-2">
+                        {primaryHypotheses.map((hypothesis) => (
+                          <div key={`${hypothesis.stance}-${hypothesis.thesis}`} className="rounded border border-white/10 p-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className={`rounded border px-2 py-0.5 text-[9px] font-mono ${worldModelStatusClass(hypothesis.status)}`}>
+                                {worldModelStatusLabel(hypothesis.status, t)}
+                              </span>
+                              <span className="rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono text-white/60">
+                                {worldModelStanceLabel(hypothesis.stance, t)}
+                              </span>
+                              <span className="rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono text-white/60">
+                                {t("dossier.worldModel.confidence", { value: Math.round(hypothesis.confidence * 100) })}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-sm text-white/90">{hypothesis.thesis}</p>
+                            <p className="mt-1 text-xs text-white/60">{hypothesis.summary}</p>
+                            {hypothesis.watch_state_keys.length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {hypothesis.watch_state_keys.map((key) => (
+                                  <span key={key} className="rounded border border-cyan-500/20 px-2 py-0.5 text-[10px] font-mono text-cyan-200">
+                                    {worldModelSignalLabel(key, t)}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {hypothesis.evidence.length > 0 && (
+                              <div className="mt-3 space-y-2">
+                                {hypothesis.evidence.slice(0, 2).map((evidence) => (
+                                  <div key={`${hypothesis.thesis}-${evidence.claim_text}`} className="rounded border border-white/10 bg-black/20 p-2">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className="rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono text-white/60">
+                                        {relationLabel(evidence.relation, t)}
+                                      </span>
+                                      <span className="rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono text-white/60">
+                                        {t("dossier.worldModel.weight", { value: evidence.weight.toFixed(2) })}
+                                      </span>
+                                    </div>
+                                    <p className="mt-2 text-xs text-white/80">{evidence.claim_text}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="rounded border border-white/10 bg-black/20 p-3">
+                      <h5 className="text-[11px] font-mono tracking-widest text-amber-300 mb-2">{t("dossier.worldModel.counterHypotheses")}</h5>
+                      <div className="space-y-2">
+                        {counterHypotheses.map((hypothesis) => (
+                          <div key={`${hypothesis.stance}-${hypothesis.thesis}`} className="rounded border border-white/10 p-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className={`rounded border px-2 py-0.5 text-[9px] font-mono ${worldModelStatusClass(hypothesis.status)}`}>
+                                {worldModelStatusLabel(hypothesis.status, t)}
+                              </span>
+                              <span className="rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono text-white/60">
+                                {worldModelStanceLabel(hypothesis.stance, t)}
+                              </span>
+                              <span className="rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono text-white/60">
+                                {t("dossier.worldModel.confidence", { value: Math.round(hypothesis.confidence * 100) })}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-sm text-white/90">{hypothesis.thesis}</p>
+                            <p className="mt-1 text-xs text-white/60">{hypothesis.summary}</p>
+                            {hypothesis.evidence.length > 0 && (
+                              <div className="mt-3 space-y-2">
+                                {hypothesis.evidence.slice(0, 2).map((evidence) => (
+                                  <div key={`${hypothesis.thesis}-${evidence.claim_text}`} className="rounded border border-white/10 bg-black/20 p-2">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className="rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono text-white/60">
+                                        {relationLabel(evidence.relation, t)}
+                                      </span>
+                                      <span className="rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono text-white/60">
+                                        {t("dossier.worldModel.weight", { value: evidence.weight.toFixed(2) })}
+                                      </span>
+                                    </div>
+                                    <p className="mt-2 text-xs text-white/80">{evidence.claim_text}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)] gap-3">
+                    <div className="rounded border border-white/10 bg-black/20 p-3">
+                      <h5 className="text-[11px] font-mono tracking-widest text-white/70 mb-2">{t("dossier.worldModel.invalidationTitle")}</h5>
+                      <div className="space-y-2">
+                        {worldModel.invalidation_conditions.map((condition) => (
+                          <div key={`${condition.hypothesis_thesis}-${condition.description}`} className="rounded border border-white/10 p-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className={`rounded border px-2 py-0.5 text-[9px] font-mono ${invalidationStatusClass(condition.observed_status)}`}>
+                                {invalidationStatusLabel(condition.observed_status, t)}
+                              </span>
+                              <span className={`rounded border px-2 py-0.5 text-[9px] font-mono ${severityClass(condition.severity)}`}>
+                                {condition.severity.toUpperCase()}
+                              </span>
+                              <span className="rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono text-white/60">
+                                {worldModelStanceLabel(condition.stance, t)}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-sm text-white/90">{condition.description}</p>
+                            {condition.expected_by ? (
+                              <p className="mt-1 text-[10px] font-mono text-white/50">
+                                {t("dossier.worldModel.expectedBy", { value: formatDateTime(condition.expected_by) })}
+                              </p>
+                            ) : null}
+                            {condition.matched_evidence.length > 0 && (
+                              <div className="mt-2 space-y-1">
+                                {condition.matched_evidence.slice(0, 2).map((evidence) => (
+                                  <p key={evidence} className="text-[10px] font-mono text-white/55">- {evidence}</p>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="rounded border border-white/10 bg-black/20 p-3">
+                      <h5 className="text-[11px] font-mono tracking-widest text-white/70 mb-2">{t("dossier.worldModel.nextSignals")}</h5>
+                      <div className="space-y-2">
+                        {worldModel.next_watch_signals.length > 0 ? (
+                          worldModel.next_watch_signals.map((signal) => (
+                            <div key={`${signal.stance}-${signal.description}`} className="rounded border border-white/10 p-3">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={`rounded border px-2 py-0.5 text-[9px] font-mono ${severityClass(signal.severity)}`}>
+                                  {signal.severity.toUpperCase()}
+                                </span>
+                                <span className="rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono text-white/60">
+                                  {worldModelStanceLabel(signal.stance, t)}
+                                </span>
+                              </div>
+                              <p className="mt-2 text-sm text-white/85">{signal.description}</p>
+                              {signal.expected_by ? (
+                                <p className="mt-1 text-[10px] font-mono text-white/50">
+                                  {t("dossier.worldModel.expectedBy", { value: formatDateTime(signal.expected_by) })}
+                                </p>
+                              ) : null}
+                            </div>
+                          ))
+                        ) : (
+                          <p className="text-xs text-white/55">{t("dossier.worldModel.nextSignalsEmpty")}</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] gap-3">
                 <div className="rounded border border-white/10 bg-black/35 p-3">
                   <h4 className="text-[11px] font-mono tracking-widest text-cyan-300 mb-2">{t("dossier.timeline.title")}</h4>
@@ -438,7 +820,7 @@ export function DossierModule() {
                         >
                           <div className="flex flex-wrap items-center gap-2">
                             <span className={`rounded border px-2 py-0.5 text-[9px] font-mono ${sourceFreshnessClass(freshness)}`}>
-                              {freshness}
+                              {formatFreshnessLabel(freshness, t)}
                             </span>
                             <span className="text-[10px] font-mono text-white/45">{source.publishedAt ? formatDateTime(source.publishedAt) : t("dossier.timeline.dateUnknown")}</span>
                           </div>
@@ -556,7 +938,7 @@ export function DossierModule() {
                         <div className="flex flex-wrap items-center gap-2">
                           <p className="text-sm text-white/90">{source.title}</p>
                           <span className={`rounded border px-2 py-0.5 text-[9px] font-mono ${sourceFreshnessClass(sourceFreshnessTone(source.publishedAt))}`}>
-                            {sourceFreshnessTone(source.publishedAt)}
+                            {formatFreshnessLabel(sourceFreshnessTone(source.publishedAt), t)}
                           </span>
                           <span className="rounded border border-white/10 px-2 py-0.5 text-[9px] font-mono text-white/55">
                             {t("dossier.sources.cited", { value: sourceUsage.get(source.url) ?? 0 })}

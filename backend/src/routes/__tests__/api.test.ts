@@ -373,6 +373,111 @@ describe('API routes', () => {
     await app.close();
   });
 
+  it('creates, searches, updates, and deletes memory notes', async () => {
+    const { app } = await buildServer();
+    const userId = 'aaaa1111-1111-4111-8111-111111111111';
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/memory/notes',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        kind: 'project_context',
+        title: '프로젝트 목표',
+        content: '배포 전에 리스크와 롤백 계획을 먼저 요약해야 한다.',
+        tags: ['deploy', 'risk'],
+        pinned: true
+      }
+    });
+    expect(create.statusCode).toBe(201);
+    const created = create.json() as {
+      data: { id: string; kind: string; title: string; pinned: boolean; tags: string[] };
+    };
+    expect(created.data.kind).toBe('project_context');
+    expect(created.data.pinned).toBe(true);
+
+    const summary = await app.inject({
+      method: 'GET',
+      url: '/api/v1/memory/summary?limit=5',
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(summary.statusCode).toBe(200);
+    const summaryBody = summary.json() as {
+      data: {
+        counts: { total: number; pinned: number; project_context: number };
+        pinned_notes: Array<{ id: string }>;
+      };
+    };
+    expect(summaryBody.data.counts.total).toBe(1);
+    expect(summaryBody.data.counts.pinned).toBe(1);
+    expect(summaryBody.data.counts.project_context).toBe(1);
+    expect(summaryBody.data.pinned_notes[0]?.id).toBe(created.data.id);
+
+    const context = await app.inject({
+      method: 'GET',
+      url: '/api/v1/memory/context?q=deploy risk&limit=5',
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(context.statusCode).toBe(200);
+    const contextBody = context.json() as {
+      data: {
+        notes: Array<{ id: string; title: string }>;
+      };
+    };
+    expect(contextBody.data.notes.map((note) => note.id)).toContain(created.data.id);
+
+    const update = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/memory/notes/${created.data.id}`,
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        pinned: false,
+        title: '프로젝트 목표 업데이트'
+      }
+    });
+    expect(update.statusCode).toBe(200);
+    const updateBody = update.json() as {
+      data: { id: string; pinned: boolean; title: string };
+    };
+    expect(updateBody.data.id).toBe(created.data.id);
+    expect(updateBody.data.pinned).toBe(false);
+    expect(updateBody.data.title).toBe('프로젝트 목표 업데이트');
+
+    const remove = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/memory/notes/${created.data.id}`,
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(remove.statusCode).toBe(200);
+
+    const afterDelete = await app.inject({
+      method: 'GET',
+      url: '/api/v1/memory/summary?limit=5',
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(afterDelete.statusCode).toBe(200);
+    const afterDeleteBody = afterDelete.json() as {
+      data: {
+        counts: { total: number };
+      };
+    };
+    expect(afterDeleteBody.data.counts.total).toBe(0);
+
+    await app.close();
+  });
+
   it('creates, updates, and lists assistant contexts with events', async () => {
     const { app } = await buildServer();
 
@@ -1911,6 +2016,16 @@ describe('API routes', () => {
             event_types: string[];
           };
         };
+        radar_policy?: {
+          control: {
+            autoExecutionEnabled: boolean;
+            globalKillSwitch: boolean;
+          };
+          domain_pack_metrics: Array<{
+            domainId: string;
+            calibrationScore: number;
+          }>;
+        };
       };
     };
 
@@ -1926,6 +2041,8 @@ describe('API routes', () => {
     expect(body.data.notification_policy?.in_app.min_severity).toBe('info');
     expect(Array.isArray(body.data.notification_policy?.webhook.event_types)).toBe(true);
     expect(Array.isArray(body.data.notification_policy?.telegram.event_types)).toBe(true);
+    expect(typeof body.data.radar_policy?.control.autoExecutionEnabled).toBe('boolean');
+    expect(Array.isArray(body.data.radar_policy?.domain_pack_metrics)).toBe(true);
     expect(
       (body.data.notification_runtime?.channels ?? []).every((channel) => typeof channel.skipped === 'number')
     ).toBe(true);
@@ -2830,9 +2947,17 @@ describe('API routes', () => {
       data: {
         id: string;
         task_id: string | null;
+        resolved_route: {
+          provider: string;
+          strict_provider: boolean;
+          source: string;
+        };
         session: { id: string; councilRunId: string | null; taskId: string | null; primaryTarget: string; status: string } | null;
       };
     };
+    expect(createBody.data.resolved_route.provider).toBe('auto');
+    expect(createBody.data.resolved_route.strict_provider).toBe(false);
+    expect(createBody.data.resolved_route.source).toBe('auto');
     expect(createBody.data.session?.id).toBe(sessionId);
     expect(createBody.data.session?.primaryTarget).toBe('council');
     expect(createBody.data.session?.councilRunId).toBe(createBody.data.id);
@@ -2961,11 +3086,8 @@ describe('API routes', () => {
     expect(settledBody.data.status).toBe('completed');
     expect(settledBody.data.provider).toBe('gemini');
     expect(settledBody.data.summary).toContain('Gemini council synthesis output');
-    expect(
-      settledBody.data.attempts.some(
-        (attempt) => attempt.provider === 'openai' && attempt.status === 'skipped' && attempt.error === 'excluded_by_request'
-      )
-    ).toBe(true);
+    const openaiAttempts = settledBody.data.attempts.filter((attempt) => attempt.provider === 'openai');
+    expect(openaiAttempts.every((attempt) => attempt.status === 'skipped')).toBe(true);
 
     await app.close();
   });
@@ -3149,9 +3271,17 @@ describe('API routes', () => {
       data: {
         id: string;
         task_id: string | null;
+        resolved_route: {
+          provider: string;
+          strict_provider: boolean;
+          source: string;
+        };
         session: { id: string; executionRunId: string | null; taskId: string | null; primaryTarget: string; status: string } | null;
       };
     };
+    expect(createBody.data.resolved_route.provider).toBe('auto');
+    expect(createBody.data.resolved_route.strict_provider).toBe(false);
+    expect(createBody.data.resolved_route.source).toBe('auto');
     expect(createBody.data.session?.id).toBe(sessionId);
     expect(createBody.data.session?.primaryTarget).toBe('execution');
     expect(createBody.data.session?.executionRunId).toBe(createBody.data.id);
@@ -3183,6 +3313,249 @@ describe('API routes', () => {
     };
     expect(settledBody.data.session.executionRunId).toBe(createBody.data.id);
     expect(settledBody.data.session.status).toBe('completed');
+
+    await app.close();
+  });
+
+  it('falls back from strict preferred provider when mission plan generation provider is unavailable', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    process.env.GEMINI_API_KEY = 'test-gemini-key';
+    const userId = '6a0d4511-b6ca-4b7e-b79c-42cdde3f1001';
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/responses')) {
+        return new Response(
+          JSON.stringify({
+            detail: {
+              code: 'deactivated_workspace'
+            }
+          }),
+          {
+            status: 402,
+            headers: {
+              'content-type': 'application/json'
+            }
+          }
+        );
+      }
+
+      if (url.includes(':generateContent')) {
+        return new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      text: JSON.stringify({
+                        title: 'Gemini fallback plan',
+                        objective: 'Validate provider fallback in mission planning',
+                        domain: 'mixed',
+                        steps: [
+                          {
+                            id: 'step-1',
+                            type: 'llm_generate',
+                            task_type: 'execute',
+                            title: 'Analyze request',
+                            description: 'Review the request and outline the next steps.',
+                            order: 1,
+                            dependencies: []
+                          }
+                        ]
+                      })
+                    }
+                  ]
+                }
+              }
+            ],
+            usageMetadata: {
+              promptTokenCount: 10,
+              candidatesTokenCount: 20
+            }
+          }),
+          {
+            status: 200,
+            headers: {
+              'content-type': 'application/json'
+            }
+          }
+        );
+      }
+
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app } = await buildServer();
+
+    const preferenceUpsert = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/model-control/preferences/mission_plan_generation',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        provider: 'openai',
+        model: 'gpt-5',
+        strict_provider: true,
+        selection_mode: 'manual'
+      }
+    });
+    expect(preferenceUpsert.statusCode).toBe(200);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/missions/generate-plan',
+      headers: {
+        'x-user-id': userId,
+        'x-trace-id': 'trace-mission-plan-fallback-001'
+      },
+      payload: {
+        prompt: '조사하고 계획을 세워줘',
+        complexity_hint: 'complex'
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      data: {
+        plan: {
+          title: string;
+        };
+      };
+    };
+    expect(body.data.plan.title).toBe('Gemini fallback plan');
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/responses'))).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes(':generateContent'))).toBe(true);
+
+    await app.close();
+  });
+
+  it('falls back from strict preferred provider when mission step execution provider is unavailable', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    process.env.GEMINI_API_KEY = 'test-gemini-key';
+    const userId = '6a0d4511-b6ca-4b7e-b79c-42cdde3f1002';
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/responses')) {
+        return new Response(
+          JSON.stringify({
+            detail: {
+              code: 'deactivated_workspace'
+            }
+          }),
+          {
+            status: 402,
+            headers: {
+              'content-type': 'application/json'
+            }
+          }
+        );
+      }
+
+      if (url.includes(':generateContent')) {
+        return new Response(
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [{ text: 'Gemini mission step output' }]
+                }
+              }
+            ],
+            usageMetadata: {
+              promptTokenCount: 10,
+              candidatesTokenCount: 20
+            }
+          }),
+          {
+            status: 200,
+            headers: {
+              'content-type': 'application/json'
+            }
+          }
+        );
+      }
+
+      throw new Error(`unexpected fetch url: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app } = await buildServer();
+
+    const preferenceUpsert = await app.inject({
+      method: 'PUT',
+      url: '/api/v1/model-control/preferences/mission_execute_step',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        provider: 'openai',
+        model: 'gpt-5',
+        strict_provider: true,
+        selection_mode: 'manual'
+      }
+    });
+    expect(preferenceUpsert.statusCode).toBe(200);
+
+    const createdMission = await app.inject({
+      method: 'POST',
+      url: '/api/v1/missions',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        title: 'Mission fallback test',
+        objective: 'Run a single AI step',
+        domain: 'mixed',
+        steps: [
+          {
+            type: 'llm_generate',
+            title: 'Generate output',
+            description: 'Summarize the task.'
+          }
+        ]
+      }
+    });
+    expect(createdMission.statusCode).toBe(201);
+    const missionId = (createdMission.json() as { data: { id: string } }).data.id;
+
+    const execute = await app.inject({
+      method: 'POST',
+      url: `/api/v1/missions/${missionId}/execute`,
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {}
+    });
+    expect(execute.statusCode).toBe(202);
+
+    const settled = await waitFor(
+      async () =>
+        app.inject({
+          method: 'GET',
+          url: `/api/v1/missions/${missionId}`,
+          headers: {
+            'x-user-id': userId
+          }
+        }),
+      {
+        until: (response) => {
+          if (response.statusCode !== 200) return false;
+          const body = response.json() as { data: { status: string } };
+          return body.data.status === 'completed' || body.data.status === 'failed';
+        }
+      }
+    );
+    expect(settled.statusCode).toBe(200);
+    const settledBody = settled.json() as {
+      data: {
+        status: string;
+        steps: Array<{ status: string }>;
+      };
+    };
+    expect(settledBody.data.status).toBe('completed');
+    expect(settledBody.data.steps[0]?.status).toBe('done');
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/responses'))).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes(':generateContent'))).toBe(true);
 
     await app.close();
   });
@@ -3242,6 +3615,353 @@ describe('API routes', () => {
     expect(recommendations.statusCode).toBe(200);
     const recBody = recommendations.json() as { data: { recommendations: Array<{ itemId: string }> } };
     expect(recBody.data.recommendations[0]?.itemId).toBe(firstId);
+
+    await app.close();
+  });
+
+  it('promotes high-structurality radar events into watcher, dossier, session, and autonomy records', async () => {
+    const { app } = await buildServer();
+    const operatorHeaders = {
+      'x-user-role': 'operator',
+      'x-user-id': '44444444-4444-4444-8444-444444444444',
+    };
+
+    const ingest = await app.inject({
+      method: 'POST',
+      url: '/api/v1/radar/ingest',
+      headers: operatorHeaders,
+      payload: {
+        source_name: 'official-energy-desk',
+        items: [
+          {
+            title: 'Official Hormuz LNG terminal insurance shock drives freight and contract urgency',
+            summary:
+              'Government filing confirms Hormuz route risk, insurance spike, freight jump and long-term LNG contract urgency.',
+            source_url: 'https://energy.gov/example/hormuz-lng-update',
+            published_at: '2026-03-11T00:00:00.000Z',
+            observed_at: '2026-03-11T00:00:00.000Z',
+            confidence_score: 0.97,
+            source_type: 'policy',
+            source_tier: 'tier_0',
+            raw_metrics: {
+              freight_index: 14.2,
+              insurance_spread: 8.4,
+              us10y: 4.52
+            },
+            entity_hints: ['Hormuz', 'QatarEnergy', 'LNG'],
+            trust_hint: 'official filing'
+          }
+        ]
+      }
+    });
+    expect(ingest.statusCode).toBe(202);
+
+    const domainPacks = await app.inject({
+      method: 'GET',
+      url: '/api/v1/radar/domain-packs',
+      headers: operatorHeaders
+    });
+    expect(domainPacks.statusCode).toBe(200);
+    const domainPacksBody = domainPacks.json() as { data: { domain_packs: Array<{ id: string }> } };
+    expect(domainPacksBody.data.domain_packs.some((pack) => pack.id === 'geopolitics_energy_lng')).toBe(true);
+
+    const items = await app.inject({
+      method: 'GET',
+      url: '/api/v1/radar/items?limit=10',
+      headers: operatorHeaders
+    });
+    const itemId = (items.json() as { data: { items: Array<{ id: string }> } }).data.items[0]?.id;
+    expect(itemId).toBeTruthy();
+
+    const evaluate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/radar/evaluate',
+      headers: operatorHeaders,
+      payload: {
+        item_ids: [itemId]
+      }
+    });
+    expect(evaluate.statusCode).toBe(202);
+    const evaluateBody = evaluate.json() as {
+      data: {
+        promoted_count: number;
+        promotions: Array<{
+          event_id: string;
+          watcher_id: string | null;
+          dossier_id: string | null;
+          session_id: string | null;
+          action_proposal_id: string | null;
+          auto_executed: boolean;
+        }>;
+      };
+    };
+    expect(evaluateBody.data.promoted_count).toBeGreaterThan(0);
+    expect(evaluateBody.data.promotions[0]?.watcher_id).toBeTruthy();
+    expect(evaluateBody.data.promotions[0]?.dossier_id).toBeTruthy();
+    expect(evaluateBody.data.promotions[0]?.session_id).toBeTruthy();
+    expect(evaluateBody.data.promotions[0]?.action_proposal_id).toBeTruthy();
+    expect(evaluateBody.data.promotions[0]?.auto_executed).toBe(true);
+
+    const events = await app.inject({
+      method: 'GET',
+      url: '/api/v1/radar/events?limit=10',
+      headers: operatorHeaders
+    });
+    expect(events.statusCode).toBe(200);
+    const eventsBody = events.json() as { data: { events: Array<{ id: string; decision: string }> } };
+    const eventId = eventsBody.data.events[0]?.id;
+    expect(eventsBody.data.events[0]?.decision).toBe('execute_auto_candidate');
+
+    const eventDetail = await app.inject({
+      method: 'GET',
+      url: `/api/v1/radar/events/${eventId}`,
+      headers: operatorHeaders
+    });
+    expect(eventDetail.statusCode).toBe(200);
+    const eventDetailBody = eventDetail.json() as {
+      data: {
+        domain_posteriors: Array<{ domainId: string }>;
+        autonomy_decision: { executionMode: string };
+      };
+    };
+    expect(eventDetailBody.data.domain_posteriors[0]?.domainId).toBe('geopolitics_energy_lng');
+    expect(eventDetailBody.data.autonomy_decision.executionMode).toBe('execute_auto');
+
+    const watchers = await app.inject({
+      method: 'GET',
+      url: '/api/v1/watchers?limit=10',
+      headers: operatorHeaders
+    });
+    expect(watchers.statusCode).toBe(200);
+    const watchersBody = watchers.json() as { data: { watchers: Array<{ id: string }> } };
+    expect(watchersBody.data.watchers.length).toBeGreaterThan(0);
+
+    const dossiers = await app.inject({
+      method: 'GET',
+      url: '/api/v1/dossiers?limit=10',
+      headers: operatorHeaders
+    });
+    expect(dossiers.statusCode).toBe(200);
+    const dossiersBody = dossiers.json() as { data: { dossiers: Array<{ id: string }> } };
+    expect(dossiersBody.data.dossiers.length).toBeGreaterThan(0);
+
+    const sessions = await app.inject({
+      method: 'GET',
+      url: '/api/v1/jarvis/sessions?limit=10',
+      headers: operatorHeaders
+    });
+    expect(sessions.statusCode).toBe(200);
+    const sessionsBody = sessions.json() as { data: { sessions: Array<{ id: string; status: string }> } };
+    expect(sessionsBody.data.sessions.length).toBeGreaterThan(0);
+    expect(sessionsBody.data.sessions[0]?.status).toBe('completed');
+
+    const ack = await app.inject({
+      method: 'POST',
+      url: `/api/v1/radar/events/${eventId}/ack`,
+      headers: operatorHeaders,
+      payload: {
+        note: 'acknowledged by operator'
+      }
+    });
+    expect(ack.statusCode).toBe(200);
+
+    const override = await app.inject({
+      method: 'POST',
+      url: `/api/v1/radar/events/${eventId}/override`,
+      headers: operatorHeaders,
+      payload: {
+        decision: 'watch',
+        note: 'force monitor only'
+      }
+    });
+    expect(override.statusCode).toBe(200);
+    const overrideBody = override.json() as { data: { event: { overrideDecision: string | null } } };
+    expect(overrideBody.data.event.overrideDecision).toBe('watch');
+
+    await app.close();
+  });
+
+  it('applies radar control settings and records pack calibration feedback', async () => {
+    const { app } = await buildServer();
+    const operatorHeaders = {
+      'x-user-role': 'operator',
+      'x-user-id': '45454545-4545-4545-8454-454545454545',
+    };
+
+    const initialControl = await app.inject({
+      method: 'GET',
+      url: '/api/v1/radar/control',
+      headers: operatorHeaders
+    });
+    expect(initialControl.statusCode).toBe(200);
+
+    const updatedControl = await app.inject({
+      method: 'POST',
+      url: '/api/v1/radar/control',
+      headers: operatorHeaders,
+      payload: {
+        auto_execution_enabled: false
+      }
+    });
+    expect(updatedControl.statusCode).toBe(200);
+
+    const ingest = await app.inject({
+      method: 'POST',
+      url: '/api/v1/radar/ingest',
+      headers: operatorHeaders,
+      payload: {
+        source_name: 'official-energy-desk',
+        items: [
+          {
+            title: 'Official Hormuz LNG terminal insurance shock drives freight and contract urgency',
+            summary:
+              'Government filing confirms Hormuz route risk, insurance spike, freight jump and long-term LNG contract urgency.',
+            source_url: 'https://energy.gov/example/hormuz-lng-control-update',
+            published_at: '2026-03-11T00:00:00.000Z',
+            observed_at: '2026-03-11T00:00:00.000Z',
+            confidence_score: 0.97,
+            source_type: 'policy',
+            source_tier: 'tier_0',
+            raw_metrics: {
+              freight_index: 14.2,
+              insurance_spread: 8.4,
+              us10y: 4.52
+            },
+            entity_hints: ['Hormuz', 'QatarEnergy', 'LNG'],
+            trust_hint: 'official filing'
+          }
+        ]
+      }
+    });
+    expect(ingest.statusCode).toBe(202);
+
+    const items = await app.inject({
+      method: 'GET',
+      url: '/api/v1/radar/items?limit=10',
+      headers: operatorHeaders
+    });
+    const itemId = (items.json() as { data: { items: Array<{ id: string; sourceUrl: string }> } }).data.items.find((item) =>
+      item.sourceUrl.includes('hormuz-lng-control-update')
+    )?.id;
+    expect(itemId).toBeTruthy();
+
+    const evaluate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/radar/evaluate',
+      headers: operatorHeaders,
+      payload: {
+        item_ids: [itemId]
+      }
+    });
+    expect(evaluate.statusCode).toBe(202);
+    const evaluateBody = evaluate.json() as {
+      data: {
+        promotions: Array<{
+          event_id: string;
+          decision: string;
+          watcher_id: string | null;
+          dossier_id: string | null;
+          action_proposal_id: string | null;
+          auto_executed: boolean;
+        }>;
+      };
+    };
+    expect(evaluateBody.data.promotions[0]?.decision).toBe('action');
+    expect(evaluateBody.data.promotions[0]?.watcher_id).toBeTruthy();
+    expect(evaluateBody.data.promotions[0]?.dossier_id).toBeTruthy();
+    expect(evaluateBody.data.promotions[0]?.action_proposal_id).toBeTruthy();
+    expect(evaluateBody.data.promotions[0]?.auto_executed).toBe(false);
+
+    const override = await app.inject({
+      method: 'POST',
+      url: `/api/v1/radar/events/${evaluateBody.data.promotions[0]?.event_id}/override`,
+      headers: operatorHeaders,
+      payload: {
+        decision: 'watch',
+        note: 'downgrade after manual review'
+      }
+    });
+    expect(override.statusCode).toBe(200);
+
+    const controlAfter = await app.inject({
+      method: 'GET',
+      url: '/api/v1/radar/control',
+      headers: operatorHeaders
+    });
+    expect(controlAfter.statusCode).toBe(200);
+    const controlBody = controlAfter.json() as {
+      data: {
+        control: {
+          autoExecutionEnabled: boolean;
+        };
+        domain_pack_metrics: Array<{
+          domainId: string;
+          evaluationCount: number;
+          actionCount: number;
+          overrideCount: number;
+          calibrationScore: number;
+        }>;
+      };
+    };
+    expect(controlBody.data.control.autoExecutionEnabled).toBe(false);
+    const metric = controlBody.data.domain_pack_metrics.find((row) => row.domainId === 'geopolitics_energy_lng');
+    expect(metric?.evaluationCount).toBeGreaterThan(0);
+    expect(metric?.actionCount).toBeGreaterThan(0);
+    expect(metric?.overrideCount).toBeGreaterThan(0);
+    expect(typeof metric?.calibrationScore).toBe('number');
+
+    await app.close();
+  });
+
+  it('lists seeded radar sources, toggles a source, and returns scanner runs', async () => {
+    const { app } = await buildServer();
+    const operatorHeaders = {
+      'x-user-role': 'operator',
+      'x-user-id': '46464646-4646-4646-8464-464646464646',
+    };
+
+    const sources = await app.inject({
+      method: 'GET',
+      url: '/api/v1/radar/sources?limit=20',
+      headers: operatorHeaders,
+    });
+    expect(sources.statusCode).toBe(200);
+    const sourcesBody = sources.json() as {
+      data: {
+        sources: Array<{ id: string; enabled: boolean }>;
+      };
+    };
+    expect(sourcesBody.data.sources.length).toBeGreaterThan(0);
+
+    const sourceId = sourcesBody.data.sources[0]!.id;
+    const toggled = await app.inject({
+      method: 'POST',
+      url: `/api/v1/radar/sources/${sourceId}/toggle`,
+      headers: operatorHeaders,
+      payload: {
+        enabled: false,
+      },
+    });
+    expect(toggled.statusCode).toBe(200);
+    expect((toggled.json() as { data: { source: { enabled: boolean } } }).data.source.enabled).toBe(false);
+
+    const disabledSources = await app.inject({
+      method: 'GET',
+      url: '/api/v1/radar/sources?enabled=false&limit=20',
+      headers: operatorHeaders,
+    });
+    expect(disabledSources.statusCode).toBe(200);
+    expect(
+      (disabledSources.json() as { data: { sources: Array<{ id: string }> } }).data.sources.some((source) => source.id === sourceId)
+    ).toBe(true);
+
+    const runs = await app.inject({
+      method: 'GET',
+      url: '/api/v1/radar/runs?limit=10',
+      headers: operatorHeaders,
+    });
+    expect(runs.statusCode).toBe(200);
+    expect(Array.isArray((runs.json() as { data: { runs: unknown[] } }).data.runs)).toBe(true);
 
     await app.close();
   });
@@ -4253,10 +4973,22 @@ describe('API routes', () => {
     const createBody = create.json() as {
       data: {
         session: { id: string; primaryTarget: string; dossierId: string | null; briefingId: string | null; status: string };
-        delegation: { primary_target: string; dossier_id?: string; briefing_id?: string };
+        requested_capabilities: string[];
+        active_capabilities: string[];
+        completed_capabilities: string[];
+        stages: Array<{ stageKey: string; capability: string; status: string }>;
+        delegation: { primary_target: string; capabilities: string[]; dossier_id?: string; briefing_id?: string };
       };
     };
     expect(createBody.data.delegation.primary_target).toBe('dossier');
+    expect(createBody.data.delegation.capabilities).toEqual(['research', 'brief']);
+    expect(createBody.data.requested_capabilities).toEqual(['research', 'brief']);
+    expect(createBody.data.completed_capabilities).toEqual(['research', 'brief']);
+    expect(createBody.data.active_capabilities).toEqual([]);
+    expect(createBody.data.stages.map((stage) => `${stage.stageKey}:${stage.status}`)).toEqual([
+      'research:completed',
+      'brief:completed'
+    ]);
     expect(createBody.data.session.status).toBe('completed');
     expect(createBody.data.session.dossierId).toBeTruthy();
     expect(createBody.data.session.briefingId).toBeTruthy();
@@ -4279,6 +5011,29 @@ describe('API routes', () => {
     expect(detailBody.data.dossier.id).toBe(createBody.data.session.dossierId);
     expect(detailBody.data.briefing.id).toBe(createBody.data.session.briefingId);
     expect(detailBody.data.events.some((event) => event.eventType === 'dossier.compiled')).toBe(true);
+    expect(detailBody.data.events.some((event) => event.eventType === 'session.capabilities.resolved')).toBe(true);
+
+    const dossierDetail = await app.inject({
+      method: 'GET',
+      url: `/api/v1/dossiers/${createBody.data.session.dossierId}`,
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(dossierDetail.statusCode).toBe(200);
+    const dossierDetailBody = dossierDetail.json() as {
+      data: {
+        world_model: {
+          hypotheses: Array<{ stance: string }>;
+          invalidation_conditions: Array<{ observed_status: string }>;
+          state_snapshot: { dominant_signals: string[] };
+        };
+      };
+    };
+    expect(dossierDetailBody.data.world_model.hypotheses.length).toBeGreaterThan(0);
+    expect(dossierDetailBody.data.world_model.hypotheses.some((row) => row.stance === 'counter')).toBe(true);
+    expect(dossierDetailBody.data.world_model.invalidation_conditions.length).toBeGreaterThan(0);
+    expect(Array.isArray(dossierDetailBody.data.world_model.state_snapshot.dominant_signals)).toBe(true);
 
     await app.close();
   });
@@ -4319,10 +5074,28 @@ describe('API routes', () => {
     const sessionBody = sessionCreate.json() as {
       data: {
         session: { id: string; status: string; missionId: string | null };
-        delegation: { primary_target: string; action_proposal_id?: string };
+        requested_capabilities: string[];
+        active_capabilities: string[];
+        completed_capabilities: string[];
+        stages: Array<{ stageKey: string; capability: string; status: string }>;
+        next_action: { kind: string; label: string } | null;
+        delegation: { primary_target: string; capabilities: string[]; action_proposal_id?: string };
       };
     };
-    expect(sessionBody.data.delegation.primary_target).toBe('mission');
+    expect(sessionBody.data.delegation.primary_target).toBe('dossier');
+    expect(sessionBody.data.delegation.capabilities).toEqual(['research', 'brief', 'plan', 'approve', 'execute']);
+    expect(sessionBody.data.requested_capabilities).toEqual(['research', 'brief', 'plan', 'approve', 'execute']);
+    expect(sessionBody.data.completed_capabilities).toEqual(['research', 'brief', 'plan']);
+    expect(sessionBody.data.active_capabilities).toEqual(['approve']);
+    expect(sessionBody.data.next_action?.kind).toBe('open_action_center');
+    expect(sessionBody.data.next_action?.label).toBe('Review write execution and approve run');
+    expect(sessionBody.data.stages.map((stage) => `${stage.stageKey}:${stage.status}`)).toEqual([
+      'research:completed',
+      'brief:completed',
+      'plan:completed',
+      'approve:needs_approval',
+      'execute:blocked'
+    ]);
     expect(sessionBody.data.session.status).toBe('needs_approval');
     expect(sessionBody.data.session.missionId).toBeTruthy();
     expect(sessionBody.data.delegation.action_proposal_id).toBeTruthy();
@@ -4366,11 +5139,876 @@ describe('API routes', () => {
         run: { status: string };
         briefing: { id: string };
         dossier: { id: string };
+        follow_up: {
+          session: { id: string; status: string };
+          actionProposal: { id: string; status: string } | null;
+          changeClass: string;
+          severity: string;
+          score: number;
+          reasons: string[];
+        } | null;
       };
     };
     expect(watcherRunBody.data.run.status).toBe('completed');
     expect(watcherRunBody.data.briefing.id).toBeTruthy();
     expect(watcherRunBody.data.dossier.id).toBeTruthy();
+    expect(watcherRunBody.data.follow_up?.session.id).toBeTruthy();
+    expect(watcherRunBody.data.follow_up?.session.status).toBe('needs_approval');
+    expect(watcherRunBody.data.follow_up?.actionProposal?.id).toBeTruthy();
+    expect(watcherRunBody.data.follow_up?.changeClass).toBe('health_regression');
+    expect(watcherRunBody.data.follow_up?.severity).toBe('critical');
+    expect(watcherRunBody.data.follow_up?.score).toBeGreaterThanOrEqual(46);
+    expect(watcherRunBody.data.follow_up?.reasons).toEqual(
+      expect.arrayContaining(['summary_changed', 'health_regression_signal'])
+    );
+
+    const proactiveSession = await app.inject({
+      method: 'GET',
+      url: `/api/v1/jarvis/sessions/${watcherRunBody.data.follow_up?.session.id}`,
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(proactiveSession.statusCode).toBe(200);
+    const proactiveSessionBody = proactiveSession.json() as {
+      data: {
+        session: { id: string; status: string; briefingId: string | null; dossierId: string | null };
+        next_action: { kind: string; label: string } | null;
+        actions: Array<{ id: string; status: string }>;
+        stages: Array<{ stageKey: string; status: string }>;
+      };
+    };
+    expect(proactiveSessionBody.data.session.briefingId).toBe(watcherRunBody.data.briefing.id);
+    expect(proactiveSessionBody.data.session.dossierId).toBe(watcherRunBody.data.dossier.id);
+    expect(proactiveSessionBody.data.next_action?.kind).toBe('open_action_center');
+    expect(proactiveSessionBody.data.next_action?.label).toBe('운영 이상 징후 검토');
+    expect(proactiveSessionBody.data.actions[0]?.id).toBe(watcherRunBody.data.follow_up?.actionProposal?.id);
+    expect(proactiveSessionBody.data.stages.map((stage) => `${stage.stageKey}:${stage.status}`)).toEqual([
+      'research:completed',
+      'brief:completed',
+      'monitor:completed',
+      'notify:completed',
+      'approve:needs_approval'
+    ]);
+    const proactiveMemorySummary = await app.inject({
+      method: 'GET',
+      url: '/api/v1/memory/summary?limit=10',
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(proactiveMemorySummary.statusCode).toBe(200);
+    const proactiveMemoryBody = proactiveMemorySummary.json() as {
+      data: {
+        recent_notes: Array<{ kind: string; title: string; relatedSessionId: string | null }>;
+      };
+    };
+    expect(
+      proactiveMemoryBody.data.recent_notes.some(
+        (note) =>
+          note.kind === 'research_memory' &&
+          note.relatedSessionId === watcherRunBody.data.follow_up?.session.id &&
+          note.title.startsWith('Monitor:')
+      )
+    ).toBe(true);
+
+    await app.close();
+  });
+
+  it('returns memory context on jarvis requests and stores approval decisions as memory', async () => {
+    const { app } = await buildServer();
+    const userId = '77777777-7777-4777-8777-777777777777';
+
+    const seedNote = await app.inject({
+      method: 'POST',
+      url: '/api/v1/memory/notes',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        kind: 'user_preference',
+        title: '응답 선호',
+        content: '사용자는 리스크와 승인 포인트를 먼저 보여주는 답변을 선호한다.',
+        tags: ['risk', 'approval'],
+        pinned: true
+      }
+    });
+    expect(seedNote.statusCode).toBe(201);
+
+    const structuredNotes = await Promise.all([
+      app.inject({
+        method: 'POST',
+        url: '/api/v1/memory/notes',
+        headers: { 'x-user-id': userId },
+        payload: {
+          kind: 'user_preference',
+          title: '응답 스타일 선호',
+          content: '기본 답변은 자세히 설명해줘.',
+          key: 'response_style',
+          value: 'detailed',
+          attributes: { response_style: 'detailed' }
+        }
+      }),
+      app.inject({
+        method: 'POST',
+        url: '/api/v1/memory/notes',
+        headers: { 'x-user-id': userId },
+        payload: {
+          kind: 'user_preference',
+          title: '기본 프로바이더 선호',
+          content: '명시 지정이 없으면 OpenAI를 우선 사용해줘.',
+          key: 'preferred_provider',
+          value: 'openai',
+          attributes: { preferred_provider: 'openai' }
+        }
+      }),
+      app.inject({
+        method: 'POST',
+        url: '/api/v1/memory/notes',
+        headers: { 'x-user-id': userId },
+        payload: {
+          kind: 'user_preference',
+          title: '기본 모델 선호',
+          content: '가능하면 gpt-5를 기본 모델로 사용해줘.',
+          key: 'preferred_model',
+          value: 'gpt-5',
+          attributes: { preferred_model: 'gpt-5' }
+        }
+      }),
+      app.inject({
+        method: 'POST',
+        url: '/api/v1/memory/notes',
+        headers: { 'x-user-id': userId },
+        payload: {
+          kind: 'user_preference',
+          title: '실행 성향 선호',
+          content: '위험한 작업은 항상 읽기 전용 점검을 먼저 거쳐줘.',
+          key: 'approval_style',
+          value: 'read_only_review',
+          attributes: { approval_style: 'read_only_review' }
+        }
+      }),
+      app.inject({
+        method: 'POST',
+        url: '/api/v1/memory/notes',
+        headers: { 'x-user-id': userId },
+        payload: {
+          kind: 'user_preference',
+          title: '모니터 성향 선호',
+          content: '중요한 변화만 모니터 후속 검토로 올려줘.',
+          key: 'monitoring_preference',
+          value: 'manual',
+          attributes: { monitoring_preference: 'manual' }
+        }
+      }),
+      app.inject({
+        method: 'POST',
+        url: '/api/v1/memory/notes',
+        headers: { 'x-user-id': userId },
+        payload: {
+          kind: 'project_context',
+          title: 'AI-brain 프로젝트 맥락',
+          content: '현재 작업 중인 프로젝트는 AI-brain HUD와 Jarvis orchestration이다.',
+          key: 'project_context',
+          value: 'AI-brain',
+          attributes: {
+            project_name: 'AI-brain',
+            repo_slug: 'gwkim92/AI-brain',
+            goal_summary: 'Jarvis orchestration and HUD convergence',
+            pinned_refs: ['README.md', 'docs/openapi-v1.yaml']
+          },
+          pinned: true
+        }
+      })
+    ]);
+    for (const response of structuredNotes) {
+      expect(response.statusCode).toBe(201);
+    }
+
+    const contextResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/memory/context?q=AI-brain&limit=10',
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(contextResponse.statusCode).toBe(200);
+    const contextBody = contextResponse.json() as {
+      data: {
+        structured_notes: Array<{ key: string | null }>;
+        preferences: {
+          responseStyle: string | null;
+          preferredProvider: string | null;
+          preferredModel: string | null;
+          approvalStyle: string | null;
+          monitoringPreference: string | null;
+        } | null;
+        project_context: {
+          projectName: string | null;
+          repoSlug: string | null;
+          pinnedRefs: string[];
+        } | null;
+        recent_decision_signals: {
+          recentApprovalHistory: boolean;
+          recentRejectionHistory: boolean;
+        } | null;
+      };
+    };
+    expect(contextBody.data.structured_notes.some((note) => note.key === 'response_style')).toBe(true);
+    expect(contextBody.data.preferences?.responseStyle).toBe('detailed');
+    expect(contextBody.data.preferences?.preferredProvider).toBe('openai');
+    expect(contextBody.data.preferences?.preferredModel).toBe('gpt-5');
+    expect(contextBody.data.preferences?.approvalStyle).toBe('read_only_review');
+    expect(contextBody.data.preferences?.monitoringPreference).toBe('manual');
+    expect(contextBody.data.project_context?.projectName).toBe('AI-brain');
+    expect(contextBody.data.project_context?.repoSlug).toBe('gwkim92/AI-brain');
+    expect(contextBody.data.project_context?.pinnedRefs).toContain('README.md');
+    expect(contextBody.data.recent_decision_signals?.recentApprovalHistory).toBe(false);
+
+    const assistantSession = await app.inject({
+      method: 'POST',
+      url: '/api/v1/jarvis/requests',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        prompt: '리스크와 승인 포인트를 먼저 설명해줘',
+        client_session_id: '72ea6258-7292-4f49-a8e9-2c896e039e36',
+        target_hint: 'assistant'
+      }
+    });
+    expect(assistantSession.statusCode).toBe(201);
+    const assistantBody = assistantSession.json() as {
+      data: {
+        session: { id: string };
+        memory_context: {
+          notes: Array<{ kind: string; title: string }>;
+          applied_hints: string[];
+          summary: string[];
+          preferences?: {
+            responseStyle: string | null;
+            preferredProvider: string | null;
+            preferredModel: string | null;
+            approvalStyle: string | null;
+          } | null;
+          projectContext?: {
+            repoSlug: string | null;
+            projectName: string | null;
+            pinnedRefs: string[];
+          } | null;
+        } | null;
+        memory_plan_signals: string[];
+        memory_plan_summary: string[];
+        memory_influences: string[];
+        execution_option: string | null;
+        preferred_provider_applied: string | null;
+        preferred_model_applied: string | null;
+        project_context_refs: {
+          repo_slug: string | null;
+          project_name: string | null;
+          pinned_refs: string[];
+        } | null;
+        monitoring_preference_applied: string | null;
+      };
+    };
+    expect(assistantBody.data.memory_context?.notes[0]?.kind).toBe('user_preference');
+    expect(assistantBody.data.memory_context?.notes[0]?.title).toBe('응답 선호');
+    expect(assistantBody.data.memory_context?.summary).toBeTruthy();
+    expect(assistantBody.data.memory_plan_signals).toContain('pinned_context');
+    expect(assistantBody.data.memory_plan_signals).toContain('risk_first_preference');
+    expect(assistantBody.data.memory_plan_signals).toContain('approval_sensitive_preference');
+    expect(assistantBody.data.memory_context?.preferences?.responseStyle).toBe('detailed');
+    expect(assistantBody.data.memory_context?.preferences?.preferredProvider).toBe('openai');
+    expect(assistantBody.data.memory_context?.preferences?.preferredModel).toBe('gpt-5');
+    expect(assistantBody.data.memory_context?.preferences?.approvalStyle).toBe('read_only_review');
+    expect(assistantBody.data.memory_context?.projectContext?.repoSlug).toBe('gwkim92/AI-brain');
+    expect(assistantBody.data.memory_influences).toContain('Prefer detailed responses when scope is ambiguous.');
+    expect(assistantBody.data.preferred_provider_applied).toBe('openai');
+    expect(assistantBody.data.preferred_model_applied).toBe('gpt-5');
+    expect(assistantBody.data.project_context_refs?.repo_slug).toBe('gwkim92/AI-brain');
+    expect(assistantBody.data.monitoring_preference_applied).toBe('manual');
+    expect(assistantBody.data.execution_option).toBeNull();
+    expect(assistantBody.data.memory_plan_summary.length).toBeGreaterThan(0);
+
+    const assistantDetail = await app.inject({
+      method: 'GET',
+      url: `/api/v1/jarvis/sessions/${assistantBody.data.session.id}`,
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(assistantDetail.statusCode).toBe(200);
+    const assistantDetailBody = assistantDetail.json() as {
+      data: {
+        events: Array<{ eventType: string }>;
+        memory_context: {
+          notes: Array<{ title: string }>;
+          preferences?: { preferredProvider: string | null } | null;
+        } | null;
+        memory_plan_signals: string[];
+        memory_plan_summary: string[];
+        memory_influences: string[];
+        preferred_provider_applied: string | null;
+        preferred_model_applied: string | null;
+        project_context_refs: {
+          repo_slug: string | null;
+        } | null;
+        monitoring_preference_applied: string | null;
+      };
+    };
+    expect(assistantDetailBody.data.events.some((event) => event.eventType === 'memory.context.loaded')).toBe(true);
+    expect(assistantDetailBody.data.events.some((event) => event.eventType === 'memory.plan.resolved')).toBe(true);
+    expect(assistantDetailBody.data.memory_context?.notes[0]?.title).toBe('응답 선호');
+    expect(assistantDetailBody.data.memory_plan_signals).toContain('risk_first_preference');
+    expect(assistantDetailBody.data.memory_context?.preferences?.preferredProvider).toBe('openai');
+    expect(assistantDetailBody.data.memory_influences).toContain('preferred_provider:openai');
+    expect(assistantDetailBody.data.preferred_provider_applied).toBe('openai');
+    expect(assistantDetailBody.data.preferred_model_applied).toBe('gpt-5');
+    expect(assistantDetailBody.data.project_context_refs?.repo_slug).toBe('gwkim92/AI-brain');
+    expect(assistantDetailBody.data.monitoring_preference_applied).toBe('manual');
+    expect(assistantDetailBody.data.memory_plan_summary.length).toBeGreaterThan(0);
+
+    const rss = `
+      <rss><channel>
+        <item>
+          <title>Repo health issue discovered</title>
+          <link>https://example.com/engineering/repo-health</link>
+          <description>CI instability and flaky test incidents are rising.</description>
+          <pubDate>Thu, 05 Mar 2026 09:00:00 GMT</pubDate>
+        </item>
+      </channel></rss>
+    `;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        text: async () => rss
+      }))
+    );
+
+    const approvalSession = await app.inject({
+      method: 'POST',
+      url: '/api/v1/jarvis/requests',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        prompt: '먼저 이슈를 조사하고 그 다음 계획을 세우고 마지막으로 승인 후 실행해줘',
+        client_session_id: '30d44ac6-afc6-492b-a752-09979c343647'
+      }
+    });
+    expect(approvalSession.statusCode).toBe(201);
+    const approvalBody = approvalSession.json() as {
+      data: {
+        session: { id: string };
+      };
+    };
+
+    const approvalDetail = await app.inject({
+      method: 'GET',
+      url: `/api/v1/jarvis/sessions/${approvalBody.data.session.id}`,
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(approvalDetail.statusCode).toBe(200);
+    const approvalDetailBody = approvalDetail.json() as {
+      data: {
+        actions: Array<{ id: string }>;
+      };
+    };
+    expect(approvalDetailBody.data.actions[0]?.id).toBeTruthy();
+
+    const approve = await app.inject({
+      method: 'POST',
+      url: `/api/v1/jarvis/sessions/${approvalBody.data.session.id}/actions/${approvalDetailBody.data.actions[0]!.id}/approve`,
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(approve.statusCode).toBe(200);
+
+    const decisionNotes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/memory/recent-decisions?limit=5',
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(decisionNotes.statusCode).toBe(200);
+    const decisionBody = decisionNotes.json() as {
+      data: {
+        notes: Array<{ source: string; title: string; content: string; relatedSessionId: string | null }>;
+      };
+    };
+    expect(decisionBody.data.notes.some((note) => note.source === 'session' && note.relatedSessionId === approvalBody.data.session.id)).toBe(true);
+    expect(decisionBody.data.notes[0]?.title).toContain('Approved');
+
+    const memorySummary = await app.inject({
+      method: 'GET',
+      url: '/api/v1/memory/summary?limit=20',
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(memorySummary.statusCode).toBe(200);
+    const memorySummaryBody = memorySummary.json() as {
+      data: {
+        counts: {
+          project_context: number;
+          research_memory: number;
+        };
+        recent_notes: Array<{ kind: string; relatedSessionId: string | null; title: string }>;
+      };
+    };
+    expect(memorySummaryBody.data.counts.project_context).toBeGreaterThan(0);
+    expect(memorySummaryBody.data.counts.research_memory).toBeGreaterThan(0);
+    expect(
+      memorySummaryBody.data.recent_notes.some(
+        (note) => note.kind === 'project_context' && note.relatedSessionId === approvalBody.data.session.id
+      )
+    ).toBe(true);
+    expect(
+      memorySummaryBody.data.recent_notes.some(
+        (note) => note.kind === 'research_memory' && note.relatedSessionId === approvalBody.data.session.id
+      )
+    ).toBe(true);
+
+    await app.close();
+  });
+
+  it('expands research requests into plan-approve-execute when approval-sensitive memory exists', async () => {
+    const { app } = await buildServer();
+    const userId = '88888888-8888-4888-8888-888888888888';
+
+    const seedNote = await app.inject({
+      method: 'POST',
+      url: '/api/v1/memory/notes',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        kind: 'user_preference',
+        title: '승인 민감 실행 선호',
+        content: '위험한 실행은 항상 승인 전 계획을 먼저 보여주고, 검토 후 실행해줘.',
+        tags: ['approval', 'risk', 'execute'],
+        pinned: true
+      }
+    });
+    expect(seedNote.statusCode).toBe(201);
+
+    const rss = `
+      <rss><channel>
+        <item>
+          <title>Ukraine front line updates continue</title>
+          <link>https://example.com/world/ukraine-update</link>
+          <description>Fresh developments continue across multiple fronts.</description>
+          <pubDate>Thu, 05 Mar 2026 09:00:00 GMT</pubDate>
+        </item>
+      </channel></rss>
+    `;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        text: async () => rss
+      }))
+    );
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/jarvis/requests',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        prompt: '우크라이나 전쟁 최신 동향을 조사하고 실행해줘',
+        client_session_id: 'd1f4f7e4-c276-4a21-afd2-5f2a894122da'
+      }
+    });
+    expect(create.statusCode).toBe(201);
+    const body = create.json() as {
+      data: {
+        requested_capabilities: string[];
+        active_capabilities: string[];
+        next_action: { kind: string; label: string } | null;
+        stages: Array<{ stageKey: string; status: string }>;
+        memory_plan_signals: string[];
+      };
+    };
+    expect(body.data.memory_plan_signals).toContain('approval_sensitive_preference');
+    expect(body.data.requested_capabilities).toEqual(['research', 'brief', 'plan', 'approve', 'execute']);
+    expect(body.data.active_capabilities).toEqual(['approve']);
+    expect(body.data.next_action?.kind).toBe('open_action_center');
+    expect(body.data.next_action?.label).toBe('Review read-only checks and approve execution');
+    expect(body.data.stages.map((stage) => `${stage.stageKey}:${stage.status}`)).toEqual([
+      'research:completed',
+      'brief:completed',
+      'plan:completed',
+      'approve:needs_approval',
+      'execute:blocked'
+    ]);
+
+    await app.close();
+  });
+
+  it('does not create a proactive follow-up session for routine watcher refreshes', async () => {
+    const { app } = await buildServer();
+    const userId = '90909090-9090-4909-8909-909090909090';
+
+    const rss = `
+      <rss><channel>
+        <item>
+          <title>Routine platform maintenance note</title>
+          <link>https://example.com/status/maintenance-note</link>
+          <description>Routine maintenance completed with no material changes reported.</description>
+          <pubDate>Thu, 05 Mar 2026 09:00:00 GMT</pubDate>
+        </item>
+      </channel></rss>
+    `;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        text: async () => rss
+      }))
+    );
+
+    const watcherCreate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/watchers',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        kind: 'external_topic',
+        title: 'Routine Maintenance',
+        query: 'routine platform maintenance note'
+      }
+    });
+    expect(watcherCreate.statusCode).toBe(201);
+    const watcherId = (watcherCreate.json() as { data: { id: string } }).data.id;
+
+    const firstRun = await app.inject({
+      method: 'POST',
+      url: `/api/v1/watchers/${watcherId}/run`,
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(firstRun.statusCode).toBe(200);
+
+    const secondRun = await app.inject({
+      method: 'POST',
+      url: `/api/v1/watchers/${watcherId}/run`,
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(secondRun.statusCode).toBe(200);
+    const secondBody = secondRun.json() as {
+      data: {
+        run: { status: string };
+        follow_up: {
+          session: { id: string };
+          actionProposal: { id: string } | null;
+          changeClass: string;
+          severity: string;
+        } | null;
+      };
+    };
+    expect(secondBody.data.run.status).toBe('completed');
+    expect(secondBody.data.follow_up).toBeNull();
+
+    await app.close();
+  });
+
+  it('does not create a proactive follow-up session for unchanged policy watcher runs', async () => {
+    const { app } = await buildServer();
+    const userId = '21212121-2121-4212-8212-212121212121';
+    const rss = `
+      <rss><channel>
+        <item>
+          <title>EU AI Act implementation update</title>
+          <link>https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai</link>
+          <description>The AI Act entered into force on 1 August 2024 and staged application continues without new changes.</description>
+          <pubDate>Thu, 05 Mar 2026 09:00:00 GMT</pubDate>
+        </item>
+      </channel></rss>
+    `;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        text: async () => rss
+      }))
+    );
+
+    const watcherCreate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/watchers',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        kind: 'external_topic',
+        title: 'EU AI Act watcher',
+        query: 'EU AI Act recent changes'
+      }
+    });
+    expect(watcherCreate.statusCode).toBe(201);
+    const watcherId = (watcherCreate.json() as { data: { id: string } }).data.id;
+
+    const firstRun = await app.inject({
+      method: 'POST',
+      url: `/api/v1/watchers/${watcherId}/run`,
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(firstRun.statusCode).toBe(200);
+
+    const secondRun = await app.inject({
+      method: 'POST',
+      url: `/api/v1/watchers/${watcherId}/run`,
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(secondRun.statusCode).toBe(200);
+    const secondBody = secondRun.json() as {
+      data: {
+        follow_up: {
+          changeClass: string;
+        } | null;
+      };
+    };
+    expect(secondBody.data.follow_up).toBeNull();
+
+    await app.close();
+  });
+
+  it('promotes ambiguous update prompts to research when related research memory exists', async () => {
+    const { app } = await buildServer();
+    const userId = '55555555-5555-4555-8555-555555555555';
+
+    const seedResearchMemory = await app.inject({
+      method: 'POST',
+      url: '/api/v1/memory/notes',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        kind: 'research_memory',
+        title: 'OpenAI Codex 브리프',
+        content: 'Prompt: OpenAI Codex를 조사해줘\nResearch profile: repo_research\nSummary: OpenAI Codex repo의 최근 릴리즈와 README를 정리했다.',
+        tags: ['openai', 'codex', 'repo'],
+        pinned: false
+      }
+    });
+    expect(seedResearchMemory.statusCode).toBe(201);
+
+    const followUp = await app.inject({
+      method: 'POST',
+      url: '/api/v1/jarvis/requests',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        prompt: 'Codex 최신 업데이트만 알려줘',
+        client_session_id: '4b5f8bc5-bcef-4fa2-a9eb-7d663f512041'
+      }
+    });
+    expect(followUp.statusCode).toBe(201);
+    const followUpBody = followUp.json() as {
+      data: {
+        session: { intent: string; primaryTarget: string };
+        requested_capabilities: string[];
+        stages: Array<{ stageKey: string }>;
+        events?: Array<{ eventType: string }>;
+      };
+    };
+    expect(followUpBody.data.session.intent).toBe('research');
+    expect(followUpBody.data.session.primaryTarget).toBe('dossier');
+    expect(followUpBody.data.requested_capabilities).toEqual(['research', 'brief']);
+
+    const followUpDetail = await app.inject({
+      method: 'GET',
+      url: '/api/v1/jarvis/sessions/4b5f8bc5-bcef-4fa2-a9eb-7d663f512041',
+      headers: {
+        'x-user-id': userId
+      }
+    });
+    expect(followUpDetail.statusCode).toBe(200);
+    const followUpDetailBody = followUpDetail.json() as {
+      data: {
+        events: Array<{ eventType: string }>;
+      };
+    };
+    expect(followUpDetailBody.data.events.some((event) => event.eventType === 'memory.intent.promoted')).toBe(true);
+
+    await app.close();
+  });
+
+  it('adds monitor and notify capabilities from remembered follow-up preferences for eligible research profiles', async () => {
+    const { app } = await buildServer();
+    const userId = '58585858-5858-4585-8585-585858585858';
+    const rss = `
+      <rss><channel>
+        <item>
+          <title>EU AI Act timeline update</title>
+          <link>https://example.com/policy/eu-ai-act</link>
+          <description>Officials confirmed a phased implementation timeline and enforcement plan.</description>
+          <pubDate>Thu, 05 Mar 2026 12:00:00 GMT</pubDate>
+        </item>
+      </channel></rss>
+    `;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        text: async () => rss
+      }))
+    );
+
+    const seedPreference = await app.inject({
+      method: 'POST',
+      url: '/api/v1/memory/notes',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        kind: 'user_preference',
+        title: '후속 추적 선호',
+        content: '시장, 정책, 기업 브리프 뒤에는 기본적으로 모니터를 만들고 변화가 있으면 알려줘.',
+        tags: ['monitor', 'notify', 'policy'],
+        pinned: true
+      }
+    });
+    expect(seedPreference.statusCode).toBe(201);
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/jarvis/requests',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        prompt: 'EU AI Act 최근 변화를 정리해줘',
+        client_session_id: '2f4e8914-f807-4de6-94bd-087772f8cc6b'
+      }
+    });
+    expect(create.statusCode).toBe(201);
+    const createBody = create.json() as {
+      data: {
+        requested_capabilities: string[];
+        completed_capabilities: string[];
+        research_profile: string | null;
+        memory_preference_summary: string[];
+        stages: Array<{ stageKey: string; status: string }>;
+      };
+    };
+    expect(createBody.data.research_profile).toBe('policy_regulation');
+    expect(createBody.data.requested_capabilities).toEqual(['research', 'brief', 'monitor', 'notify']);
+    expect(createBody.data.completed_capabilities).toEqual(['research', 'brief', 'monitor', 'notify']);
+    expect(createBody.data.memory_preference_summary.some((line) => /monitor/i.test(line))).toBe(true);
+    expect(createBody.data.stages.map((stage) => `${stage.stageKey}:${stage.status}`)).toEqual([
+      'research:completed',
+      'brief:completed',
+      'monitor:completed',
+      'notify:completed'
+    ]);
+
+    await app.close();
+  });
+
+  it('applies remembered provider and model preferences to direct council runs', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      return new Response(
+        JSON.stringify({
+          output_text: 'Council synthesis output',
+          usage: {
+            input_tokens: 12,
+            output_tokens: 24
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            'content-type': 'application/json'
+          }
+        }
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app } = await buildServer();
+    const userId = '59595959-5959-4595-8595-595959595959';
+
+    const seedPreference = await app.inject({
+      method: 'POST',
+      url: '/api/v1/memory/notes',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        kind: 'user_preference',
+        title: '기본 모델 선호',
+        content: 'OpenAI gpt-5를 기본으로 사용해. 별도 지정이 없으면 그 조합을 써줘.',
+        tags: ['openai', 'gpt-5'],
+        pinned: true
+      }
+    });
+    expect(seedPreference.statusCode).toBe(201);
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/jarvis/requests',
+      headers: {
+        'x-user-id': userId,
+        'x-trace-id': 'trace-jarvis-memory-pref-001'
+      },
+      payload: {
+        prompt: '이 안건을 Agent Council로 보내서 찬성, 반대, 리스크 관점으로 토론해줘',
+        client_session_id: 'f3a80d3c-011e-4e9b-98a6-2d9f1508f6d7'
+      }
+    });
+    expect(create.statusCode).toBe(201);
+    const createBody = create.json() as {
+      data: {
+        session: { councilRunId: string | null };
+        memory_preference_summary: string[];
+        memory_preference_applied: string[];
+      };
+    };
+    expect(createBody.data.session.councilRunId).toBeTruthy();
+    expect(createBody.data.memory_preference_summary.some((line) => /openai/i.test(line))).toBe(true);
+    expect(createBody.data.memory_preference_applied).toContain('preferred_provider:openai');
+    expect(createBody.data.memory_preference_applied).toContain('preferred_model:gpt-5');
+
+    const run = await waitFor(
+      async () =>
+        app.inject({
+          method: 'GET',
+          url: `/api/v1/councils/runs/${createBody.data.session.councilRunId}`,
+          headers: {
+            'x-user-id': userId
+          }
+        }),
+      {
+        until: (response) => response.statusCode === 200
+      }
+    );
+    expect(run.statusCode).toBe(200);
+    const runBody = run.json() as {
+      data: {
+        provider: string | null;
+        model: string;
+      };
+    };
+    expect(runBody.data.provider).toBe('openai');
+    expect(runBody.data.model).toBe('gpt-5');
 
     await app.close();
   });
@@ -4426,9 +6064,12 @@ describe('API routes', () => {
         delegation: {
           intent: string;
           primary_target: string;
+          capabilities: string[];
           council_run_id?: string;
           task_id?: string;
         };
+        requested_capabilities: string[];
+        stages: Array<{ stageKey: string; capability: string; status: string }>;
       };
     };
 
@@ -4438,6 +6079,9 @@ describe('API routes', () => {
     expect(createBody.data.session.taskId).toBeTruthy();
     expect(createBody.data.delegation.intent).toBe('council');
     expect(createBody.data.delegation.primary_target).toBe('council');
+    expect(createBody.data.delegation.capabilities).toEqual(['debate', 'brief']);
+    expect(createBody.data.requested_capabilities).toEqual(['debate', 'brief']);
+    expect(createBody.data.stages[0]?.capability).toBe('debate');
     expect(createBody.data.delegation.council_run_id).toBe(createBody.data.session.councilRunId);
     expect(createBody.data.delegation.task_id).toBe(createBody.data.session.taskId);
 
@@ -4458,6 +6102,59 @@ describe('API routes', () => {
     };
     expect(detailBody.data.session.councilRunId).toBe(createBody.data.session.councilRunId);
     expect(detailBody.data.events.some((event) => event.eventType === 'council.run.created')).toBe(true);
+
+    await app.close();
+  });
+
+  it('adds monitor capability when user explicitly asks for ongoing tracking', async () => {
+    const { app } = await buildServer();
+    const userId = '56565656-5656-4565-8565-565656565656';
+    const rss = `
+      <rss><channel>
+        <item>
+          <title>Regional tensions remain elevated</title>
+          <link>https://example.com/world/tensions</link>
+          <description>Officials expect the situation to remain volatile this week.</description>
+          <pubDate>Thu, 05 Mar 2026 12:00:00 GMT</pubDate>
+        </item>
+      </channel></rss>
+    `;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        text: async () => rss
+      }))
+    );
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/jarvis/requests',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        prompt: '중동 전쟁 관련 최신 동향을 근거와 함께 정리하고 앞으로도 계속 추적하면서 변화가 있으면 알려줘',
+        client_session_id: '2cc92f58-f8c9-43d7-9621-1de10db235f7'
+      }
+    });
+
+    expect(create.statusCode).toBe(201);
+    const createBody = create.json() as {
+      data: {
+        requested_capabilities: string[];
+        completed_capabilities: string[];
+        stages: Array<{ stageKey: string; status: string }>;
+      };
+    };
+    expect(createBody.data.requested_capabilities).toEqual(['research', 'brief', 'monitor', 'notify']);
+    expect(createBody.data.completed_capabilities).toEqual(['research', 'brief', 'monitor', 'notify']);
+    expect(createBody.data.stages.map((stage) => `${stage.stageKey}:${stage.status}`)).toEqual([
+      'research:completed',
+      'brief:completed',
+      'monitor:completed',
+      'notify:completed'
+    ]);
 
     await app.close();
   });
@@ -4494,6 +6191,7 @@ describe('API routes', () => {
         delegation: {
           intent: string;
           primary_target: string;
+          capabilities: string[];
           assistant_context_id?: string;
           task_id?: string;
         };
@@ -4505,8 +6203,127 @@ describe('API routes', () => {
     expect(createBody.data.session.assistantContextId).toBeTruthy();
     expect(createBody.data.session.taskId).toBeTruthy();
     expect(createBody.data.delegation.primary_target).toBe('assistant');
+    expect(createBody.data.delegation.capabilities).toEqual(['answer']);
     expect(createBody.data.delegation.assistant_context_id).toBe(createBody.data.session.assistantContextId);
     expect(createBody.data.delegation.task_id).toBe(createBody.data.session.taskId);
+
+    await app.close();
+  });
+
+  it('routes entity, repo, and policy research prompts into dossier sessions via the research profile router', async () => {
+    const { app } = await buildServer();
+    const userId = '67676767-6767-4676-8676-676767676767';
+    const rss = `
+      <rss><channel>
+        <item>
+          <title>TSMC outlines advanced packaging roadmap</title>
+          <link>https://www.tsmc.com/english/news/packaging-roadmap</link>
+          <description>TSMC shared updated packaging and capacity plans for advanced AI chips.</description>
+          <pubDate>Thu, 05 Mar 2026 09:00:00 GMT</pubDate>
+        </item>
+        <item>
+          <title>EU publishes AI Act implementation guidance</title>
+          <link>https://digital-strategy.ec.europa.eu/en/library/ai-act-implementation-guidance</link>
+          <description>The European Commission published new guidance on implementation timing and scope.</description>
+          <pubDate>Thu, 05 Mar 2026 08:00:00 GMT</pubDate>
+        </item>
+        <item>
+          <title>Analysts expect TSMC capex to remain elevated</title>
+          <link>https://www.reuters.com/technology/tsmc-capex-2026</link>
+          <description>Analysts said TSMC remains central to advanced AI and mobile supply chains.</description>
+          <pubDate>Thu, 05 Mar 2026 07:30:00 GMT</pubDate>
+        </item>
+        <item>
+          <title>EU AI Act changes compliance obligations for foundation models</title>
+          <link>https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32026R0001</link>
+          <description>The updated text clarifies scope, enforcement timing, and obligations for providers.</description>
+          <pubDate>Thu, 05 Mar 2026 07:00:00 GMT</pubDate>
+        </item>
+      </channel></rss>
+    `;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        text: async () => rss
+      }))
+    );
+
+    const entityCreate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/jarvis/requests',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        prompt: 'TSMC를 요약해줘',
+        client_session_id: 'd20b5db0-747a-496f-9a1d-3cfcfb7d9f3f'
+      }
+    });
+    expect(entityCreate.statusCode).toBe(201);
+    const entityBody = entityCreate.json() as {
+      data: {
+        session: { primaryTarget: string; status: string };
+        research_profile: string | null;
+        delegation: { primary_target: string; capabilities: string[] };
+      };
+    };
+    expect(entityBody.data.session.primaryTarget).toBe('dossier');
+    expect(entityBody.data.delegation.primary_target).toBe('dossier');
+    expect(entityBody.data.delegation.capabilities).toEqual(['research', 'brief']);
+    expect(entityBody.data.research_profile).toBe('entity_brief');
+    expect(entityBody.data.session.status).toBe('completed');
+
+    const repoCreate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/jarvis/requests',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        prompt: 'openai codex repo 조사해줘',
+        client_session_id: '6f7445ef-d70a-46c7-82cf-f130f8000b69'
+      }
+    });
+    expect(repoCreate.statusCode).toBe(201);
+    const repoBody = repoCreate.json() as {
+      data: {
+        session: { primaryTarget: string; status: string; intent: string };
+        research_profile: string | null;
+        delegation: { primary_target: string; capabilities: string[] };
+      };
+    };
+    expect(repoBody.data.session.primaryTarget).toBe('dossier');
+    expect(repoBody.data.session.intent).toBe('research');
+    expect(repoBody.data.delegation.primary_target).toBe('dossier');
+    expect(repoBody.data.delegation.capabilities).toEqual(['research', 'brief']);
+    expect(repoBody.data.research_profile).toBe('repo_research');
+    expect(repoBody.data.session.status).toBe('completed');
+
+    const policyCreate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/jarvis/requests',
+      headers: {
+        'x-user-id': userId
+      },
+      payload: {
+        prompt: 'EU AI Act 최근 변화를 정리해줘',
+        client_session_id: '3d77c4e0-b03d-4d90-9ed2-c9db5f3f9239'
+      }
+    });
+    expect(policyCreate.statusCode).toBe(201);
+    const policyBody = policyCreate.json() as {
+      data: {
+        session: { primaryTarget: string; status: string };
+        research_profile: string | null;
+        delegation: { primary_target: string; capabilities: string[] };
+      };
+    };
+    expect(policyBody.data.session.primaryTarget).toBe('dossier');
+    expect(policyBody.data.delegation.primary_target).toBe('dossier');
+    expect(policyBody.data.delegation.capabilities).toEqual(['research', 'brief']);
+    expect(policyBody.data.research_profile).toBe('policy_regulation');
+    expect(policyBody.data.session.status).toBe('completed');
 
     await app.close();
   });
@@ -4584,7 +6401,7 @@ describe('API routes', () => {
       },
       payload: {
         skill_id: 'deep_research',
-        prompt: '세계 뉴스와 전쟁 동향을 최신 근거로 정리해줘'
+        prompt: '전쟁 관련 최신 동향을 최신 근거로 정리해줘'
       }
     });
     expect(preview.statusCode).toBe(200);
@@ -4607,7 +6424,7 @@ describe('API routes', () => {
       },
       payload: {
         skill_id: 'deep_research',
-        prompt: '세계 뉴스와 전쟁 동향을 최신 근거로 정리해줘',
+        prompt: '전쟁 관련 최신 동향을 최신 근거로 정리해줘',
         execute: true
       }
     });

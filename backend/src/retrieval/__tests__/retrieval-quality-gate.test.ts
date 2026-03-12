@@ -41,7 +41,7 @@ describe('evaluateRetrievalQualityGate', () => {
           publishedAt: new Date(now - 60 * 60 * 1000).toISOString(),
           retrievedAt: new Date(now).toISOString(),
           snippet: 'A',
-          scores: { relevance: 0.9, freshness: 0.9, trust: 0.9, diversity: 0.9, final: 0.9 }
+          scores: { relevance: 0.9, freshness: 0.9, trust: 0.9, diversity: 0.9, significance: 0.9, sourceFit: 0.9, final: 0.9 }
         },
         {
           sourceId: 'src_2',
@@ -51,7 +51,7 @@ describe('evaluateRetrievalQualityGate', () => {
           publishedAt: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
           retrievedAt: new Date(now).toISOString(),
           snippet: 'B',
-          scores: { relevance: 0.8, freshness: 0.8, trust: 0.8, diversity: 0.8, final: 0.8 }
+          scores: { relevance: 0.8, freshness: 0.8, trust: 0.8, diversity: 0.8, significance: 0.8, sourceFit: 0.8, final: 0.8 }
         }
       ])
     });
@@ -84,7 +84,7 @@ describe('evaluateRetrievalQualityGate', () => {
           publishedAt: new Date(now - 20 * 24 * 60 * 60 * 1000).toISOString(),
           retrievedAt: new Date(now).toISOString(),
           snippet: 'A',
-          scores: { relevance: 0.6, freshness: 0.1, trust: 0.8, diversity: 0.2, final: 0.4 }
+          scores: { relevance: 0.6, freshness: 0.1, trust: 0.8, diversity: 0.2, significance: 0.4, sourceFit: 0.5, final: 0.4 }
         }
       ])
     });
