@@ -766,6 +766,58 @@ type NarrativeClusterTrendSummary = {
   lastDivergingAt: string | null;
 };
 
+export function resolveNarrativeClusterState(input: {
+  previousState: IntelligenceNarrativeClusterRecord['state'] | null;
+  recurringEventCount: number;
+  divergingEventCount: number;
+  supportiveHistoryCount: number;
+  driftScore: number;
+  supportScore: number;
+  contradictionScore: number;
+  hotspotEventCount: number;
+  trendSummary: Pick<
+    NarrativeClusterTrendSummary,
+    'recurringStrengthTrend' | 'divergenceTrend' | 'supportDecayScore' | 'contradictionAcceleration'
+  >;
+}): IntelligenceNarrativeClusterRecord['state'] {
+  const divergenceTriggered =
+    input.divergingEventCount > 0 ||
+    input.driftScore >= 0.58 ||
+    input.trendSummary.divergenceTrend >= 0.18 ||
+    input.trendSummary.contradictionAcceleration >= 0.16;
+  const recurringTriggered =
+    input.recurringEventCount > 0 ||
+    input.supportiveHistoryCount > 0 ||
+    input.trendSummary.recurringStrengthTrend >= 0.12;
+
+  if (input.previousState === 'diverging') {
+    const recovered =
+      input.driftScore < 0.42 &&
+      input.contradictionScore < 0.24 &&
+      input.hotspotEventCount === 0 &&
+      input.trendSummary.divergenceTrend < 0.08 &&
+      input.trendSummary.contradictionAcceleration < 0.08 &&
+      input.supportScore >= input.contradictionScore + 0.1;
+    if (!recovered) {
+      return 'diverging';
+    }
+    return recurringTriggered ? 'recurring' : 'forming';
+  }
+
+  if (input.previousState === 'recurring') {
+    if (divergenceTriggered) {
+      return 'diverging';
+    }
+    const recurringStillHealthy =
+      input.supportScore >= input.contradictionScore - 0.05 ||
+      input.trendSummary.supportDecayScore < 0.18 ||
+      input.trendSummary.recurringStrengthTrend >= -0.08;
+    return recurringTriggered || recurringStillHealthy ? 'recurring' : 'forming';
+  }
+
+  return divergenceTriggered ? 'diverging' : recurringTriggered ? 'recurring' : 'forming';
+}
+
 function computeNarrativeClusterTrendSummary(input: {
   memberEvents: IntelligenceEventClusterRecord[];
   referenceMs: number;
@@ -885,17 +937,17 @@ function computeNarrativeClusterAggregate(input: {
       0.06 * trendSummary.contradictionAcceleration +
       0.04 * (1 - timeCoherenceScore),
   );
-  const state: IntelligenceNarrativeClusterRecord['state'] =
-    divergingEventCount > 0 ||
-    driftScore >= 0.58 ||
-    trendSummary.divergenceTrend >= 0.18 ||
-    trendSummary.contradictionAcceleration >= 0.16
-      ? 'diverging'
-      : recurringEventCount > 0 ||
-          supportiveHistoryCount > 0 ||
-          trendSummary.recurringStrengthTrend >= 0.12
-        ? 'recurring'
-        : 'forming';
+  const state = resolveNarrativeClusterState({
+    previousState: input.baseCluster?.state ?? null,
+    recurringEventCount,
+    divergingEventCount,
+    supportiveHistoryCount,
+    driftScore,
+    supportScore,
+    contradictionScore,
+    hotspotEventCount,
+    trendSummary,
+  });
   const lastEventAt = input.memberEvents
     .map((row) => eventAnchorIso(row))
     .filter((row): row is string => Boolean(row))

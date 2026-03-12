@@ -2220,6 +2220,86 @@ function serializeRuntimeBindingDrafts(drafts: RuntimeBindingDraft[]): string {
   );
 }
 
+type RuntimeBindingChangeSummary = {
+  added: number;
+  removed: number;
+  changed: number;
+  unchanged: number;
+  rows: Array<{
+    index: number;
+    kind: "added" | "removed" | "changed";
+    title: string;
+    details: string[];
+  }>;
+};
+
+function summarizeRuntimeBindingChanges(
+  baselineDrafts: RuntimeBindingDraft[],
+  drafts: RuntimeBindingDraft[],
+): RuntimeBindingChangeSummary {
+  const rows: RuntimeBindingChangeSummary["rows"] = [];
+  let added = 0;
+  let removed = 0;
+  let changed = 0;
+  let unchanged = 0;
+  const maxLength = Math.max(baselineDrafts.length, drafts.length);
+
+  for (let index = 0; index < maxLength; index += 1) {
+    const baseline = baselineDrafts[index] ?? null;
+    const draft = drafts[index] ?? null;
+    if (!baseline && draft) {
+      added += 1;
+      rows.push({
+        index,
+        kind: "added",
+        title: `${draft.provider} / ${draft.modelId || "no-model"}`,
+        details: [`weight ${draft.weight}`, `rank ${draft.fallbackRank}`],
+      });
+      continue;
+    }
+    if (baseline && !draft) {
+      removed += 1;
+      rows.push({
+        index,
+        kind: "removed",
+        title: `${baseline.provider} / ${baseline.modelId || "no-model"}`,
+        details: [`was rank ${baseline.fallbackRank}`],
+      });
+      continue;
+    }
+    if (!baseline || !draft) {
+      continue;
+    }
+
+    const details: string[] = [];
+    if (baseline.provider !== draft.provider) details.push(`provider ${baseline.provider} -> ${draft.provider}`);
+    if (baseline.modelId !== draft.modelId) details.push(`model ${baseline.modelId || "none"} -> ${draft.modelId || "none"}`);
+    if (baseline.weight !== draft.weight) details.push(`weight ${baseline.weight} -> ${draft.weight}`);
+    if (baseline.fallbackRank !== draft.fallbackRank) details.push(`rank ${baseline.fallbackRank} -> ${draft.fallbackRank}`);
+    if (baseline.canaryPercent !== draft.canaryPercent) details.push(`canary ${baseline.canaryPercent}% -> ${draft.canaryPercent}%`);
+    if (baseline.isActive !== draft.isActive) details.push(`active ${baseline.isActive ? "on" : "off"} -> ${draft.isActive ? "on" : "off"}`);
+    if (baseline.requiresStructuredOutput !== draft.requiresStructuredOutput) details.push(`structured ${baseline.requiresStructuredOutput ? "on" : "off"} -> ${draft.requiresStructuredOutput ? "on" : "off"}`);
+    if (baseline.requiresToolUse !== draft.requiresToolUse) details.push(`tool use ${baseline.requiresToolUse ? "on" : "off"} -> ${draft.requiresToolUse ? "on" : "off"}`);
+    if (baseline.requiresLongContext !== draft.requiresLongContext) details.push(`long context ${baseline.requiresLongContext ? "on" : "off"} -> ${draft.requiresLongContext ? "on" : "off"}`);
+    if (baseline.maxCostClass !== draft.maxCostClass) details.push(`cost ${(baseline.maxCostClass ?? "none")} -> ${(draft.maxCostClass ?? "none")}`);
+
+    if (details.length === 0) {
+      unchanged += 1;
+      continue;
+    }
+
+    changed += 1;
+    rows.push({
+      index,
+      kind: "changed",
+      title: `${baseline.provider} / ${baseline.modelId || "no-model"}`,
+      details,
+    });
+  }
+
+  return { added, removed, changed, unchanged, rows };
+}
+
 function RuntimeControlPlanePanel({
   runtime,
   workspaceId,
@@ -2271,6 +2351,16 @@ function RuntimeControlPlanePanel({
   const draftSerialized = useMemo(() => serializeRuntimeBindingDrafts(drafts), [drafts]);
   const dirty = baselineSerialized !== draftSerialized;
   const effectiveBusyKey = `runtime-alias:${scope}:${alias}`;
+  const changeSummary = useMemo(
+    () => summarizeRuntimeBindingChanges(aliasBindings.map(toRuntimeBindingDraft), drafts),
+    [aliasBindings, drafts],
+  );
+  const selectedRollouts = useMemo(() => {
+    const rollouts = scope === "workspace" ? runtime.rollouts.workspace : runtime.rollouts.global;
+    return rollouts
+      .filter((rollout) => rollout.alias === alias)
+      .slice(0, 6);
+  }, [alias, runtime.rollouts.global, runtime.rollouts.workspace, scope]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2419,6 +2509,55 @@ function RuntimeControlPlanePanel({
             <p className="font-mono uppercase tracking-[0.18em] text-white/40">Diff Preview</p>
             <p className="mt-2">workspace {workspaceId ?? "—"}</p>
             <p className="mt-1">baseline {aliasBindings.length} · draft {drafts.length} · {dirty ? "changed" : "clean"}</p>
+            <p className="mt-1 text-[11px] text-white/45">
+              +{changeSummary.added} / -{changeSummary.removed} / ~{changeSummary.changed} / ={changeSummary.unchanged}
+            </p>
+          </div>
+        </div>
+        {changeSummary.rows.length > 0 ? (
+          <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3">
+            <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/45">Pending Changes</p>
+            <div className="mt-2 space-y-2">
+              {changeSummary.rows.slice(0, 6).map((row) => (
+                <div key={`${row.kind}-${row.index}-${row.title}`} className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2 text-xs text-white/70">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-mono text-cyan-200">{row.title}</span>
+                    <span
+                      className={
+                        row.kind === "added"
+                          ? "text-emerald-200"
+                          : row.kind === "removed"
+                            ? "text-rose-200"
+                            : "text-amber-200"
+                      }
+                    >
+                      {row.kind}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-white/45">{row.details.join(" · ")}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3">
+          <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/45">Selected Alias Rollouts</p>
+          <div className="mt-2 space-y-2">
+            {selectedRollouts.length === 0 ? (
+              <p className="text-xs text-white/40">No rollout history for this alias/scope yet</p>
+            ) : (
+              selectedRollouts.map((rollout) => (
+                <div key={rollout.id} className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2 text-xs text-white/70">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-mono text-cyan-200">{rollout.alias}</span>
+                    <span className="text-white/40">{formatDateTime(rollout.createdAt)}</span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-white/45">
+                    {scope} · bindings {rollout.bindingIds.length} · {rollout.note ?? "no note"}
+                  </p>
+                </div>
+              ))
+            )}
           </div>
         </div>
         <div className="mt-4 space-y-3">
@@ -2620,6 +2759,7 @@ function NarrativeClusterInboxPanel({
   onNoteClick: (clusterId: string, eventId: string | null) => void;
 }) {
   const activeCluster = selectedClusterDetail?.narrativeCluster ?? null;
+  const latestClusterLedgerEntry = selectedClusterDetail?.ledgerEntries?.[0] ?? null;
   return (
     <section className="rounded-3xl border border-white/10 bg-black/35 p-4 backdrop-blur-xl">
       <div className="mb-3 flex items-center justify-between gap-3">
@@ -2691,6 +2831,9 @@ function NarrativeClusterInboxPanel({
                   </p>
                   <p className="mt-1 text-[11px] text-white/35">
                     recur trend {cluster.recurringStrengthTrend.toFixed(2)} · div trend {cluster.divergenceTrend.toFixed(2)} · decay {cluster.supportDecayScore.toFixed(2)} · accel {cluster.contradictionAcceleration.toFixed(2)}
+                  </p>
+                  <p className="mt-1 text-[11px] text-white/30">
+                    last transition {formatDateTime(cluster.lastLedgerAt)}
                   </p>
                 </button>
               );
@@ -2766,6 +2909,15 @@ function NarrativeClusterInboxPanel({
                     `recurring trend ${selectedClusterTrendSummary.recurring_strength_trend.toFixed(2)} · divergence trend ${selectedClusterTrendSummary.divergence_trend.toFixed(2)}`,
                     `support decay ${selectedClusterTrendSummary.support_decay_score.toFixed(2)} · contradiction acceleration ${selectedClusterTrendSummary.contradiction_acceleration.toFixed(2)}`,
                     `last recurring ${formatDateTime(selectedClusterTrendSummary.last_recurring_at)} · last diverging ${formatDateTime(selectedClusterTrendSummary.last_diverging_at)}`,
+                  ]}
+                />
+              ) : null}
+              {latestClusterLedgerEntry ? (
+                <DetailBlock
+                  title="Current Transition"
+                  items={[
+                    `${latestClusterLedgerEntry.entryType} · ${latestClusterLedgerEntry.summary}`,
+                    `delta ${latestClusterLedgerEntry.scoreDelta.toFixed(2)} · events ${latestClusterLedgerEntry.sourceEventIds.length} · ${formatDateTime(latestClusterLedgerEntry.createdAt)}`,
                   ]}
                 />
               ) : null}
