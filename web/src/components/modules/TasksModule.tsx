@@ -12,6 +12,8 @@ import { TaskStatusBadge } from "@/components/ui/TaskStatusBadge";
 import { useHUD } from "@/components/providers/HUDProvider";
 import { subscribeJarvisDataRefresh } from "@/lib/hud/data-refresh";
 import { useLocale } from "@/components/providers/LocaleProvider";
+import type { TranslationKey } from "@/lib/locale";
+import { mergeHudAndJarvisSessions } from "@/lib/jarvis/session-view";
 
 function formatRelativeTime(
   isoDate: string,
@@ -29,18 +31,29 @@ function formatRelativeTime(
 
 const PAGE_SIZE = 20;
 
-function resolveHudPrimaryTarget(intent?: string): JarvisSessionRecord["primaryTarget"] {
-  if (intent === "council") return "council";
-  if (intent === "code") return "execution";
-  if (intent === "research" || intent === "news" || intent === "finance") return "dossier";
-  return "assistant";
+function formatSessionTarget(
+  target: JarvisSessionRecord["primaryTarget"],
+  t: (key: TranslationKey, values?: Record<string, string | number>) => string
+): string {
+  if (target === "assistant") return t("actionCenter.target.assistant");
+  if (target === "mission") return t("actionCenter.target.mission");
+  if (target === "council") return t("actionCenter.target.council");
+  if (target === "execution") return t("actionCenter.target.execution");
+  if (target === "briefing") return t("actionCenter.target.briefing");
+  return t("actionCenter.target.dossier");
 }
 
-function resolveHudWorkspacePreset(workspacePreset?: string | null): JarvisSessionRecord["workspacePreset"] {
-  if (workspacePreset === "jarvis" || workspacePreset === "research" || workspacePreset === "execution" || workspacePreset === "control") {
-    return workspacePreset;
-  }
-  return null;
+function formatSessionQueueStatus(
+  status: JarvisSessionRecord["status"],
+  t: (key: TranslationKey, values?: Record<string, string | number>) => string
+): string {
+  if (status === "queued") return t("taskStatus.queued");
+  if (status === "running") return t("taskStatus.running");
+  if (status === "blocked" || status === "needs_approval") return t("taskStatus.blocked");
+  if (status === "failed") return t("taskStatus.failed");
+  if (status === "completed") return t("taskStatus.done");
+  if (status === "stale") return t("actionCenter.stale");
+  return status;
 }
 
 export function TasksModule() {
@@ -55,18 +68,7 @@ export function TasksModule() {
   const [statusFilter, setStatusFilter] = useState<TaskStatus | "all">("all");
   const [hasMore, setHasMore] = useState(true);
   const [showRecentSessions, setShowRecentSessions] = useState(false);
-
-  const staleSessionByTaskId = useMemo(() => {
-    const map = new Map<string, boolean>();
-    for (const session of sessions) {
-      if (!session.stale || !session.taskId) {
-        continue;
-      }
-      map.set(session.taskId, true);
-    }
-    return map;
-  }, [sessions]);
-  const staleCount = useMemo(() => sessions.filter((session) => session.stale).length, [sessions]);
+  const [showTaskHistory, setShowTaskHistory] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -93,7 +95,7 @@ export function TasksModule() {
     } finally {
       setLoading(false);
     }
-  }, [statusFilter]);
+  }, [statusFilter, t]);
 
   const loadMore = async () => {
     setLoadingMore(true);
@@ -121,7 +123,7 @@ export function TasksModule() {
       { onUpdated: () => void refresh() }
     );
     return () => stream.close();
-  }, [statusFilter]);
+  }, [refresh, statusFilter]);
 
   useEffect(() => {
     return subscribeJarvisDataRefresh((detail) => {
@@ -132,54 +134,20 @@ export function TasksModule() {
   }, [refresh]);
 
   const mergedJarvisSessions = useMemo(() => {
-    const byId = new Map<string, JarvisSessionRecord>();
-    for (const session of jarvisSessions) {
-      byId.set(session.id, session);
-    }
-
-    const merged: JarvisSessionRecord[] = sessions.map((session) => {
-      const existing = byId.get(session.id);
-      if (existing) {
-        return existing;
-      }
-      return {
-        id: session.id,
-        userId: "",
-        title: session.prompt,
-        prompt: session.prompt,
-        source: "hud_runtime",
-        intent:
-          session.intent === "code" ||
-          session.intent === "research" ||
-          session.intent === "finance" ||
-          session.intent === "news" ||
-          session.intent === "council"
-            ? session.intent
-            : "general",
-        status: session.stale ? "stale" : session.status === "active" ? "running" : "queued",
-        workspacePreset: resolveHudWorkspacePreset(session.workspacePreset),
-        primaryTarget: resolveHudPrimaryTarget(session.intent),
-        taskId: session.taskId ?? null,
-        missionId: session.missionId ?? null,
-        assistantContextId: null,
-        councilRunId: null,
-        executionRunId: null,
-        briefingId: null,
-        dossierId: null,
-        createdAt: session.createdAt,
-        updatedAt: session.staleDetectedAt ?? session.createdAt,
-        lastEventAt: session.staleDetectedAt ?? session.createdAt,
-      };
-    });
-
-    for (const session of jarvisSessions) {
-      if (!merged.some((item) => item.id === session.id)) {
-        merged.push(session);
-      }
-    }
-
-    return merged.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    return mergeHudAndJarvisSessions(sessions, jarvisSessions);
   }, [jarvisSessions, sessions]);
+
+  const staleSessionByTaskId = useMemo(() => {
+    const map = new Map<string, boolean>();
+    for (const session of mergedJarvisSessions) {
+      if (session.status !== "stale" || !session.taskId) {
+        continue;
+      }
+      map.set(session.taskId, true);
+    }
+    return map;
+  }, [mergedJarvisSessions]);
+  const staleCount = useMemo(() => mergedJarvisSessions.filter((session) => session.status === "stale").length, [mergedJarvisSessions]);
 
   const filtered = useMemo(() => {
     const keyword = searchTerm.trim().toLowerCase();
@@ -204,10 +172,11 @@ export function TasksModule() {
       session.status === "needs_approval" ||
       session.status === "stale"
     );
-    const recent = mergedJarvisSessions
-      .filter((session) => !now.some((row) => row.id === session.id) && !needsAttention.some((row) => row.id === session.id))
-      .slice(0, showRecentSessions ? 8 : 3);
-    return { now, needsAttention, recent };
+    const allRecent = mergedJarvisSessions.filter(
+      (session) => !now.some((row) => row.id === session.id) && !needsAttention.some((row) => row.id === session.id)
+    );
+    const recent = showRecentSessions ? allRecent.slice(0, 8) : [];
+    return { now, needsAttention, recent, recentCount: allRecent.length };
   }, [mergedJarvisSessions, showRecentSessions]);
 
   const sessionStatusTone = (status: JarvisSessionRecord["status"]) => {
@@ -282,7 +251,7 @@ export function TasksModule() {
             <div key={labelKey}>
               <div className="mb-2 flex items-center justify-between">
                 <p className="text-[10px] font-mono uppercase tracking-[0.22em] text-white/45">{t(labelKey)}</p>
-                {labelKey === "tasks.queue.recent" && mergedJarvisSessions.length > sessionGroups.now.length + sessionGroups.needsAttention.length + 3 ? (
+                {labelKey === "tasks.queue.recent" && sessionGroups.recentCount > 0 ? (
                   <button
                     type="button"
                     onClick={() => setShowRecentSessions((prev) => !prev)}
@@ -300,7 +269,7 @@ export function TasksModule() {
                     <div key={session.id} className={`rounded-lg border px-3 py-2 ${sessionStatusTone(session.status)}`}>
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-[10px] font-mono uppercase tracking-[0.18em]">
-                          {session.primaryTarget} · {session.status}
+                          {formatSessionTarget(session.primaryTarget, t)} · {formatSessionQueueStatus(session.status, t)}
                         </span>
                         <span className="text-[10px] font-mono text-white/60">{formatRelativeTime(session.updatedAt, t)}</span>
                       </div>
@@ -315,62 +284,77 @@ export function TasksModule() {
       </div>
 
       <div className="flex-1 border border-white/10 rounded overflow-hidden bg-black/30">
-        <div className="grid grid-cols-12 gap-2 px-3 py-2 border-b border-white/10 font-mono text-[10px] text-white/40 tracking-wider uppercase">
-          <div className="col-span-2">{t("tasks.table.id")}</div>
-          <div className="col-span-5">{t("tasks.table.title")}</div>
-          <div className="col-span-2">{t("tasks.table.mode")}</div>
-          <div className="col-span-3 text-right">{t("tasks.table.state")}</div>
+        <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
+          <div className="font-mono text-[10px] text-white/40 tracking-wider uppercase">{t("tasks.table.title")}</div>
+          <button
+            type="button"
+            onClick={() => setShowTaskHistory((prev) => !prev)}
+            className="text-[10px] font-mono text-cyan-300 hover:text-cyan-100"
+          >
+            {showTaskHistory ? t("tasks.queue.hideRecent") : t("tasks.queue.viewRecent")}
+          </button>
         </div>
 
-        <div className="h-full max-h-[560px] overflow-y-auto">
-          <AsyncState
-            loading={loading}
-            error={error}
-            empty={!loading && !error && filtered.length === 0}
-            emptyText={t("tasks.empty")}
-            loadingText={t("tasks.loading")}
-            onRetry={() => void refresh()}
-            className="p-4"
-          />
+        {!showTaskHistory ? (
+          <div className="p-4 text-xs text-white/45">{t("tasks.queue.emptyRecent")}</div>
+        ) : (
+          <div className="h-full max-h-[560px] overflow-y-auto">
+            <div className="grid grid-cols-12 gap-2 px-3 py-2 border-b border-white/10 font-mono text-[10px] text-white/40 tracking-wider uppercase">
+              <div className="col-span-2">{t("tasks.table.id")}</div>
+              <div className="col-span-5">{t("tasks.table.title")}</div>
+              <div className="col-span-2">{t("tasks.table.mode")}</div>
+              <div className="col-span-3 text-right">{t("tasks.table.state")}</div>
+            </div>
 
-          {!loading &&
-            !error &&
-            filtered.map((task) => {
-              const isStale = staleSessionByTaskId.get(task.id) === true;
-              return (
-              <Link
-                key={task.id}
-                href={`/tasks/${task.id}`}
-                className="grid grid-cols-12 gap-2 px-3 py-2.5 border-b border-white/5 hover:bg-white/5 items-center"
+            <AsyncState
+              loading={loading}
+              error={error}
+              empty={!loading && !error && filtered.length === 0}
+              emptyText={t("tasks.empty")}
+              loadingText={t("tasks.loading")}
+              onRetry={() => void refresh()}
+              className="p-4"
+            />
+
+            {!loading &&
+              !error &&
+              filtered.map((task) => {
+                const isStale = staleSessionByTaskId.get(task.id) === true;
+                return (
+                <Link
+                  key={task.id}
+                  href={`/tasks/${task.id}`}
+                  className="grid grid-cols-12 gap-2 px-3 py-2.5 border-b border-white/5 hover:bg-white/5 items-center"
+                >
+                  <div className="col-span-2 font-mono text-[10px] text-white/40">{task.id.slice(0, 8)}</div>
+                  <div className="col-span-5 text-xs text-white/85 truncate">{task.title}</div>
+                  <div className="col-span-2 font-mono text-[10px] text-white/40 uppercase">{task.mode}</div>
+                  <div className="col-span-3 flex justify-end">
+                    <TaskStatusBadge status={task.status} />
+                    {isStale && (
+                      <span className="ml-2 rounded border border-amber-400/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-mono text-amber-200">
+                        STALE
+                      </span>
+                    )}
+                  </div>
+                  <div className="col-span-12 text-right font-mono text-[10px] text-white/35">
+                    {formatRelativeTime(task.updatedAt, t)}
+                  </div>
+                </Link>
+                );
+              })}
+
+            {!loading && !error && hasMore && filtered.length > 0 && (
+              <button
+                onClick={() => void loadMore()}
+                disabled={loadingMore}
+                className="w-full py-2 text-[11px] font-mono text-cyan-400 hover:text-cyan-200 border-t border-white/10 hover:bg-white/5 transition-colors disabled:opacity-50"
               >
-                <div className="col-span-2 font-mono text-[10px] text-white/40">{task.id.slice(0, 8)}</div>
-                <div className="col-span-5 text-xs text-white/85 truncate">{task.title}</div>
-                <div className="col-span-2 font-mono text-[10px] text-white/40 uppercase">{task.mode}</div>
-                <div className="col-span-3 flex justify-end">
-                  <TaskStatusBadge status={task.status} />
-                  {isStale && (
-                    <span className="ml-2 rounded border border-amber-400/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-mono text-amber-200">
-                      STALE
-                    </span>
-                  )}
-                </div>
-                <div className="col-span-12 text-right font-mono text-[10px] text-white/35">
-                  {formatRelativeTime(task.updatedAt, t)}
-                </div>
-              </Link>
-              );
-            })}
-
-          {!loading && !error && hasMore && filtered.length > 0 && (
-            <button
-              onClick={() => void loadMore()}
-              disabled={loadingMore}
-              className="w-full py-2 text-[11px] font-mono text-cyan-400 hover:text-cyan-200 border-t border-white/10 hover:bg-white/5 transition-colors disabled:opacity-50"
-            >
-              {loadingMore ? t("tasks.loadingMore") : t("tasks.loadMore")}
-            </button>
-          )}
-        </div>
+                {loadingMore ? t("tasks.loadingMore") : t("tasks.loadMore")}
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </main>
   );

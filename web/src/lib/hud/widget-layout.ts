@@ -1,4 +1,5 @@
-const STORAGE_PREFIX = "hud-widget-layout:";
+const STORAGE_PREFIX = "hud-widget-layout:v3:";
+const LEGACY_STORAGE_PREFIXES = ["hud-widget-layout:v2:", "hud-widget-layout:"];
 const HUD_VIEWPORT_SELECTOR = "[data-hud-viewport='true']";
 
 export type WidgetLayout = { x: number; y: number; w: number; h: number };
@@ -20,6 +21,27 @@ export function loadWidgetLayout(id: string): WidgetLayout | null {
   } catch {
     return null;
   }
+}
+
+export function loadLegacyWidgetLayout(id: string): WidgetLayout | null {
+  for (const prefix of LEGACY_STORAGE_PREFIXES) {
+    try {
+      const raw = localStorage.getItem(prefix + id);
+      if (!raw) continue;
+      const data = JSON.parse(raw) as Record<string, unknown>;
+      if (
+        typeof data.x === "number" &&
+        typeof data.y === "number" &&
+        typeof data.w === "number" &&
+        typeof data.h === "number"
+      ) {
+        return data as unknown as WidgetLayout;
+      }
+    } catch {
+      // try the next legacy prefix
+    }
+  }
+  return null;
 }
 
 export function saveWidgetLayout(id: string, layout: WidgetLayout): void {
@@ -79,7 +101,7 @@ export function tileWidgetLayouts(
   if (widgetIds.length === 0) return;
 
   const gap = 12;
-  const preferredTileWidth = 360;
+  const preferredTileWidth = 288;
   const maxColsByWidth = Math.max(1, Math.floor((viewportWidth - gap) / (preferredTileWidth + gap)));
   const cols = Math.max(1, Math.min(widgetIds.length, Math.ceil(Math.sqrt(widgetIds.length)), maxColsByWidth));
   const rows = Math.ceil(widgetIds.length / cols);
@@ -106,16 +128,16 @@ export function spotlightWidgetLayout(
   viewportHeight: number,
   topOffset = 52,
 ): void {
-  const gap = 24;
+  const gap = 18;
   const safeWidth = Math.max(320, viewportWidth);
   const safeHeight = Math.max(320, viewportHeight);
   const availableHeight = Math.max(240, safeHeight - topOffset - gap * 2);
-  const preferredWidth = Math.floor(safeWidth * 0.72);
-  const preferredHeight = Math.floor(availableHeight * 0.82);
+  const preferredWidth = Math.floor(safeWidth * 0.6);
+  const preferredHeight = Math.floor(availableHeight * 0.7);
   const maxWidth = Math.max(320, safeWidth - gap * 2);
   const maxHeight = Math.max(240, safeHeight - topOffset - gap * 2);
-  const width = Math.max(480, Math.min(preferredWidth, maxWidth));
-  const height = Math.max(360, Math.min(preferredHeight, maxHeight));
+  const width = Math.max(380, Math.min(preferredWidth, maxWidth));
+  const height = Math.max(300, Math.min(preferredHeight, maxHeight));
   const x = Math.max(gap, Math.floor((safeWidth - width) / 2));
   const y = Math.max(topOffset + gap, Math.floor(topOffset + (availableHeight - height) / 2));
 

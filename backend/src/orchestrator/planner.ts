@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
+import type { ResolvedModelSelection } from '../providers/model-selection';
+import { generateWithPreferenceRecovery } from '../providers/preference-recovery';
 import type { ProviderRouter } from '../providers/router';
 import type { ProviderCredentialsByProvider } from '../providers/types';
 import { withAiInvocationTrace } from '../observability/ai-trace';
@@ -80,6 +82,7 @@ export async function generatePlan(
     provider?: 'auto' | 'openai' | 'gemini' | 'anthropic' | 'local';
     strictProvider?: boolean;
     model?: string;
+    modelSelection?: ResolvedModelSelection;
     trace?: {
       store: JarvisStore;
       env: AppEnv;
@@ -88,17 +91,35 @@ export async function generatePlan(
     };
   }
 ): Promise<OrchestratorPlan> {
+  const modelSelection: ResolvedModelSelection = options?.modelSelection ?? {
+    featureKey: 'mission_plan_generation',
+    provider: options?.provider ?? 'auto',
+    strictProvider: options?.strictProvider ?? false,
+    model: options?.model ?? null,
+    source:
+      typeof options?.provider !== 'undefined'
+      || typeof options?.strictProvider !== 'undefined'
+      || typeof options?.model !== 'undefined'
+        ? 'request_override'
+        : 'auto',
+    preference: null
+  };
+
   const run = () =>
-    providerRouter.generate({
-      prompt: `Generate an execution plan for the following request:\n\n${prompt}`,
-      systemPrompt: PLAN_SYSTEM_PROMPT,
-      provider: options?.provider,
-      strictProvider: options?.strictProvider,
-      model: options?.model,
-      credentialsByProvider,
-      taskType: 'execute',
-      temperature: 0.3,
-      maxOutputTokens: 2000
+    generateWithPreferenceRecovery({
+      providerRouter,
+      modelSelection,
+      request: {
+        prompt: `Generate an execution plan for the following request:\n\n${prompt}`,
+        systemPrompt: PLAN_SYSTEM_PROMPT,
+        provider: modelSelection.provider,
+        strictProvider: modelSelection.strictProvider,
+        model: modelSelection.model ?? undefined,
+        credentialsByProvider,
+        taskType: 'execute',
+        temperature: 0.3,
+        maxOutputTokens: 2000
+      }
     });
   const result = options?.trace
     ? await withAiInvocationTrace({
@@ -107,8 +128,8 @@ export async function generatePlan(
         userId: options.trace.userId,
         featureKey: 'mission_plan_generation',
         taskType: 'execute',
-        requestProvider: options.provider ?? 'auto',
-        requestModel: options.model ?? null,
+        requestProvider: modelSelection.provider,
+        requestModel: modelSelection.model ?? null,
         traceId: options.trace.traceId,
         contextRefs: {
           route: '/api/v1/missions/generate-plan'

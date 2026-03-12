@@ -7,8 +7,8 @@ import { AlertCircle, Clock3, PlayCircle, Sparkles, Layers, X } from "lucide-rea
 import { useHUD } from "@/components/providers/HUDProvider";
 import { useLocale } from "@/components/providers/LocaleProvider";
 import { ApiRequestError } from "@/lib/api/client";
-import { getDashboardOverview, streamDashboardOverviewEvents } from "@/lib/api/endpoints";
-import type { TaskRecord, UpgradeProposalRecord } from "@/lib/api/types";
+import { getDashboardOverview, listJarvisSessions, streamDashboardOverviewEvents } from "@/lib/api/endpoints";
+import type { JarvisSessionRecord, TaskRecord, UpgradeProposalRecord } from "@/lib/api/types";
 import { isFeatureEnabled } from "@/lib/feature-flags";
 import { getVisualCoreReasonMeta, type VisualCoreReasonSeverity } from "@/lib/visual-core/reason-meta";
 import {
@@ -25,6 +25,8 @@ import {
     type JarvisRuntimeEventDetail,
 } from "@/lib/runtime-events";
 import { dispatchSessionRerun } from "@/lib/hud/session-rerun";
+import { subscribeJarvisDataRefresh } from "@/lib/hud/data-refresh";
+import { getSessionRestoreConfig, mergeHudAndJarvisSessions, type JarvisSessionView } from "@/lib/jarvis/session-view";
 const MAX_APPROVALS = 3;
 const MAX_RUNNING_TASKS = 4;
 const DASHBOARD_OVERVIEW_QUERY = {
@@ -106,9 +108,55 @@ function formatSessionWidget(
     return widgetId.trim();
 }
 
+function formatSessionTarget(
+    target: JarvisSessionRecord["primaryTarget"],
+    t: (key: keyof typeof import("@/lib/locale").translations.en, values?: Record<string, string | number>) => string
+): string {
+    if (target === "assistant") return t("actionCenter.target.assistant");
+    if (target === "mission") return t("actionCenter.target.mission");
+    if (target === "council") return t("actionCenter.target.council");
+    if (target === "execution") return t("actionCenter.target.execution");
+    if (target === "briefing") return t("actionCenter.target.briefing");
+    return t("actionCenter.target.dossier");
+}
+
+function formatSessionStatus(
+    status: JarvisSessionRecord["status"],
+    t: (key: keyof typeof import("@/lib/locale").translations.en, values?: Record<string, string | number>) => string
+): string {
+    if (status === "queued") return t("taskStatus.queued");
+    if (status === "running") return t("taskStatus.running");
+    if (status === "blocked" || status === "needs_approval") return t("taskStatus.blocked");
+    if (status === "failed") return t("taskStatus.failed");
+    if (status === "completed") return t("taskStatus.done");
+    if (status === "stale") return t("actionCenter.stale");
+    return status;
+}
+
+function rankSessionForRail(session: JarvisSessionView, activeSessionId: string | null): { priority: number; include: boolean } {
+    const ageMs = Date.now() - new Date(session.updatedAt).getTime();
+    const isActive = session.id === activeSessionId;
+    if (isActive) {
+        return { priority: 0, include: true };
+    }
+    if (session.status === "running" || session.status === "queued") {
+        return { priority: 1, include: true };
+    }
+    if (session.status === "needs_approval" || session.status === "blocked" || session.status === "stale") {
+        return { priority: 2, include: ageMs <= 1000 * 60 * 60 * 24 };
+    }
+    if (session.status === "failed") {
+        return { priority: 3, include: ageMs <= 1000 * 60 * 60 * 12 };
+    }
+    if (session.status === "completed") {
+        return { priority: 4, include: ageMs <= 1000 * 60 * 60 * 6 };
+    }
+    return { priority: 5, include: false };
+}
+
 export function RightPanel() {
     const { t } = useLocale();
-    const { visualCoreScene, sessions, activeSessionId, switchSession, archiveSession, openWidgets } = useHUD();
+    const { visualCoreScene, sessions, activeSessionId, startSession, switchSession, archiveSession, openWidgets } = useHUD();
     const router = useRouter();
     const pathname = usePathname();
     const [pendingApprovals, setPendingApprovals] = useState<UpgradeProposalRecord[]>([]);
@@ -116,6 +164,7 @@ export function RightPanel() {
     const [pendingSessionApprovalCount, setPendingSessionApprovalCount] = useState(0);
     const [runningTasks, setRunningTasks] = useState<TaskRecord[]>([]);
     const [optimisticRunningTasks, setOptimisticRunningTasks] = useState<RunningTaskCard[]>([]);
+    const [jarvisSessions, setJarvisSessions] = useState<JarvisSessionRecord[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [runtimeStatus, setRuntimeStatus] = useState<VisualCoreRuntimeStatus>("probing");
@@ -183,40 +232,67 @@ export function RightPanel() {
         }
     }, [applyOverviewSnapshot, t]);
 
-    const resolveSessionFocus = (session: (typeof sessions)[number]): string => {
-        if (session.focusedWidget && session.mountedWidgets.includes(session.focusedWidget)) {
-            return session.focusedWidget;
+    const refreshSessionSnapshot = useCallback(async () => {
+        try {
+            const result = await listJarvisSessions({ limit: 12 });
+            if (!mountedRef.current) {
+                return;
+            }
+            setJarvisSessions(Array.isArray(result.sessions) ? result.sessions : []);
+        } catch {
+            if (!mountedRef.current) {
+                return;
+            }
+            setJarvisSessions([]);
         }
-        const activeCandidate = session.activeWidgets.find((widgetId) => session.mountedWidgets.includes(widgetId));
-        if (activeCandidate) {
-            return activeCandidate;
-        }
-        if ((session.taskId || session.missionId) && session.mountedWidgets.includes("assistant")) {
-            return "assistant";
-        }
-        if (session.mountedWidgets.includes("assistant")) {
-            return "assistant";
-        }
-        if (session.mountedWidgets.includes("tasks")) {
-            return "tasks";
-        }
-        return session.mountedWidgets[0] ?? "inbox";
-    };
+    }, []);
 
-    const activateSession = (sessionId: string, restoreMode: "full" | "focus_only") => {
-        const targetSession = sessions.find((session) => session.id === sessionId);
-        switchSession(sessionId, { restoreMode });
+    const mergedSessions = useMemo(() => mergeHudAndJarvisSessions(sessions, jarvisSessions), [sessions, jarvisSessions]);
+    const serverBackedSessions = useMemo(
+        () => (jarvisSessions.length > 0 ? mergedSessions.filter((session) => !session.localOnly) : mergedSessions),
+        [jarvisSessions.length, mergedSessions]
+    );
+    const { visibleSessions, hiddenSessionCount } = useMemo(() => {
+        const ranked = serverBackedSessions
+            .map((session) => ({ session, ...rankSessionForRail(session, activeSessionId) }))
+            .sort((left, right) => {
+                if (left.priority !== right.priority) return left.priority - right.priority;
+                return right.session.updatedAt.localeCompare(left.session.updatedAt);
+            });
+        const included = ranked.filter((entry) => entry.include).slice(0, 8).map((entry) => entry.session);
+        return {
+            visibleSessions: included,
+            hiddenSessionCount: Math.max(0, serverBackedSessions.length - included.length),
+        };
+    }, [activeSessionId, serverBackedSessions]);
+
+    const activateSession = (session: JarvisSessionView, restoreMode: "full" | "focus_only") => {
+        const restore = getSessionRestoreConfig(session, restoreMode);
+        if (session.hudSession) {
+            switchSession(session.id, { restoreMode });
+        } else {
+            startSession(session.prompt, {
+                sessionId: session.id,
+                activeWidgets: restore.activeWidgets,
+                mountedWidgets: restore.mountedWidgets,
+                focusedWidget: restore.focus,
+                workspacePreset: restore.workspacePreset,
+                intent: session.intent,
+                restoreMode,
+            });
+            openWidgets(restore.mountedWidgets, {
+                focus: restore.focus,
+                replace: true,
+                activate: restore.activation,
+                workspacePreset: restore.workspacePreset,
+            });
+        }
         if (pathname !== "/") {
             const nextSearchParams = new URLSearchParams();
-            if (targetSession) {
-                const mounted = targetSession.mountedWidgets.length > 0 ? targetSession.mountedWidgets : ["inbox"];
-                const focus = resolveSessionFocus(targetSession);
-                const activation = restoreMode === "full" ? "all" : "focus_only";
-                nextSearchParams.set("widgets", mounted.join(","));
-                nextSearchParams.set("focus", focus);
-                nextSearchParams.set("replace", "1");
-                nextSearchParams.set("activation", activation);
-            }
+            nextSearchParams.set("widgets", restore.mountedWidgets.join(","));
+            nextSearchParams.set("focus", restore.focus);
+            nextSearchParams.set("replace", "1");
+            nextSearchParams.set("activation", restore.activation);
             const nextPath = nextSearchParams.size > 0 ? `/?${nextSearchParams.toString()}` : "/";
             router.push(nextPath);
         }
@@ -224,14 +300,17 @@ export function RightPanel() {
 
     const activateRunningTask = (task: RunningTaskCard) => {
         if (task.sessionId) {
-            activateSession(task.sessionId, "focus_only");
-            return;
+            const bySessionId = mergedSessions.find((session) => session.id === task.sessionId);
+            if (bySessionId) {
+                activateSession(bySessionId, "focus_only");
+                return;
+            }
         }
 
         const targetTaskId = task.taskId ?? task.id;
-        const linkedSession = sessions.find((session) => session.taskId === targetTaskId);
+        const linkedSession = mergedSessions.find((session) => session.taskId === targetTaskId);
         if (linkedSession) {
-            activateSession(linkedSession.id, "focus_only");
+            activateSession(linkedSession, "focus_only");
             return;
         }
 
@@ -356,6 +435,7 @@ export function RightPanel() {
 
         const initialRefreshTimer = setTimeout(() => {
             void refreshOverviewSnapshot();
+            void refreshSessionSnapshot();
         }, 0);
         stream = openStream();
 
@@ -365,7 +445,15 @@ export function RightPanel() {
             clearReconnectTimer();
             stream?.close();
         };
-    }, [applyOverviewSnapshot, refreshOverviewSnapshot, t]);
+    }, [applyOverviewSnapshot, refreshOverviewSnapshot, refreshSessionSnapshot, t]);
+
+    useEffect(() => {
+        return subscribeJarvisDataRefresh((detail) => {
+            if (detail.scope === "all" || detail.scope === "sessions" || detail.scope === "tasks" || detail.scope === "approvals") {
+                void refreshSessionSnapshot();
+            }
+        });
+    }, [refreshSessionSnapshot]);
 
     useEffect(() => {
         if (typeof window === "undefined") {
@@ -379,6 +467,7 @@ export function RightPanel() {
             refreshTimer = setTimeout(() => {
                 refreshTimer = null;
                 void refreshOverviewSnapshot();
+                void refreshSessionSnapshot();
             }, 80);
         };
         const onRuntimeEvent = (event: Event) => {
@@ -479,7 +568,7 @@ export function RightPanel() {
             }
             window.removeEventListener(JARVIS_RUNTIME_EVENT_STREAM, onRuntimeEvent as EventListener);
         };
-    }, [optimisticRunningTaskEnabled, refreshOverviewSnapshot]);
+    }, [optimisticRunningTaskEnabled, refreshOverviewSnapshot, refreshSessionSnapshot]);
 
     useEffect(() => {
         if (typeof window === "undefined") {
@@ -557,13 +646,20 @@ export function RightPanel() {
                 </div>
 
                 <div className="space-y-2">
-                    {sessions.length === 0 && (
+                    {visibleSessions.length === 0 && (
                         <div className="text-xs font-mono text-white/40 p-3 border border-white/10 rounded-md bg-white/5">
                             {t("rightPanel.sessionsEmpty")}
                         </div>
                     )}
-                    {sessions.map((session) => {
+                    {hiddenSessionCount > 0 ? (
+                        <p className="text-[10px] font-mono text-white/35">
+                            {t("rightPanel.hiddenSessions", { value: hiddenSessionCount })}
+                        </p>
+                    ) : null}
+                    {visibleSessions.map((session) => {
                         const isActive = session.id === activeSessionId;
+                        const hudSession = session.hudSession;
+                        const isStale = session.status === "stale" || hudSession?.stale === true;
                         return (
                             <div
                                 key={session.id}
@@ -576,36 +672,37 @@ export function RightPanel() {
                             >
                                 <button
                                     type="button"
-                                    onClick={() => activateSession(session.id, "full")}
+                                    onClick={() => activateSession(session, "full")}
                                     className="w-full text-left"
                                 >
                                     <div className="flex items-start justify-between gap-2">
                                         <div className="min-w-0 flex-1">
                                             <p className={`text-xs font-medium truncate ${isActive ? "text-cyan-200" : "text-white/70"}`}>
-                                                {session.prompt.length > 40 ? session.prompt.slice(0, 40) + "..." : session.prompt}
+                                                {session.title.length > 56 ? session.title.slice(0, 56) + "..." : session.title}
                                             </p>
                                             <div className="flex items-center gap-2 mt-1.5">
                                                 <span className="text-[10px] font-mono text-white/40">
-                                                    {formatRelativeTime(session.createdAt, t)}
+                                                    {formatRelativeTime(session.updatedAt, t)}
                                                 </span>
-                                                {session.activeWidgets.length > 0 && (
-                                                    <span className="text-[10px] font-mono text-white/30">
-                                                        {t("rightPanel.widgetsCount", { value: session.activeWidgets.length })}
-                                                    </span>
-                                                )}
-                                                {session.mountedWidgets.length > session.activeWidgets.length && (
-                                                    <span className="text-[10px] font-mono text-white/25">
-                                                        {t("rightPanel.mountedExtra", { value: session.mountedWidgets.length - session.activeWidgets.length })}
-                                                    </span>
-                                                )}
+                                                <span className="text-[10px] font-mono text-white/35">
+                                                    {formatSessionTarget(session.primaryTarget, t)}
+                                                </span>
+                                                <span className="text-[10px] font-mono text-white/30">
+                                                    {formatSessionStatus(session.status, t)}
+                                                </span>
                                                 {isActive && (
                                                     <span className="text-[9px] font-mono font-bold tracking-wider text-cyan-400">
                                                         {t("rightPanel.active")}
                                                     </span>
                                                 )}
-                                                {session.stale && (
+                                                {isStale && (
                                                     <span className="text-[9px] font-mono font-bold tracking-wider text-amber-300">
                                                         {t("rightPanel.stale")}
+                                                    </span>
+                                                )}
+                                                {session.localOnly && (
+                                                    <span className="text-[9px] font-mono font-bold tracking-wider text-white/40">
+                                                        {t("rightPanel.pendingSync")}
                                                     </span>
                                                 )}
                                             </div>
@@ -613,15 +710,19 @@ export function RightPanel() {
                                                 <span className="rounded border border-white/15 px-1.5 py-0.5 text-white/50">
                                                     {formatSessionIntent(session.intent, t)}
                                                 </span>
-                                                <span className="rounded border border-white/15 px-1.5 py-0.5 text-white/45">
-                                                    {t("rightPanel.focus")}:{formatSessionWidget(session.focusedWidget, t)}
-                                                </span>
-                                                <span className="rounded border border-white/15 px-1.5 py-0.5 text-white/45">
-                                                    {t("rightPanel.restore")}:{session.restoreMode}
-                                                </span>
-                                                {session.stale && (
+                                                {hudSession && (
+                                                    <span className="rounded border border-white/15 px-1.5 py-0.5 text-white/45">
+                                                        {t("rightPanel.focus")}:{formatSessionWidget(hudSession.focusedWidget, t)}
+                                                    </span>
+                                                )}
+                                                {session.workspacePreset && (
+                                                    <span className="rounded border border-white/15 px-1.5 py-0.5 text-white/45">
+                                                        {session.workspacePreset}
+                                                    </span>
+                                                )}
+                                                {isStale && (
                                                     <span className="rounded border border-amber-400/30 bg-amber-500/10 px-1.5 py-0.5 text-amber-200">
-                                                        {t("rightPanel.staleReason", { value: session.staleReason ?? "server_state_lost" })}
+                                                        {t("rightPanel.staleReason", { value: hudSession?.staleReason ?? "server_state_lost" })}
                                                     </span>
                                                 )}
                                             </div>
@@ -634,7 +735,7 @@ export function RightPanel() {
                                         onClick={(e) => {
                                             e.preventDefault();
                                             e.stopPropagation();
-                                            activateSession(session.id, "full");
+                                            activateSession(session, "full");
                                         }}
                                         className="rounded border border-cyan-500/35 bg-cyan-500/10 px-2 py-1 text-[9px] font-mono text-cyan-200 hover:bg-cyan-500/20"
                                         data-testid={`session-restore-full-${session.id}`}
@@ -646,14 +747,14 @@ export function RightPanel() {
                                         onClick={(e) => {
                                             e.preventDefault();
                                             e.stopPropagation();
-                                            activateSession(session.id, "focus_only");
+                                            activateSession(session, "focus_only");
                                         }}
                                         className="rounded border border-white/20 bg-white/5 px-2 py-1 text-[9px] font-mono text-white/70 hover:bg-white/10"
                                         data-testid={`session-restore-focus-${session.id}`}
                                     >
                                         {t("rightPanel.focusOnly")}
                                     </button>
-                                    {session.stale && (
+                                    {isStale && (
                                         <button
                                             type="button"
                                             onClick={(e) => {
@@ -662,8 +763,8 @@ export function RightPanel() {
                                                 dispatchSessionRerun({
                                                     sessionId: session.id,
                                                     prompt: session.prompt,
-                                                    taskId: session.taskId,
-                                                    missionId: session.missionId,
+                                                    taskId: session.taskId ?? undefined,
+                                                    missionId: session.missionId ?? undefined,
                                                 });
                                             }}
                                             className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[9px] font-mono text-amber-200 hover:bg-amber-500/20"
@@ -672,18 +773,20 @@ export function RightPanel() {
                                             {t("rightPanel.rerun")}
                                         </button>
                                     )}
-                                    <button
-                                        type="button"
-                                        onClick={(e) => {
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            archiveSession(session.id);
-                                        }}
-                                        className="ml-auto text-white/40 hover:text-white p-1 rounded"
-                                        aria-label={`Archive session ${session.id}`}
-                                    >
-                                        <X size={12} />
-                                    </button>
+                                    {hudSession ? (
+                                        <button
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                archiveSession(session.id);
+                                            }}
+                                            className="ml-auto text-white/40 hover:text-white p-1 rounded"
+                                            aria-label={`Archive session ${session.id}`}
+                                        >
+                                            <X size={12} />
+                                        </button>
+                                    ) : null}
                                 </div>
                             </div>
                         );

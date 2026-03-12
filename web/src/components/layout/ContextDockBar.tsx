@@ -41,9 +41,13 @@ const WIDGET_LABEL_KEYS: Record<string, TranslationKey> = {
   council: "widget.title.council",
   workbench: "widget.title.workbench",
   reports: "widget.title.reports",
+  watchers: "widget.title.watchers",
+  dossier: "widget.title.dossier",
   approvals: "widget.title.approvals",
   memory: "widget.title.memory",
   settings: "widget.title.settings",
+  action_center: "widget.title.action_center",
+  notifications: "widget.title.notifications",
   model_control: "widget.title.model_control",
   ideation: "widget.title.ideation",
 };
@@ -194,7 +198,7 @@ export function ContextDockBar({
                 type="button"
                 data-testid={`dock-widget-${widgetId}`}
                 onClick={() => focusSingleWidget(widgetId)}
-                aria-label={`Dock ${widgetLabel(widgetId, t)}`}
+                aria-label={t("contextDock.dockWidget", { value: widgetLabel(widgetId, t) })}
                 className={`group inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-mono tracking-widest transition-all ${
                   isFocused
                     ? "border-cyan-400 bg-cyan-500/20 text-cyan-200"
@@ -264,21 +268,21 @@ export function ContextDockBar({
                   window.location.reload();
                 }}
                 className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-white/5 px-1.5 py-1 text-[9px] font-mono tracking-widest text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors"
-                title="Tile all visible widgets in a grid"
-                aria-label="Tile widgets"
+                title={t("contextDock.tileWidgets")}
+                aria-label={t("contextDock.tileWidgets")}
               >
                 <LayoutGrid size={9} />
-                TILE
+                {t("contextDock.tile").toUpperCase()}
               </button>
               <button
                 type="button"
                 onClick={() => closeAll()}
                 className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-white/5 px-1.5 py-1 text-[9px] font-mono tracking-widest text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors"
-                title="Close all visible widgets"
-                aria-label="Close all widgets"
+                title={t("contextDock.clearWidgets")}
+                aria-label={t("contextDock.clearWidgets")}
               >
                 <XCircle size={9} />
-                CLEAR
+                {t("contextDock.clear").toUpperCase()}
               </button>
               <button
                 type="button"
@@ -287,11 +291,11 @@ export function ContextDockBar({
                   window.location.reload();
                 }}
                 className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-white/5 px-1.5 py-1 text-[9px] font-mono tracking-widest text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors"
-                title="Reset all widget positions and sizes to default"
-                aria-label="Reset layout"
+                title={t("contextDock.resetLayout")}
+                aria-label={t("contextDock.resetLayout")}
               >
                 <RotateCcw size={9} />
-                RESET
+                {t("contextDock.reset").toUpperCase()}
               </button>
             </div>
           )}

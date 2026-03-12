@@ -31,7 +31,47 @@ function severityBadgeClass(severity: SystemNotification["severity"]): string {
   return "border-cyan-500/30 bg-cyan-500/10 text-cyan-200";
 }
 
-function formatTargetLabel(value: string): string {
+function formatTargetLabel(
+  value: string,
+  t: (
+    key:
+      | "widget.title.action_center"
+      | "widget.title.notifications"
+      | "common.system"
+      | "notifications.target.watcher"
+      | "notifications.target.briefing"
+      | "notifications.target.dossier"
+      | "notifications.target.session"
+      | "notifications.target.task"
+  ) => string
+): string {
+  if (value === "action_center") return t("widget.title.action_center");
+  if (value === "notifications") return t("widget.title.notifications");
+  if (value === "system") return t("common.system");
+  if (value === "watcher") return t("notifications.target.watcher");
+  if (value === "briefing") return t("notifications.target.briefing");
+  if (value === "dossier") return t("notifications.target.dossier");
+  if (value === "session") return t("notifications.target.session");
+  if (value === "task") return t("notifications.target.task");
+  return value.replaceAll("_", " ");
+}
+
+function formatNotificationType(
+  value: string,
+  t: (
+    key:
+      | "notifications.type.watcherHit"
+      | "notifications.type.briefingReady"
+      | "notifications.type.dossierRefreshFailed"
+      | "notifications.type.actionProposalReady"
+      | "notifications.type.sessionStalled"
+  ) => string
+): string {
+  if (value === "watcher_hit") return t("notifications.type.watcherHit");
+  if (value === "briefing_ready") return t("notifications.type.briefingReady");
+  if (value === "dossier_refresh_failed") return t("notifications.type.dossierRefreshFailed");
+  if (value === "action_proposal_ready") return t("notifications.type.actionProposalReady");
+  if (value === "session_stalled") return t("notifications.type.sessionStalled");
   return value.replaceAll("_", " ");
 }
 
@@ -116,7 +156,13 @@ export function NotificationsModule() {
               severityFilter === value ? "border-cyan-400/40 bg-cyan-500/10 text-cyan-100" : "border-white/10 text-white/55"
             }`}
           >
-            {value === "all" ? "all" : value}
+            {value === "all"
+              ? t("common.all")
+              : value === "critical"
+                ? t("notifications.severity.critical")
+                : value === "warning"
+                  ? t("notifications.severity.warning")
+                  : t("common.info")}
           </button>
         ))}
       </div>
@@ -131,7 +177,7 @@ export function NotificationsModule() {
               targetFilter === value ? "border-cyan-400/40 bg-cyan-500/10 text-cyan-100" : "border-white/10 text-white/55"
             }`}
           >
-            {value === "all" ? t("notifications.allTargets") : formatTargetLabel(value)}
+            {value === "all" ? t("notifications.allTargets") : formatTargetLabel(value, t)}
           </button>
         ))}
       </div>
@@ -149,7 +195,9 @@ export function NotificationsModule() {
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="font-mono text-[10px] uppercase tracking-[0.3em] opacity-80">{item.type.replaceAll("_", " ")}</p>
+                  <p className="font-mono text-[10px] uppercase tracking-[0.3em] opacity-80">
+                    {formatNotificationType(item.type, t)}
+                  </p>
                   <h3 className="mt-1 text-sm font-semibold text-white">{item.title}</h3>
                 </div>
                 <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-white/60">
@@ -159,8 +207,17 @@ export function NotificationsModule() {
               <p className="mt-2 text-sm leading-6 text-white/80">{item.message}</p>
               <div className="mt-3 flex items-center justify-between gap-3 text-[11px] font-mono uppercase tracking-[0.22em] text-white/50">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className={`rounded-full border px-2 py-0.5 text-[10px] ${severityBadgeClass(item.severity)}`}>{item.severity}</span>
-                  <span>{item.entityType ?? "system"}{item.entityId ? ` · ${item.entityId.slice(0, 8)}` : ""}</span>
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] ${severityBadgeClass(item.severity)}`}>
+                    {item.severity === "critical"
+                      ? t("notifications.severity.critical")
+                      : item.severity === "warning"
+                        ? t("notifications.severity.warning")
+                        : t("common.info")}
+                  </span>
+                  <span>
+                    {formatTargetLabel(item.entityType ?? "system", t)}
+                    {item.entityId ? ` · ${item.entityId.slice(0, 8)}` : ""}
+                  </span>
                 </div>
                 {item.actionUrl ? (
                   <a

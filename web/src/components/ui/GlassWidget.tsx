@@ -1,11 +1,32 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { X, GripHorizontal } from "lucide-react";
 import { useHUD } from "@/components/providers/HUDProvider";
+import { useLocale } from "@/components/providers/LocaleProvider";
 import { motion, useDragControls } from "framer-motion";
 import { loadWidgetLayout, saveWidgetLayout } from "@/lib/hud/widget-layout";
+import type { TranslationKey } from "@/lib/locale";
 
-const MIN_WIDTH = 320;
-const MIN_HEIGHT = 200;
+const MIN_WIDTH = 256;
+const MIN_HEIGHT = 168;
+
+const WIDGET_TITLE_KEYS: Record<string, TranslationKey> = {
+    inbox: "widget.title.inbox",
+    assistant: "widget.title.assistant",
+    council: "widget.title.council",
+    workbench: "widget.title.workbench",
+    tasks: "widget.title.tasks",
+    reports: "widget.title.reports",
+    watchers: "widget.title.watchers",
+    dossier: "widget.title.dossier",
+    action_center: "widget.title.action_center",
+    notifications: "widget.title.notifications",
+    skills: "widget.title.skills",
+    approvals: "widget.title.approvals",
+    memory: "widget.title.memory",
+    settings: "widget.title.settings",
+    model_control: "widget.title.model_control",
+    ideation: "widget.title.ideation",
+};
 
 interface GlassWidgetProps {
     id: string;
@@ -63,6 +84,8 @@ export function GlassWidget({
     constraintsRef,
 }: GlassWidgetProps) {
     const { closeWidget, focusedWidget, focusWidget } = useHUD();
+    const { t } = useLocale();
+    const resolvedTitle = WIDGET_TITLE_KEYS[id] ? t(WIDGET_TITLE_KEYS[id]) : title;
     const isFocused = visible && focusedWidget === id;
     const dragControls = useDragControls();
 
@@ -167,19 +190,19 @@ export function GlassWidget({
       `}
         >
             <div
-                className="h-10 flex items-center justify-between px-4 border-b border-white/10 bg-black/40 shrink-0 cursor-grab active:cursor-grabbing group"
+                className="h-[34px] flex items-center justify-between px-2.5 border-b border-white/10 bg-black/40 shrink-0 cursor-grab active:cursor-grabbing group"
                 onPointerDown={(event) => {
                     focusWidget(id);
                     dragControls.start(event);
                 }}
             >
                 <div className="flex items-center gap-2">
-                    <GripHorizontal size={14} className="text-white/20 group-hover:text-white/50 transition-colors" />
+                    <GripHorizontal size={13} className="text-white/20 group-hover:text-white/50 transition-colors" />
                     <h3
                         data-testid={`glass-widget-title-${id}`}
-                        className={`font-mono text-[10px] font-bold tracking-widest transition-colors ${isFocused ? "text-cyan-400" : "text-white/40"}`}
+                        className={`font-mono text-[8px] font-bold tracking-[0.22em] transition-colors ${isFocused ? "text-cyan-400" : "text-white/40"}`}
                     >
-                        {title}
+                        {resolvedTitle}
                     </h3>
                 </div>
                 <button
@@ -190,7 +213,8 @@ export function GlassWidget({
                     }}
                     onPointerDown={(e) => e.stopPropagation()}
                     onTouchStart={(e) => e.stopPropagation()}
-                    aria-label={`Close ${title}`}
+                    aria-label={t("glassWidget.close", { title: resolvedTitle })}
+                    title={t("glassWidget.close", { title: resolvedTitle })}
                     className="text-white/40 hover:text-white hover:bg-white/10 p-1 rounded transition-colors"
                 >
                     <X size={14} />
@@ -198,7 +222,7 @@ export function GlassWidget({
             </div>
 
             <div
-                className={`flex-1 relative ${id === "settings" || id === "model_control" || id === "ideation" ? "overflow-y-auto" : "overflow-hidden"}`}
+                className="flex-1 min-h-0 relative overflow-y-auto overflow-x-hidden"
                 onPointerDown={(e) => e.stopPropagation()}
             >
                 {children}

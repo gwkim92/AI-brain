@@ -9,9 +9,11 @@ import { RightPanel } from "@/components/layout/RightPanel";
 import { Jarvis3DCore } from "@/components/ui/Jarvis3DCore";
 import { CommandBar } from "@/components/ui/CommandBar";
 import { useHUD } from "@/components/providers/HUDProvider";
+import { useLocale } from "@/components/providers/LocaleProvider";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { visualCoreScene } = useHUD();
+  const { t } = useLocale();
   const pathname = usePathname();
   const isAuthPage = pathname === "/login" || pathname === "/signup";
   const isCorePage = pathname === "/core";
@@ -31,7 +33,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [toggle]);
 
   return (
-    <div className="flex flex-row h-screen w-full overflow-hidden">
+    <div className="flex flex-row h-screen w-full overflow-hidden text-[13px]">
       {!isCorePage && (
         <div className={`fixed inset-0 z-0 pointer-events-none ${isAuthPage ? "hidden" : ""}`}>
           {!isAuthPage ? (
@@ -57,8 +59,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {!isCorePage && !isAuthPage && (
           <button
             onClick={toggle}
-            className="fixed bottom-4 right-4 z-50 2xl:hidden p-2.5 rounded-full bg-black/70 border border-white/15 text-white/60 hover:text-white hover:border-cyan-500/40 backdrop-blur-md shadow-lg transition-all"
-            title="Toggle panel (Ctrl+.)"
+            className="fixed bottom-4 right-4 z-50 2xl:hidden p-2 rounded-full bg-black/70 border border-white/15 text-white/60 hover:text-white hover:border-cyan-500/40 backdrop-blur-md shadow-lg transition-all"
+            title={t("appShell.togglePanel")}
+            aria-label={t("appShell.togglePanel")}
           >
             <PanelRight size={18} />
           </button>
@@ -67,7 +70,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* Static panel for >= 2xl */}
       {!isCorePage && (
-        <div className={`${isAuthPage ? "hidden" : "hidden 2xl:block"} w-80 shrink-0 h-full border-l border-white/10 bg-black/50 backdrop-blur-xl relative z-40 overflow-y-auto`} aria-hidden={isAuthPage}>
+        <div className={`${isAuthPage ? "hidden" : "hidden 2xl:block"} w-64 shrink-0 h-full border-l border-white/10 bg-black/50 backdrop-blur-xl relative z-40 overflow-y-auto`} aria-hidden={isAuthPage}>
           {!isAuthPage ? <RightPanel /> : null}
         </div>
       )}
@@ -79,11 +82,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             className="fixed inset-0 z-[90] bg-black/40 backdrop-blur-sm 2xl:hidden"
             onClick={() => setOverlayOpen(false)}
           />
-          <div className="fixed right-0 top-0 bottom-0 z-[91] w-80 bg-black/90 border-l border-white/10 backdrop-blur-xl overflow-y-auto 2xl:hidden animate-in slide-in-from-right duration-200">
+          <div className="fixed right-0 top-0 bottom-0 z-[91] w-64 bg-black/90 border-l border-white/10 backdrop-blur-xl overflow-y-auto 2xl:hidden animate-in slide-in-from-right duration-200">
             <div className="flex items-center justify-between p-4 border-b border-white/10">
-              <span className="text-xs font-mono text-white/50 tracking-wider">PANEL</span>
+              <span className="text-xs font-mono text-white/50 tracking-wider">{t("appShell.panel")}</span>
               <button
                 onClick={() => setOverlayOpen(false)}
+                aria-label={t("common.close")}
+                title={t("common.close")}
                 className="text-white/40 hover:text-white transition-colors"
               >
                 <X size={16} />

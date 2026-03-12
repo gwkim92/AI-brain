@@ -297,11 +297,7 @@ export async function missionRoutes(app: FastifyInstance, ctx: RouteContext) {
             notificationService?.emitMissionStepCompleted(missionId, step?.title ?? stepId);
           },
         }, {
-          modelSelectionOverride: {
-            provider: modelSelection.provider,
-            strictProvider: modelSelection.strictProvider,
-            model: modelSelection.model ?? undefined
-          }
+          resolvedModelSelection: modelSelection
         }, resolvedCredentials.credentialsByProvider);
       } catch {
         // errors already handled inside executeMission
@@ -358,6 +354,7 @@ export async function missionRoutes(app: FastifyInstance, ctx: RouteContext) {
             provider: modelSelection.provider,
             strictProvider: modelSelection.strictProvider,
             model: modelSelection.model ?? undefined,
+            modelSelection,
             trace: {
               store,
               env,

@@ -6,6 +6,7 @@ import { sendError, sendSuccess } from '../../lib/http';
 import { embedAndStore } from '../../memory/embed';
 import { withAiInvocationTrace } from '../../observability/ai-trace';
 import { resolveModelSelection } from '../../providers/model-selection';
+import { generateWithPreferenceRecovery } from '../../providers/preference-recovery';
 import { extractProviderAttempts, maskErrorForApi, toProviderCredentialUsage } from '../../providers/router';
 import type { ProviderName } from '../../providers/types';
 import { buildRetrievalSystemInstruction, retrieveWebEvidence } from '../../retrieval/adapter-router';
@@ -39,6 +40,13 @@ import {
   extractNewsFactsFromOutput,
   renderNewsBriefingFromFacts
 } from '../../retrieval/news-briefing';
+import {
+  buildResponseInstructionWithMemory,
+  resolveMemoryBackedRouting,
+  resolveJarvisMemoryContext,
+  resolveJarvisMemoryPlan,
+  resolveJarvisMemoryPreferences
+} from '../../jarvis/memory-context';
 import { buildRadarQualityFallbackMessage, hasTemplateArtifact, resolveTaskIdForContext } from './helpers';
 import { AssistantContextRunSchema } from './schemas';
 import type { RouteContext } from '../types';
@@ -78,16 +86,6 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
     const traceId = resolveRequestTraceId(request);
     const resolvedCredentials = await resolveRequestProviderCredentials(request);
     const credentialsByProvider = resolvedCredentials.credentialsByProvider;
-    const modelSelection = await resolveModelSelection({
-      store,
-      userId,
-      featureKey: 'assistant_context_run',
-      override: {
-        provider: parsed.data.provider,
-        strictProvider: parsed.data.strict_provider,
-        model: parsed.data.model
-      }
-    });
     const context = await store.getAssistantContextById({
       userId,
       contextId
@@ -96,6 +94,27 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
     if (!context) {
       return sendError(reply, request, 404, 'NOT_FOUND', 'assistant context not found');
     }
+    const memoryContext = await resolveJarvisMemoryContext(store, {
+      userId,
+      prompt: context.prompt
+    });
+    const memoryPreferences = resolveJarvisMemoryPreferences(memoryContext);
+    const memoryRouting = resolveMemoryBackedRouting({
+      provider: parsed.data.provider,
+      strictProvider: parsed.data.strict_provider,
+      model: parsed.data.model,
+      memoryPreferences
+    });
+    const modelSelection = await resolveModelSelection({
+      store,
+      userId,
+      featureKey: 'assistant_context_run',
+      override: {
+        provider: memoryRouting.provider,
+        strictProvider: memoryRouting.strictProvider,
+        model: memoryRouting.model
+      }
+    });
     const clientRunNonce =
       typeof parsed.data.client_run_nonce === 'string' && parsed.data.client_run_nonce.trim().length > 0
         ? parsed.data.client_run_nonce.trim()
@@ -185,6 +204,20 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
       taskType
     });
     const languagePolicy = buildLanguageSystemInstruction(prepared.prompt);
+    const refinedMemoryContext =
+      prepared.prompt === context.prompt
+        ? memoryContext
+        : await resolveJarvisMemoryContext(store, {
+            userId,
+            prompt: prepared.prompt
+          });
+    const refinedMemoryPreferences = resolveJarvisMemoryPreferences(refinedMemoryContext);
+    const memoryPlan = resolveJarvisMemoryPlan(refinedMemoryContext);
+    const memoryResponseInstruction = buildResponseInstructionWithMemory({
+      preferences: refinedMemoryPreferences,
+      memoryPlan,
+      expectedLanguage: languagePolicy.expectedLanguage
+    });
     const providerAvailability = providerRouter.listAvailability(credentialsByProvider);
     const externalProviderEnabled = providerAvailability.some((item) => item.enabled && item.provider !== 'local');
     const localProviderEnabled = providerAvailability.some((item) => item.provider === 'local' && item.enabled);
@@ -513,10 +546,13 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
             )
           : mergeSystemPrompt(
               mergeSystemPrompt(
-                mergeSystemPrompt(contextResult.systemPrompt || undefined, groundingInstruction),
-                retrievalInstruction
+                mergeSystemPrompt(
+                  mergeSystemPrompt(contextResult.systemPrompt || undefined, groundingInstruction),
+                  retrievalInstruction
+                ),
+                languagePolicy.instruction
               ),
-              languagePolicy.instruction
+              memoryResponseInstruction
             );
         const routed = useRetrievalOnlyFallback
           ? null
@@ -535,33 +571,37 @@ export function registerAssistantContextRunRoute(app: FastifyInstance, ctx: Rout
                 model_selection_source: modelSelection.source
               },
               run: () =>
-                providerRouter.generate({
-                  prompt: generationPrompt,
-                  systemPrompt: generationSystemPrompt,
-                  provider: modelSelection.provider,
-                  strictProvider: modelSelection.strictProvider,
-                  credentialsByProvider,
-                  traceId,
-                  onSpanEvent: (event) => {
-                    request.log.info(
-                      {
-                        trace_id: event.traceId,
-                        provider: event.provider,
-                        success: event.success,
-                        latency_ms: event.latencyMs,
-                        error: event.error,
-                        context_id: prepared.id
-                      },
-                      event.name
-                    );
-                  },
-                  taskType,
-                  model: modelSelection.model ?? undefined,
-                  temperature: groundingDecision.requiresGrounding ? strictFactualTemperature : parsed.data.temperature,
-                  topP: groundingDecision.requiresGrounding ? 0.9 : undefined,
-                  stop: groundingDecision.requiresGrounding ? ['<|im_start|>', '<|im_end|>', '<|endoftext|>'] : undefined,
-                  maxOutputTokens: groundingDecision.requiresGrounding ? strictFactualMaxTokens : parsed.data.max_output_tokens,
-                  excludeProviders: groundingDecision.requiresGrounding && !canUseLocalGroundedFallback ? ['local'] : undefined
+                generateWithPreferenceRecovery({
+                  providerRouter,
+                  modelSelection,
+                  request: {
+                    prompt: generationPrompt,
+                    systemPrompt: generationSystemPrompt,
+                    provider: modelSelection.provider,
+                    strictProvider: modelSelection.strictProvider,
+                    credentialsByProvider,
+                    traceId,
+                    onSpanEvent: (event) => {
+                      request.log.info(
+                        {
+                          trace_id: event.traceId,
+                          provider: event.provider,
+                          success: event.success,
+                          latency_ms: event.latencyMs,
+                          error: event.error,
+                          context_id: prepared.id
+                        },
+                        event.name
+                      );
+                    },
+                    taskType,
+                    model: modelSelection.model ?? undefined,
+                    temperature: groundingDecision.requiresGrounding ? strictFactualTemperature : parsed.data.temperature,
+                    topP: groundingDecision.requiresGrounding ? 0.9 : undefined,
+                    stop: groundingDecision.requiresGrounding ? ['<|im_start|>', '<|im_end|>', '<|endoftext|>'] : undefined,
+                    maxOutputTokens: groundingDecision.requiresGrounding ? strictFactualMaxTokens : parsed.data.max_output_tokens,
+                    excludeProviders: groundingDecision.requiresGrounding && !canUseLocalGroundedFallback ? ['local'] : undefined
+                  }
                 })
             });
         const routedOutputText = routed?.result.outputText ?? '';

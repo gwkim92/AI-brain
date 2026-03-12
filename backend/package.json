@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "db:init": "tsx scripts/init-db.ts"
+    "db:init": "tsx scripts/init-db.ts",
+    "jarvis:smoke": "node scripts/jarvis-regression-smoke.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -57,6 +57,7 @@ import type {
     AssistantContextGroundingSourceRecord,
     AssistantContextRecord,
     JarvisSessionDetail,
+    JarvisMemoryPlanSignal,
     ProviderAttempt,
     ProviderAvailability,
     ProviderModelCatalogEntry,
@@ -64,12 +65,26 @@ import type {
     WatcherKind,
 } from "@/lib/api/types";
 import { subscribeMissionIntake, subscribeMissionIntakeTaskLink, type MissionIntakePayload } from "@/lib/hud/mission-intake";
+import { dispatchCouncilIntake } from "@/lib/hud/council-intake";
 import { dispatchJarvisDataRefresh } from "@/lib/hud/data-refresh";
 import { useHUD } from "@/components/providers/HUDProvider";
 import { useLocale } from "@/components/providers/LocaleProvider";
 import { emitRuntimeEvent } from "@/lib/runtime-events";
 import { isFeatureEnabled } from "@/lib/feature-flags";
 import type { TranslationKey } from "@/lib/locale";
+import { describeExecutionOption } from "@/lib/jarvis/execution-option";
+import { buildLaunchWidgetPlan, inferHudIntent, resolveWorkspaceForIntent } from "@/lib/hud/intent-router";
+import { measureHudViewport, tileWidgetLayouts } from "@/lib/hud/widget-layout";
+import {
+    describeResearchProfile,
+    describeResearchProfileReason,
+    describeResearchQualityMode,
+    readResearchProfile,
+    readResearchProfileReasons,
+    readResearchQualityMode,
+    resolveResearchWarningLabels,
+    summarizeResearchQualityDimensions,
+} from "@/lib/research-quality";
 
 type MessageRoute = "system" | "manual" | "auto_context";
 
@@ -514,6 +529,430 @@ function describePrimaryTarget(
     return t("assistant.target.default");
 }
 
+function describeCapability(
+    t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+    capability: string
+): string {
+    if (capability === "answer") return t("assistant.capability.answer");
+    if (capability === "research") return t("assistant.capability.research");
+    if (capability === "brief") return t("assistant.capability.brief");
+    if (capability === "debate") return t("assistant.capability.debate");
+    if (capability === "plan") return t("assistant.capability.plan");
+    if (capability === "approve") return t("assistant.capability.approve");
+    if (capability === "execute") return t("assistant.capability.execute");
+    if (capability === "notify") return t("assistant.capability.notify");
+    return capability;
+}
+
+function describeCapabilityHint(
+    t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+    capability: string
+): string {
+    if (capability === "answer") return t("assistant.capabilityHint.answer");
+    if (capability === "research") return t("assistant.capabilityHint.research");
+    if (capability === "brief") return t("assistant.capabilityHint.brief");
+    if (capability === "debate") return t("assistant.capabilityHint.debate");
+    if (capability === "plan") return t("assistant.capabilityHint.plan");
+    if (capability === "approve") return t("assistant.capabilityHint.approve");
+    if (capability === "execute") return t("assistant.capabilityHint.execute");
+    if (capability === "notify") return t("assistant.capabilityHint.notify");
+    return t("assistant.event.updated");
+}
+
+function summarizeCapabilityPlan(
+    t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+    capabilities: string[]
+): string | null {
+    if (capabilities.length === 0) return null;
+    return t("assistant.planSequence", {
+        value: capabilities.map((capability) => describeCapability(t, capability)).join(" → "),
+    });
+}
+
+function describeJarvisStatus(
+    t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+    status: string
+): string {
+    if (status === "queued") return t("assistant.status.queued");
+    if (status === "running") return t("assistant.status.running");
+    if (status === "blocked") return t("assistant.status.blocked");
+    if (status === "needs_approval") return t("assistant.status.needsApproval");
+    if (status === "completed") return t("assistant.status.completed");
+    if (status === "failed") return t("assistant.status.failed");
+    if (status === "stale") return t("assistant.status.stale");
+    if (status === "skipped") return t("assistant.status.skipped");
+    return status;
+}
+
+function describeNextAction(
+    t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+    action: JarvisSessionDetail["next_action"],
+    researchProfile?: string | null,
+    executionOption?: string | null
+): string | null {
+    if (!action) return null;
+    if (action.kind === "open_action_center") {
+        if (executionOption === "read_only_first" || executionOption === "read_only_review") {
+            return t("assistant.summary.approvalRequiredReadOnly");
+        }
+        if (executionOption === "approval_required_write") {
+            return t("assistant.summary.approvalRequiredWrite");
+        }
+        return t("assistant.nextAction.openActionCenter");
+    }
+    if (action.kind === "open_brief") {
+        if (researchProfile === "comparison_research") return t("assistant.nextAction.openComparisonBrief");
+        if (researchProfile === "repo_research") return t("assistant.nextAction.openRepoBrief");
+        if (researchProfile === "market_research") return t("assistant.nextAction.openMarketBrief");
+        if (researchProfile === "policy_regulation") return t("assistant.nextAction.openPolicyBrief");
+        if (researchProfile === "entity_brief") return t("assistant.nextAction.openEntityBrief");
+        return t("assistant.nextAction.openBrief");
+    }
+    if (action.kind === "open_workbench") return t("assistant.nextAction.openWorkbench");
+    if (action.kind === "create_monitor") {
+        if (researchProfile === "policy_regulation") return t("assistant.nextAction.createPolicyMonitor");
+        if (researchProfile === "market_research") return t("assistant.nextAction.createMarketMonitor");
+        if (researchProfile === "entity_brief") return t("assistant.nextAction.createEntityMonitor");
+        return t("assistant.nextAction.createMonitor");
+    }
+    return action.label;
+}
+
+function describePrimaryArtifactActionLabel(
+    t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+    researchProfile?: string | null
+): string {
+    if (researchProfile === "comparison_research") return t("assistant.openComparisonBrief");
+    if (researchProfile === "repo_research") return t("assistant.openRepoBrief");
+    if (researchProfile === "market_research") return t("assistant.openMarketBrief");
+    if (researchProfile === "policy_regulation") return t("assistant.openPolicyBrief");
+    if (researchProfile === "entity_brief") return t("assistant.openEntityBrief");
+    return t("assistant.openDossier");
+}
+
+function describeMonitorActionLabel(
+    t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+    researchProfile?: string | null
+): string {
+    if (researchProfile === "entity_brief") return t("assistant.trackEntity");
+    if (researchProfile === "market_research") return t("assistant.trackMarket");
+    if (researchProfile === "policy_regulation") return t("assistant.trackPolicy");
+    return t("assistant.trackTopic");
+}
+
+function describeNextActionButtonLabel(
+    t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+    action: JarvisSessionDetail["next_action"],
+    researchProfile?: string | null,
+    executionOption?: string | null
+): string | null {
+    if (!action) return null;
+    if (action.kind === "open_action_center") {
+        if (executionOption === "read_only_first" || executionOption === "read_only_review") {
+            return t("assistant.cta.reviewReadOnlyChecks");
+        }
+        if (executionOption === "approval_required_write" || executionOption === "standard") {
+            return t("assistant.cta.reviewWriteApproval");
+        }
+        return t("assistant.openActionCenter");
+    }
+    if (action.kind === "open_workbench") {
+        if (executionOption === "safe_auto_run") {
+            return t("assistant.cta.followAutoRun");
+        }
+        return t("assistant.openWorkbench");
+    }
+    if (action.kind === "open_brief") {
+        return describePrimaryArtifactActionLabel(t, researchProfile);
+    }
+    if (action.kind === "create_monitor") {
+        return describeMonitorActionLabel(t, researchProfile);
+    }
+    return action.label;
+}
+
+function describeMemoryNoteKind(
+    t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+    kind: string
+): string {
+    if (kind === "user_preference") return t("memory.noteKind.user_preference");
+    if (kind === "project_context") return t("memory.noteKind.project_context");
+    if (kind === "decision_memory") return t("memory.noteKind.decision_memory");
+    if (kind === "research_memory") return t("memory.noteKind.research_memory");
+    return kind;
+}
+
+function describeMemoryPlanSignal(
+    t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+    signal: JarvisMemoryPlanSignal
+): string {
+    if (signal === "pinned_context") return t("assistant.memoryPlanSignal.pinned_context");
+    if (signal === "project_context_available") return t("assistant.memoryPlanSignal.project_context_available");
+    if (signal === "research_history_available") return t("assistant.memoryPlanSignal.research_history_available");
+    if (signal === "recent_approval_history") return t("assistant.memoryPlanSignal.recent_approval_history");
+    if (signal === "recent_rejection_history") return t("assistant.memoryPlanSignal.recent_rejection_history");
+    if (signal === "risk_first_preference") return t("assistant.memoryPlanSignal.risk_first_preference");
+    if (signal === "approval_sensitive_preference") return t("assistant.memoryPlanSignal.approval_sensitive_preference");
+    if (signal === "monitor_followup_preference") return t("assistant.memoryPlanSignal.monitor_followup_preference");
+    if (signal === "notify_followup_preference") return t("assistant.memoryPlanSignal.notify_followup_preference");
+    if (signal === "concise_response_preference") return t("assistant.memoryPlanSignal.concise_response_preference");
+    if (signal === "detailed_response_preference") return t("assistant.memoryPlanSignal.detailed_response_preference");
+    if (signal === "preferred_provider_available") return t("assistant.memoryPlanSignal.preferred_provider_available");
+    if (signal === "preferred_model_available") return t("assistant.memoryPlanSignal.preferred_model_available");
+    return signal;
+}
+
+function describeMemoryInfluenceLine(
+    t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+    input: {
+        responseStyle?: string | null;
+        preferredProvider?: string | null;
+        preferredModel?: string | null;
+        approvalStyle?: string | null;
+        monitoringPreference?: string | null;
+        projectName?: string | null;
+        repoSlug?: string | null;
+        pinnedRefCount?: number;
+    }
+): string[] {
+    const lines: string[] = [];
+    if (input.responseStyle === "concise") {
+        lines.push(t("assistant.memoryInfluence.responseStyle", { value: t("memory.preferences.responseStyle.concise") }));
+    } else if (input.responseStyle === "balanced") {
+        lines.push(t("assistant.memoryInfluence.responseStyle", { value: t("memory.preferences.responseStyle.balanced") }));
+    } else if (input.responseStyle === "detailed") {
+        lines.push(t("assistant.memoryInfluence.responseStyle", { value: t("memory.preferences.responseStyle.detailed") }));
+    }
+    if (input.preferredProvider) {
+        lines.push(
+            t("assistant.memoryInfluence.preferredProvider", {
+                value: t(`memory.preferences.provider.${input.preferredProvider}` as TranslationKey),
+            })
+        );
+    }
+    if (input.preferredModel) {
+        lines.push(t("assistant.memoryInfluence.preferredModel", { value: input.preferredModel }));
+    }
+    if (input.approvalStyle === "read_only_review") {
+        lines.push(
+            t("assistant.memoryInfluence.approvalStyle", {
+                value: t("memory.preferences.approvalStyle.read_only_review"),
+            })
+        );
+    } else if (input.approvalStyle === "approval_required_write") {
+        lines.push(
+            t("assistant.memoryInfluence.approvalStyle", {
+                value: t("memory.preferences.approvalStyle.approval_required_write"),
+            })
+        );
+    } else if (input.approvalStyle === "safe_auto_run_preferred") {
+        lines.push(
+            t("assistant.memoryInfluence.approvalStyle", {
+                value: t("memory.preferences.approvalStyle.safe_auto_run_preferred"),
+            })
+        );
+    }
+    if (input.monitoringPreference === "manual") {
+        lines.push(
+            t("assistant.memoryInfluence.monitoringPreference", {
+                value: t("memory.preferences.monitoringPreference.manual"),
+            })
+        );
+    } else if (input.monitoringPreference === "important_changes") {
+        lines.push(
+            t("assistant.memoryInfluence.monitoringPreference", {
+                value: t("memory.preferences.monitoringPreference.important_changes"),
+            })
+        );
+    } else if (input.monitoringPreference === "all_changes") {
+        lines.push(
+            t("assistant.memoryInfluence.monitoringPreference", {
+                value: t("memory.preferences.monitoringPreference.all_changes"),
+            })
+        );
+    }
+    if (input.projectName || input.repoSlug) {
+        lines.push(
+            t("assistant.memoryInfluence.projectContext", {
+                value: input.projectName || input.repoSlug || "",
+            })
+        );
+    }
+    if ((input.pinnedRefCount ?? 0) > 0) {
+        lines.push(t("assistant.memoryInfluence.pinnedRefs", { value: input.pinnedRefCount ?? 0 }));
+    }
+    return lines;
+}
+
+function describeWatcherChangeClass(
+    t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+    value: string | null | undefined
+): string | null {
+    if (!value) return null;
+    if (value === "new_high_significance_item") return t("assistant.changeClass.new_high_significance_item");
+    if (value === "official_update") return t("assistant.changeClass.official_update");
+    if (value === "policy_change") return t("assistant.changeClass.policy_change");
+    if (value === "market_shift") return t("assistant.changeClass.market_shift");
+    if (value === "repo_release") return t("assistant.changeClass.repo_release");
+    if (value === "health_regression") return t("assistant.changeClass.health_regression");
+    if (value === "routine_refresh") return t("assistant.changeClass.routine_refresh");
+    return value;
+}
+
+function describeWatcherChangeSeverity(
+    t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+    value: string | null | undefined
+): string | null {
+    if (!value) return null;
+    if (value === "critical") return t("assistant.changeSeverity.critical");
+    if (value === "warning") return t("assistant.changeSeverity.warning");
+    if (value === "info") return t("assistant.changeSeverity.info");
+    return value;
+}
+
+function shouldOfferMonitorAction(
+    researchProfile?: string | null,
+    nextActionKind?: "open_action_center" | "open_brief" | "open_workbench" | "create_monitor",
+    stages?: JarvisSessionDetail["stages"]
+): boolean {
+    const monitorAlreadyTracked =
+        Array.isArray(stages) &&
+        stages.some(
+            (stage) =>
+                stage.capability === "monitor" &&
+                (stage.status === "queued" ||
+                    stage.status === "running" ||
+                    stage.status === "needs_approval" ||
+                    stage.status === "completed")
+        );
+    if (monitorAlreadyTracked) {
+        return false;
+    }
+    if (nextActionKind === "create_monitor") {
+        return true;
+    }
+    return (
+        researchProfile === "topic_news" ||
+        researchProfile === "entity_brief" ||
+        researchProfile === "market_research" ||
+        researchProfile === "policy_regulation"
+    );
+}
+
+function localizeJarvisSummary(
+    t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+    summary: string | null | undefined
+): string | null {
+    const normalized = summary?.trim();
+    if (!normalized) {
+        return null;
+    }
+
+    if (normalized === "Gathering grounded evidence") {
+        return t("assistant.summary.researchStarted");
+    }
+    if (normalized === "Grounded dossier ready") {
+        return t("assistant.summary.briefReady");
+    }
+    if (normalized === "Partial brief ready with coverage warnings") {
+        return t("assistant.summary.partialBriefWarning");
+    }
+    if (normalized === "Monitor created from research session") {
+        return t("assistant.summary.monitorCreated");
+    }
+    if (normalized === "Future updates will be surfaced through notifications") {
+        return t("assistant.summary.notifyArmed");
+    }
+    if (normalized === "Approval required before execution") {
+        return t("assistant.summary.approvalRequired");
+    }
+    if (normalized === "Review write execution and approve run") {
+        return t("assistant.summary.approvalRequiredWrite");
+    }
+    if (normalized === "Review read-only checks and approve execution") {
+        return t("assistant.summary.approvalRequiredReadOnly");
+    }
+    if (normalized === "Waiting for approval before execution") {
+        return t("assistant.summary.executeBlockedByApproval");
+    }
+    if (normalized === "Waiting for approval before write execution") {
+        return t("assistant.summary.executeBlockedByWriteApproval");
+    }
+    if (normalized === "Waiting for read-only review and approval before execution") {
+        return t("assistant.summary.executeBlockedByReadOnlyApproval");
+    }
+
+    const fetchedMatch = normalized.match(/^(\d+)\s+grounded sources fetched$/u);
+    if (fetchedMatch?.[1]) {
+        return t("assistant.summary.sourcesFetched", { value: Number(fetchedMatch[1]) });
+    }
+    const rankedMatch = normalized.match(/^(\d+)\s+sources ranked · quality (pass|warn)$/u);
+    if (rankedMatch?.[1] && rankedMatch[2]) {
+        return t("assistant.summary.sourcesRanked", {
+            value: Number(rankedMatch[1]),
+            quality: rankedMatch[2] === "pass" ? t("assistant.quality.pass") : t("assistant.quality.warn"),
+        });
+    }
+    const planMatch = normalized.match(/^Mission planned via (llm|fallback)$/u);
+    if (planMatch?.[1]) {
+        return t("assistant.summary.planReady", {
+            mode: planMatch[1] === "llm" ? t("assistant.planMode.llm") : t("assistant.planMode.fallback"),
+        });
+    }
+    const planWriteMatch = normalized.match(/^Mission planned via (llm|fallback) with approval required for write execution$/u);
+    if (planWriteMatch?.[1]) {
+        return t("assistant.summary.planReadyWrite", {
+            mode: planWriteMatch[1] === "llm" ? t("assistant.planMode.llm") : t("assistant.planMode.fallback"),
+        });
+    }
+    const planReadOnlyMatch = normalized.match(/^Mission planned via (llm|fallback) with read-only review first$/u);
+    if (planReadOnlyMatch?.[1]) {
+        return t("assistant.summary.planReadyReadOnly", {
+            mode: planReadOnlyMatch[1] === "llm" ? t("assistant.planMode.llm") : t("assistant.planMode.fallback"),
+        });
+    }
+    const memorySignalMatch = normalized.match(/^(\d+)\s+planner memory signal\(s\) applied$/u);
+    if (memorySignalMatch?.[1]) {
+        return t("assistant.summary.memorySignalsApplied", { value: Number(memorySignalMatch[1]) });
+    }
+    if (normalized === "Assistant context prepared") {
+        return t("assistant.summary.contextPrepared");
+    }
+    const capabilitiesMatch = normalized.match(/^Capabilities:\s+(.+)$/u);
+    if (capabilitiesMatch?.[1]) {
+        const localized = capabilitiesMatch[1]
+            .split(",")
+            .map((value) => value.trim())
+            .filter(Boolean)
+            .map((capability) => describeCapability(t, capability))
+            .join(", ");
+        return t("assistant.summary.capabilities", { value: localized });
+    }
+
+    return normalized;
+}
+
+function localizeMemoryPreview(
+    t: (key: TranslationKey, values?: Record<string, string | number>) => string,
+    value: string
+): string {
+    return value
+        .replaceAll("Monitor:", `${t("assistant.memoryPreview.monitor")}:`)
+        .replaceAll("Watcher:", `${t("assistant.memoryPreview.watcher")}:`)
+        .replaceAll("Query:", `${t("assistant.memoryPreview.query")}:`)
+        .replaceAll("Research profile:", `${t("assistant.memoryPreview.researchProfile")}:`)
+        .replaceAll("Change class:", `${t("assistant.memoryPreview.changeClass")}:`)
+        .replaceAll("Prompt:", `${t("assistant.memoryPreview.prompt")}:`)
+        .replaceAll("Summary:", `${t("assistant.memoryPreview.summary")}:`);
+}
+
+function inferCapabilitiesFromIntent(intent?: string | null): string[] {
+    if (intent === "council") return ["debate", "brief"];
+    if (intent === "research" || intent === "news" || intent === "finance") return ["research", "brief"];
+    if (intent === "code") return ["plan"];
+    return ["answer"];
+}
+
 function inferHudSessionTarget(intent?: string | null): JarvisSessionDetail["session"]["primaryTarget"] {
     if (intent === "council") return "council";
     if (intent === "code") return "execution";
@@ -547,7 +986,7 @@ function buildWatcherPrefillHref(title: string, query: string, kind: WatcherKind
 
 export function AssistantModule() {
     const { t } = useLocale();
-    const { sessions, activeSessionId, startSession, linkSessionTask, markSessionContextDelivered, updateSessionStaleState } = useHUD();
+    const { sessions, activeSessionId, startSession, linkSessionTask, markSessionContextDelivered, openWidgets, updateSessionStaleState } = useHUD();
     const [inputVal, setInputVal] = useState("");
     const [messages, setMessages] = useState<ChatMessage[]>(() => defaultMessages());
     const [runRecords, setRunRecords] = useState<RunRecord[]>([]);
@@ -645,6 +1084,328 @@ export function AssistantModule() {
             isFresh,
         };
     }, [activeHudSession, jarvisSessionDetail, t]);
+    const sessionCapabilities = useMemo(() => {
+        const resolvedFromEvents = jarvisSessionDetail?.events.find(
+            (event) =>
+                event.eventType === "session.capabilities.resolved" && Array.isArray(event.data?.capabilities)
+        );
+        const fromEvents = Array.isArray(resolvedFromEvents?.data?.capabilities)
+            ? resolvedFromEvents.data.capabilities.filter((value): value is string => typeof value === "string")
+            : [];
+        if (fromEvents.length > 0) {
+            return fromEvents;
+        }
+
+        if (jarvisSessionDetail?.session.primaryTarget === "dossier") {
+            return ["research", "brief"];
+        }
+        if (jarvisSessionDetail?.session.primaryTarget === "council") {
+            return ["debate", "brief"];
+        }
+        if (jarvisSessionDetail?.session.primaryTarget === "mission") {
+            return ["plan", "approve"];
+        }
+        if (jarvisSessionDetail?.session.primaryTarget === "execution") {
+            return ["execute"];
+        }
+        if (jarvisSessionDetail?.session.primaryTarget === "assistant") {
+            return ["answer"];
+        }
+
+        return inferCapabilitiesFromIntent(activeHudSession?.intent);
+    }, [activeHudSession?.intent, jarvisSessionDetail]);
+    const sessionCapabilityBuckets = useMemo(() => {
+        const requested =
+            jarvisSessionDetail?.requested_capabilities?.length
+                ? jarvisSessionDetail.requested_capabilities
+                : sessionCapabilities;
+        const active = jarvisSessionDetail?.active_capabilities ?? [];
+        const completed = jarvisSessionDetail?.completed_capabilities ?? [];
+        return { requested, active, completed };
+    }, [jarvisSessionDetail, sessionCapabilities]);
+    const sessionStageRecords = useMemo(() => {
+        if (jarvisSessionDetail?.stages?.length) {
+            return [...jarvisSessionDetail.stages].sort((left, right) => left.orderIndex - right.orderIndex);
+        }
+        return sessionCapabilities.map((capability, index) => ({
+            id: `${capability}-${index}`,
+            sessionId: activeSessionId ?? "pending",
+            stageKey: capability,
+            capability,
+            title: describeCapability(t, capability),
+            status: index === 0 ? "running" : "queued",
+            orderIndex: index,
+            dependsOnJson: index === 0 ? [] : [sessionCapabilities[index - 1] ?? ""].filter(Boolean),
+            artifactRefsJson: {},
+            summary: null,
+            errorCode: null,
+            errorMessage: null,
+            startedAt: null,
+            completedAt: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        }));
+    }, [activeSessionId, jarvisSessionDetail?.stages, sessionCapabilities, t]);
+    const sessionResearchProfile = useMemo(() => {
+        if (jarvisSessionDetail?.research_profile) {
+            return jarvisSessionDetail.research_profile;
+        }
+        if (jarvisSessionDetail?.dossier?.qualityJson) {
+            return readResearchProfile(jarvisSessionDetail.dossier.qualityJson);
+        }
+        return null;
+    }, [jarvisSessionDetail?.dossier?.qualityJson, jarvisSessionDetail?.research_profile]);
+    const sessionResearchProfileReasons = useMemo(() => {
+        if ((jarvisSessionDetail?.research_profile_reasons?.length ?? 0) > 0) {
+            return jarvisSessionDetail?.research_profile_reasons ?? [];
+        }
+        if (jarvisSessionDetail?.dossier?.qualityJson) {
+            return readResearchProfileReasons(jarvisSessionDetail.dossier.qualityJson);
+        }
+        return [];
+    }, [jarvisSessionDetail?.dossier?.qualityJson, jarvisSessionDetail?.research_profile_reasons]);
+    const sessionResearchQualityMode = useMemo(() => {
+        if (jarvisSessionDetail?.quality_mode) {
+            return jarvisSessionDetail.quality_mode;
+        }
+        if (jarvisSessionDetail?.dossier?.qualityJson) {
+            return readResearchQualityMode(jarvisSessionDetail.dossier.qualityJson);
+        }
+        return null;
+    }, [jarvisSessionDetail?.dossier?.qualityJson, jarvisSessionDetail?.quality_mode]);
+    const sessionResearchDimensionLines = useMemo(
+        () =>
+            summarizeResearchQualityDimensions({
+                profile: sessionResearchProfile,
+                dimensions: jarvisSessionDetail?.quality_dimensions ?? null,
+                t,
+            }),
+        [jarvisSessionDetail?.quality_dimensions, sessionResearchProfile, t]
+    );
+    const sessionMemoryContext = jarvisSessionDetail?.memory_context ?? null;
+    const sessionMemoryPlanSignals = useMemo(
+        () => jarvisSessionDetail?.memory_plan_signals ?? [],
+        [jarvisSessionDetail?.memory_plan_signals]
+    );
+    const sessionMemoryPlanSummary = useMemo(
+        () => jarvisSessionDetail?.memory_plan_summary ?? [],
+        [jarvisSessionDetail?.memory_plan_summary]
+    );
+    const sessionMemoryInfluenceLines = useMemo(() => {
+        const fromContext = describeMemoryInfluenceLine(t, {
+            responseStyle: sessionMemoryContext?.preferences?.responseStyle ?? null,
+            preferredProvider: jarvisSessionDetail?.preferred_provider_applied ?? sessionMemoryContext?.preferences?.preferredProvider ?? null,
+            preferredModel: jarvisSessionDetail?.preferred_model_applied ?? sessionMemoryContext?.preferences?.preferredModel ?? null,
+            approvalStyle: sessionMemoryContext?.preferences?.approvalStyle ?? null,
+            monitoringPreference:
+                jarvisSessionDetail?.monitoring_preference_applied ??
+                sessionMemoryContext?.preferences?.monitoringPreference ??
+                null,
+            projectName: jarvisSessionDetail?.project_context_refs?.project_name ?? sessionMemoryContext?.projectContext?.projectName ?? null,
+            repoSlug: jarvisSessionDetail?.project_context_refs?.repo_slug ?? sessionMemoryContext?.projectContext?.repoSlug ?? null,
+            pinnedRefCount:
+                jarvisSessionDetail?.project_context_refs?.pinned_refs?.length ??
+                sessionMemoryContext?.projectContext?.pinnedRefs?.length ??
+                0,
+        });
+        return Array.from(new Set(fromContext)).slice(0, 6);
+    }, [
+        jarvisSessionDetail?.monitoring_preference_applied,
+        jarvisSessionDetail?.preferred_model_applied,
+        jarvisSessionDetail?.preferred_provider_applied,
+        jarvisSessionDetail?.project_context_refs,
+        sessionMemoryContext?.preferences,
+        sessionMemoryContext?.projectContext,
+        t,
+    ]);
+    const sessionMemoryLines = useMemo(() => {
+        if (!sessionMemoryContext) return [];
+        return sessionMemoryContext.notes.map((note) => ({
+            id: note.id,
+            title: note.title,
+            kind: describeMemoryNoteKind(t, note.kind),
+            preview: localizeMemoryPreview(
+                t,
+                note.content.length > 140 ? `${note.content.slice(0, 137)}...` : note.content
+            ),
+            pinned: note.pinned,
+            updatedAt: formatElapsedShort(note.updatedAt, Date.now()),
+        }));
+    }, [sessionMemoryContext, t]);
+    const sessionMemoryPlanLines = useMemo(() => {
+        const localizedSignals = sessionMemoryPlanSignals.map((signal) => describeMemoryPlanSignal(t, signal));
+        return Array.from(new Set([...localizedSignals, ...sessionMemoryPlanSummary]));
+    }, [sessionMemoryPlanSignals, sessionMemoryPlanSummary, t]);
+    const localizedProfileReasons = useMemo(
+        () => sessionResearchProfileReasons.map((reason) => describeResearchProfileReason(t, reason)),
+        [sessionResearchProfileReasons, t]
+    );
+    const sessionExecutionOption = useMemo(() => {
+        for (const stage of sessionStageRecords) {
+            const refs = (stage.artifactRefsJson ?? undefined) as Record<string, unknown> | undefined;
+            const value = refs?.["execution_option"];
+            if (typeof value === "string" && value.trim().length > 0) {
+                return value;
+            }
+        }
+        return null;
+    }, [sessionStageRecords]);
+    const sessionExecutionOptionDescriptor = useMemo(
+        () => describeExecutionOption(t, sessionExecutionOption),
+        [sessionExecutionOption, t]
+    );
+    const sessionNextActionLabel = useMemo(
+        () => describeNextAction(t, jarvisSessionDetail?.next_action ?? null, sessionResearchProfile, sessionExecutionOption),
+        [jarvisSessionDetail?.next_action, sessionExecutionOption, sessionResearchProfile, t]
+    );
+    const sessionPrimaryArtifactActionLabel = useMemo(
+        () => describePrimaryArtifactActionLabel(t, sessionResearchProfile),
+        [sessionResearchProfile, t]
+    );
+    const sessionMonitorActionLabel = useMemo(
+        () => describeMonitorActionLabel(t, sessionResearchProfile),
+        [sessionResearchProfile, t]
+    );
+    const sessionNextActionButtonLabel = useMemo(
+        () => describeNextActionButtonLabel(t, jarvisSessionDetail?.next_action ?? null, sessionResearchProfile, sessionExecutionOption),
+        [jarvisSessionDetail?.next_action, sessionExecutionOption, sessionResearchProfile, t]
+    );
+    const sessionShouldOfferMonitorAction = useMemo(
+        () => shouldOfferMonitorAction(sessionResearchProfile, jarvisSessionDetail?.next_action?.kind, jarvisSessionDetail?.stages),
+        [jarvisSessionDetail?.next_action?.kind, jarvisSessionDetail?.stages, sessionResearchProfile]
+    );
+    const sessionQuickActions = useMemo(() => {
+        const actions: Array<{ key: string; href: string; label: string; className: string }> = [];
+        if (jarvisSessionDetail?.dossier) {
+            actions.push({
+                key: "open-brief",
+                href: buildDossierSplitHref(jarvisSessionDetail.dossier.id),
+                label: sessionPrimaryArtifactActionLabel,
+                className:
+                    "rounded border border-cyan-400/30 bg-cyan-500/10 px-2.5 py-1.5 text-[10px] font-mono uppercase tracking-widest text-cyan-200 hover:bg-cyan-500/20",
+            });
+        }
+        if (sessionShouldOfferMonitorAction && jarvisSessionDetail?.session?.prompt) {
+            actions.push({
+                key: "create-monitor",
+                href: buildWatcherPrefillHref(
+                    jarvisSessionDetail.dossier?.title ?? jarvisSessionDetail.session.title,
+                    jarvisSessionDetail.session.prompt,
+                    inferWatcherKindFromPrompt(jarvisSessionDetail.session.prompt)
+                ),
+                label: sessionMonitorActionLabel,
+                className:
+                    "rounded border border-white/15 bg-black/30 px-2.5 py-1.5 text-[10px] font-mono uppercase tracking-widest text-white/75 hover:border-white/30 hover:text-white",
+            });
+        }
+        if (jarvisSessionDetail?.next_action?.kind === "open_action_center") {
+            actions.push({
+                key: "open-action-center",
+                href: "/?widget=action_center&focus=action_center",
+                label: sessionNextActionButtonLabel ?? t("assistant.openActionCenter"),
+                className:
+                    "rounded border border-amber-400/30 bg-amber-500/10 px-2.5 py-1.5 text-[10px] font-mono uppercase tracking-widest text-amber-200 hover:bg-amber-500/20",
+            });
+        }
+        if (jarvisSessionDetail?.next_action?.kind === "open_workbench") {
+            actions.push({
+                key: "open-workbench",
+                href: "/?widget=workbench&focus=workbench",
+                label: sessionNextActionButtonLabel ?? t("assistant.openWorkbench"),
+                className:
+                    "rounded border border-cyan-400/30 bg-cyan-500/10 px-2.5 py-1.5 text-[10px] font-mono uppercase tracking-widest text-cyan-200 hover:bg-cyan-500/20",
+            });
+        }
+        return actions;
+    }, [
+        jarvisSessionDetail?.dossier,
+        jarvisSessionDetail?.next_action?.kind,
+        jarvisSessionDetail?.session,
+        sessionMonitorActionLabel,
+        sessionNextActionButtonLabel,
+        sessionPrimaryArtifactActionLabel,
+        sessionShouldOfferMonitorAction,
+        t,
+    ]);
+    const sessionQualityWarnings = useMemo(() => {
+        if (jarvisSessionDetail?.dossier) {
+            return resolveResearchWarningLabels({
+                record: jarvisSessionDetail.dossier.qualityJson,
+                t,
+            });
+        }
+        if ((jarvisSessionDetail?.warning_codes?.length ?? 0) > 0) {
+            return resolveResearchWarningLabels({
+                record: {
+                    soft_warning_codes: jarvisSessionDetail?.warning_codes ?? [],
+                    soft_warnings: [],
+                },
+                t,
+            });
+        }
+        return [];
+    }, [jarvisSessionDetail?.dossier, jarvisSessionDetail?.warning_codes, t]);
+    const sessionHasCoverageWarnings = useMemo(() => {
+        if (!jarvisSessionDetail?.dossier) {
+            return jarvisSessionDetail?.quality_mode === "warn";
+        }
+        return jarvisSessionDetail.dossier.qualityJson?.quality_gate_passed === false;
+    }, [jarvisSessionDetail?.dossier, jarvisSessionDetail?.quality_mode]);
+    const sessionChangeMetadata = useMemo(() => {
+        const stageWithChange = (jarvisSessionDetail?.stages ?? []).find((stage) => {
+            const refs = stage.artifactRefsJson ?? {};
+            return typeof refs.change_class === "string" || typeof refs.change_severity === "string";
+        });
+        const refs = stageWithChange?.artifactRefsJson ?? {};
+        return {
+            changeClass: typeof refs.change_class === "string" ? refs.change_class : null,
+            changeSeverity: typeof refs.change_severity === "string" ? refs.change_severity : null,
+        };
+    }, [jarvisSessionDetail?.stages]);
+    const sessionChangeClassLabel = useMemo(
+        () => describeWatcherChangeClass(t, sessionChangeMetadata.changeClass),
+        [sessionChangeMetadata.changeClass, t]
+    );
+    const sessionChangeSeverityLabel = useMemo(
+        () => describeWatcherChangeSeverity(t, sessionChangeMetadata.changeSeverity),
+        [sessionChangeMetadata.changeSeverity, t]
+    );
+    const sessionPlanSummary = useMemo(
+        () => summarizeCapabilityPlan(t, sessionCapabilityBuckets.requested),
+        [sessionCapabilityBuckets.requested, t]
+    );
+    const currentStageRecord = useMemo(
+        () =>
+            sessionStageRecords.find((stage) => stage.status === "running") ??
+            sessionStageRecords.find((stage) => stage.status === "needs_approval") ??
+            sessionStageRecords.find((stage) => stage.status === "blocked") ??
+            sessionStageRecords.find((stage) => stage.status === "queued") ??
+            [...sessionStageRecords].reverse().find((stage) => stage.status === "completed") ??
+            null,
+        [sessionStageRecords]
+    );
+    const nextStageRecord = useMemo(() => {
+        if (!currentStageRecord) {
+            return sessionStageRecords.find((stage) => stage.status === "queued") ?? null;
+        }
+        const currentIndex = sessionStageRecords.findIndex((stage) => stage.id === currentStageRecord.id);
+        if (currentIndex < 0) {
+            return null;
+        }
+        return (
+            sessionStageRecords
+                .slice(currentIndex + 1)
+                .find((stage) => stage.status === "queued" || stage.status === "blocked" || stage.status === "needs_approval") ??
+            null
+        );
+    }, [currentStageRecord, sessionStageRecords]);
+    const latestSessionSummaries = useMemo(() => {
+        const events = jarvisSessionDetail?.events ?? [];
+        return events
+            .slice(-3)
+            .map((event) => localizeJarvisSummary(t, event.summary) || t("assistant.event.updated"))
+            .filter(Boolean);
+    }, [jarvisSessionDetail?.events, t]);
     const qualitySoftGateEnabled = useMemo(
         () => isFeatureEnabled("assistant.quality_soft_gate_v2", true),
         []
@@ -1787,9 +2548,33 @@ export function AssistantModule() {
 
         try {
             if (useManualJarvisSession) {
+                const manualIntent = inferHudIntent(normalizedPrompt);
+                const manualTargetHint = manualIntent === "general" ? "assistant" : undefined;
+                const manualWorkspacePreset = resolveWorkspaceForIntent(manualIntent);
+                const manualWidgets = buildLaunchWidgetPlan(manualIntent, "simple", normalizedPrompt);
+                const manualFocusWidget = manualWidgets.includes("council")
+                    ? "council"
+                    : manualWidgets.includes("workbench")
+                        ? "workbench"
+                        : "assistant";
+
+                if (manualWidgets.length > 1) {
+                    const viewport = measureHudViewport();
+                    tileWidgetLayouts(manualWidgets, viewport.width, viewport.height, 24);
+                }
+
+                openWidgets(manualWidgets, {
+                    focus: manualFocusWidget,
+                    replace: true,
+                    activate: "all",
+                    workspacePreset: manualWorkspacePreset,
+                });
                 const manualSessionId = startSession(normalizedPrompt, {
-                    intent: "general",
-                    focusedWidget: "assistant",
+                    intent: manualIntent,
+                    activeWidgets: manualWidgets,
+                    mountedWidgets: manualWidgets,
+                    focusedWidget: manualFocusWidget,
+                    workspacePreset: manualWorkspacePreset,
                 });
                 dispatchJarvisDataRefresh({ scope: "sessions", source: "assistant-manual:start-session" });
                 const manualRunNonce =
@@ -1814,7 +2599,7 @@ export function AssistantModule() {
                     prompt: normalizedPrompt,
                     source: "assistant_manual",
                     client_session_id: manualSessionId,
-                    target_hint: "assistant",
+                    target_hint: manualTargetHint,
                     provider: requestPayload.provider,
                     strict_provider: requestPayload.strict_provider,
                     model: requestPayload.model,
@@ -1828,6 +2613,22 @@ export function AssistantModule() {
 
                 const contextId = sessionResult.delegation.assistant_context_id;
                 if (!contextId) {
+                    if (
+                        sessionResult.delegation.primary_target === "council" &&
+                        sessionResult.delegation.council_run_id
+                    ) {
+                        dispatchCouncilIntake({
+                            id: manualSessionId,
+                            prompt: normalizedPrompt,
+                            runId: sessionResult.delegation.council_run_id,
+                            taskId: sessionResult.delegation.task_id ?? undefined,
+                            createdAt: new Date().toISOString(),
+                        });
+                        return;
+                    }
+                    if (sessionResult.delegation.primary_target !== "assistant") {
+                        return;
+                    }
                     throw new Error(t("assistant.error.contextMissing"));
                 }
 
@@ -2059,6 +2860,7 @@ export function AssistantModule() {
         isRunning,
         linkSessionTask,
         modelOverride,
+        openWidgets,
         parallelRuns,
         qualitySoftGateEnabled,
         rememberContextSessionLink,
@@ -3123,7 +3925,7 @@ export function AssistantModule() {
                                 onClick={() => setShowDebugView((prev) => !prev)}
                                 className="px-2.5 py-1 rounded border border-white/20 bg-black/40 text-[10px] font-mono tracking-widest text-white/65 hover:text-white"
                             >
-                                {showDebugView ? "DEBUG ON" : "DEBUG OFF"}
+                                {showDebugView ? t("assistant.debugOn") : t("assistant.debugOff")}
                             </button>
                         </div>
                     </div>
@@ -3219,7 +4021,7 @@ export function AssistantModule() {
                                                     <div className="text-right">
                                                         <p className="text-[10px] font-mono uppercase tracking-[0.2em] text-white/45">{t("assistant.currentState")}</p>
                                                         <p className="mt-1 text-sm text-white/90">
-                                                            {sessionLaunchCard.status} · {describePrimaryTarget(t, sessionLaunchCard.target)}
+                                                            {describeJarvisStatus(t, sessionLaunchCard.status)} · {describePrimaryTarget(t, sessionLaunchCard.target)}
                                                         </p>
                                                     </div>
                                                 </div>
@@ -3245,21 +4047,381 @@ export function AssistantModule() {
                                                 )}
                                             </div>
                                             <div className="rounded border border-white/10 bg-black/30 p-3">
-                                                <p className="text-[10px] font-mono tracking-widest text-cyan-300">{t("assistant.progress")}</p>
-                                                <p className="mt-2 text-sm text-white/90">
-                                                    {jarvisSessionDetail?.session.status ?? (activeHudSession ? "running" : "idle")} ·{" "}
-                                                    {jarvisSessionDetail?.session.primaryTarget ?? inferHudSessionTarget(activeHudSession?.intent)}
-                                                </p>
-                                                <div className="mt-2 space-y-1">
-                                                    {jarvisSessionDetail
-                                                        ? (jarvisSessionDetail.events ?? []).slice(-3).map((event) => (
-                                                              <p key={event.id} className="text-[10px] font-mono text-white/55">
-                                                                  {event.eventType}: {event.summary ?? t("assistant.event.updated")}
-                                                              </p>
-                                                          ))
-                                                        : activeHudSession && (
-                                                              <p className="text-[10px] font-mono text-white/55">{t("assistant.event.updated")}</p>
-                                                          )}
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <p className="text-[10px] font-mono tracking-widest text-cyan-300">{t("assistant.capabilities")}</p>
+                                                    <span className="text-[10px] text-white/55">
+                                                        {describeJarvisStatus(
+                                                            t,
+                                                            jarvisSessionDetail?.session.status ?? (activeHudSession ? "running" : "queued")
+                                                        )}
+                                                    </span>
+                                                </div>
+                                                {sessionPlanSummary ? (
+                                                    <p className="mt-2 text-sm text-white/85">{sessionPlanSummary}</p>
+                                                ) : null}
+                                                {sessionResearchProfile ? (
+                                                    <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                                                        <div className="rounded border border-white/10 bg-black/25 p-2">
+                                                            <p className="text-[10px] font-mono tracking-widest text-white/40">
+                                                                {t("assistant.researchProfile")}
+                                                            </p>
+                                                            <p className="mt-1 text-sm text-white/90">
+                                                                {describeResearchProfile(t, sessionResearchProfile)}
+                                                            </p>
+                                                        </div>
+                                                        <div className="rounded border border-white/10 bg-black/25 p-2">
+                                                            <p className="text-[10px] font-mono tracking-widest text-white/40">
+                                                                {t("assistant.researchQuality")}
+                                                            </p>
+                                                            <p className="mt-1 text-sm text-white/90">
+                                                                {describeResearchQualityMode(t, sessionResearchQualityMode)}
+                                                            </p>
+                                                        </div>
+                                                        <div className="rounded border border-white/10 bg-black/25 p-2">
+                                                            <p className="text-[10px] font-mono tracking-widest text-white/40">
+                                                                {t("assistant.researchProfileReasons")}
+                                                            </p>
+                                                            <div className="mt-1 space-y-1">
+                                                                {localizedProfileReasons.length > 0 ? (
+                                                                    localizedProfileReasons.slice(0, 2).map((reason) => (
+                                                                        <p key={reason} className="text-[11px] text-white/75">
+                                                                            - {reason}
+                                                                        </p>
+                                                                    ))
+                                                                ) : (
+                                                                    <p className="text-[11px] text-white/55">{t("assistant.noResearchProfileReasons")}</p>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                        <div className="rounded border border-white/10 bg-black/25 p-2">
+                                                            <p className="text-[10px] font-mono tracking-widest text-white/40">
+                                                                {t("assistant.researchGaps")}
+                                                            </p>
+                                                            <div className="mt-1 space-y-1">
+                                                                {sessionQualityWarnings.length > 0 ? (
+                                                                    sessionQualityWarnings.slice(0, 2).map((warning) => (
+                                                                        <p key={warning} className="text-[11px] text-white/75">
+                                                                            - {warning}
+                                                                        </p>
+                                                                    ))
+                                                                ) : (
+                                                                    <p className="text-[11px] text-white/55">{t("assistant.noResearchWarnings")}</p>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ) : null}
+                                                {sessionQuickActions.length > 0 ? (
+                                                    <div className="mt-3 rounded border border-cyan-500/20 bg-cyan-500/5 p-3">
+                                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                                            <p className="text-[10px] font-mono tracking-widest text-cyan-300">
+                                                                {t("assistant.quickActions")}
+                                                            </p>
+                                                            <p className="text-[10px] text-white/45">{t("assistant.quickActionsHint")}</p>
+                                                        </div>
+                                                        <div className="mt-2 flex flex-wrap gap-2">
+                                                            {sessionQuickActions.map((action) => (
+                                                                <Link key={action.key} href={action.href} className={action.className}>
+                                                                    {action.label}
+                                                                </Link>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                ) : null}
+                                                {sessionHasCoverageWarnings ? (
+                                                    <div className="mt-3 rounded border border-amber-500/25 bg-amber-500/8 p-3">
+                                                        <p className="text-[10px] font-mono tracking-widest text-amber-300">
+                                                            {t("assistant.coverageWarningTitle")}
+                                                        </p>
+                                                        <p className="mt-2 text-xs text-amber-50/85">
+                                                            {t("assistant.coverageWarningBody")}
+                                                        </p>
+                                                        {sessionQualityWarnings.length > 0 ? (
+                                                            <div className="mt-2 space-y-1">
+                                                                {sessionQualityWarnings.map((warning) => (
+                                                                    <p key={warning} className="text-[11px] text-amber-100/80">
+                                                                        - {warning}
+                                                                    </p>
+                                                                ))}
+                                                            </div>
+                                                        ) : null}
+                                                    </div>
+                                                ) : null}
+                                                {sessionChangeClassLabel || sessionChangeSeverityLabel ? (
+                                                    <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                                                        <div className="rounded border border-white/10 bg-black/25 p-2">
+                                                            <p className="text-[10px] font-mono tracking-widest text-white/40">
+                                                                {t("assistant.changeClassLabel")}
+                                                            </p>
+                                                            <p className="mt-1 text-sm text-white/90">
+                                                                {sessionChangeClassLabel ?? t("assistant.changeClass.unknown")}
+                                                            </p>
+                                                        </div>
+                                                        <div className="rounded border border-white/10 bg-black/25 p-2">
+                                                            <p className="text-[10px] font-mono tracking-widest text-white/40">
+                                                                {t("assistant.changeSeverityLabel")}
+                                                            </p>
+                                                            <p className="mt-1 text-sm text-white/90">
+                                                                {sessionChangeSeverityLabel ?? t("assistant.changeSeverity.info")}
+                                                            </p>
+                                                        </div>
+                                                    </div>
+                                                ) : null}
+                                                {sessionResearchDimensionLines.length > 0 ? (
+                                                    <div className="mt-3 rounded border border-white/10 bg-black/25 p-3">
+                                                        <p className="text-[10px] font-mono tracking-widest text-cyan-300">
+                                                            {t("assistant.researchEvidenceSummary")}
+                                                        </p>
+                                                        <div className="mt-2 space-y-1">
+                                                            {sessionResearchDimensionLines.map((line) => (
+                                                                <p key={line} className="text-[11px] text-white/75">
+                                                                    - {line}
+                                                                </p>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                ) : null}
+                                                <div className="mt-3 rounded border border-white/10 bg-black/25 p-3">
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <p className="text-[10px] font-mono tracking-widest text-cyan-300">
+                                                            {t("assistant.memoryInfluences")}
+                                                        </p>
+                                                        {sessionMemoryInfluenceLines.length > 0 ? (
+                                                            <span className="text-[10px] text-white/45">
+                                                                {t("assistant.memoryInfluencesCount", { value: sessionMemoryInfluenceLines.length })}
+                                                            </span>
+                                                        ) : null}
+                                                    </div>
+                                                    {sessionMemoryInfluenceLines.length > 0 ? (
+                                                        <div className="mt-2 space-y-1">
+                                                            {sessionMemoryInfluenceLines.map((line) => (
+                                                                <p key={line} className="text-[11px] leading-5 text-white/70">
+                                                                    - {line}
+                                                                </p>
+                                                            ))}
+                                                        </div>
+                                                    ) : (
+                                                        <p className="mt-2 text-xs text-white/45">{t("assistant.noMemoryInfluences")}</p>
+                                                    )}
+                                                </div>
+                                                <div className="mt-3 rounded border border-white/10 bg-black/25 p-3">
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <p className="text-[10px] font-mono tracking-widest text-cyan-300">
+                                                            {t("assistant.memoryContext")}
+                                                        </p>
+                                                        {sessionMemoryContext?.notes?.length ? (
+                                                            <span className="text-[10px] text-white/45">
+                                                                {t("assistant.memoryContextCount", { value: sessionMemoryContext.notes.length })}
+                                                            </span>
+                                                        ) : null}
+                                                    </div>
+                                                    {sessionMemoryLines.length > 0 ? (
+                                                        <div className="mt-2 space-y-2">
+                                                            {sessionMemoryLines.map((item) => (
+                                                                <div key={item.id} className="rounded border border-white/10 bg-black/20 p-2">
+                                                                    <div className="flex flex-wrap items-center gap-2">
+                                                                        <span className="rounded border border-cyan-400/20 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-mono uppercase tracking-widest text-cyan-100">
+                                                                            {item.kind}
+                                                                        </span>
+                                                                        {item.pinned ? (
+                                                                            <span className="rounded border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-mono uppercase tracking-widest text-white/60">
+                                                                                {t("assistant.memoryPinned")}
+                                                                            </span>
+                                                                        ) : null}
+                                                                        <span className="text-[10px] text-white/35">{item.updatedAt}</span>
+                                                                    </div>
+                                                                    <p className="mt-2 text-sm text-white/90">{item.title}</p>
+                                                                    <p className="mt-1 text-[11px] leading-5 text-white/65">{item.preview}</p>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    ) : (
+                                                        <p className="mt-2 text-xs text-white/45">{t("assistant.noMemoryContext")}</p>
+                                                    )}
+                                                </div>
+                                                <div className="mt-3 rounded border border-white/10 bg-black/25 p-3">
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <p className="text-[10px] font-mono tracking-widest text-cyan-300">
+                                                            {t("assistant.memoryPlan")}
+                                                        </p>
+                                                        {sessionMemoryPlanSignals.length > 0 ? (
+                                                            <span className="text-[10px] text-white/45">
+                                                                {t("assistant.memoryPlanCount", { value: sessionMemoryPlanSignals.length })}
+                                                            </span>
+                                                        ) : null}
+                                                    </div>
+                                                    {sessionMemoryPlanLines.length > 0 ? (
+                                                        <div className="mt-2 space-y-1">
+                                                            {sessionMemoryPlanLines.map((line) => (
+                                                                <p key={line} className="text-[11px] leading-5 text-white/70">
+                                                                    - {line}
+                                                                </p>
+                                                            ))}
+                                                        </div>
+                                                    ) : (
+                                                        <p className="mt-2 text-xs text-white/45">{t("assistant.noMemoryPlan")}</p>
+                                                    )}
+                                                </div>
+                                                <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                                                    <div className="rounded border border-white/10 bg-black/25 p-2">
+                                                        <p className="text-[10px] font-mono tracking-widest text-white/40">
+                                                            {t("assistant.currentStage")}
+                                                        </p>
+                                                        {currentStageRecord ? (
+                                                            <>
+                                                                <p className="mt-1 text-sm text-white/90">
+                                                                    {describeCapability(t, currentStageRecord.capability)}
+                                                                </p>
+                                                                <p className="mt-1 text-[11px] text-white/55">
+                                                                    {localizeJarvisSummary(t, currentStageRecord.summary) || describeCapabilityHint(t, currentStageRecord.capability)}
+                                                                </p>
+                                                            </>
+                                                        ) : (
+                                                            <p className="mt-1 text-xs text-white/45">{t("assistant.currentStageNone")}</p>
+                                                        )}
+                                                    </div>
+                                                    <div className="rounded border border-white/10 bg-black/25 p-2">
+                                                        <p className="text-[10px] font-mono tracking-widest text-white/40">
+                                                            {t("assistant.nextStage")}
+                                                        </p>
+                                                        {nextStageRecord ? (
+                                                            <>
+                                                                <p className="mt-1 text-sm text-white/90">
+                                                                    {describeCapability(t, nextStageRecord.capability)}
+                                                                </p>
+                                                                <p className="mt-1 text-[11px] text-white/55">
+                                                                    {describeCapabilityHint(t, nextStageRecord.capability)}
+                                                                </p>
+                                                            </>
+                                                        ) : (
+                                                            <p className="mt-1 text-xs text-white/45">{t("assistant.nextStageNone")}</p>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                {sessionExecutionOptionDescriptor ? (
+                                                    <div className="mt-3 rounded border border-white/10 bg-black/25 p-2">
+                                                        <p className="text-[10px] font-mono tracking-widest text-white/40">
+                                                            {t("assistant.executionOption")}
+                                                        </p>
+                                                        <p className="mt-1 text-sm text-white/90">{sessionExecutionOptionDescriptor.label}</p>
+                                                        <p className="mt-1 text-[11px] text-white/55">{sessionExecutionOptionDescriptor.hint}</p>
+                                                    </div>
+                                                ) : null}
+                                                <div className="mt-3 space-y-3">
+                                                    <div>
+                                                        <p className="text-[10px] font-mono tracking-widest text-white/40">
+                                                            {t("assistant.capabilitiesRequested")}
+                                                        </p>
+                                                        <div className="mt-1 flex flex-wrap gap-1.5">
+                                                            {sessionCapabilityBuckets.requested.length > 0 ? (
+                                                                sessionCapabilityBuckets.requested.map((capability) => (
+                                                                    <span
+                                                                        key={`requested-${capability}`}
+                                                                        className="rounded border border-cyan-400/25 bg-cyan-500/10 px-2 py-1 text-[10px] font-mono uppercase tracking-widest text-cyan-100"
+                                                                    >
+                                                                        {describeCapability(t, capability)}
+                                                                    </span>
+                                                                ))
+                                                            ) : (
+                                                                <span className="text-xs text-white/45">{t("assistant.noRequestedCapabilities")}</span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-[10px] font-mono tracking-widest text-white/40">
+                                                            {t("assistant.capabilitiesActive")}
+                                                        </p>
+                                                        <div className="mt-1 flex flex-wrap gap-1.5">
+                                                            {sessionCapabilityBuckets.active.length > 0 ? (
+                                                                sessionCapabilityBuckets.active.map((capability) => (
+                                                                    <span
+                                                                        key={`active-${capability}`}
+                                                                        className="rounded border border-amber-400/25 bg-amber-500/10 px-2 py-1 text-[10px] font-mono uppercase tracking-widest text-amber-100"
+                                                                    >
+                                                                        {describeCapability(t, capability)}
+                                                                    </span>
+                                                                ))
+                                                            ) : (
+                                                                <span className="text-xs text-white/45">{t("assistant.noActiveCapabilities")}</span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-[10px] font-mono tracking-widest text-white/40">
+                                                            {t("assistant.capabilitiesCompleted")}
+                                                        </p>
+                                                        <div className="mt-1 flex flex-wrap gap-1.5">
+                                                            {sessionCapabilityBuckets.completed.length > 0 ? (
+                                                                sessionCapabilityBuckets.completed.map((capability) => (
+                                                                    <span
+                                                                        key={`completed-${capability}`}
+                                                                        className="rounded border border-emerald-400/25 bg-emerald-500/10 px-2 py-1 text-[10px] font-mono uppercase tracking-widest text-emerald-100"
+                                                                    >
+                                                                        {describeCapability(t, capability)}
+                                                                    </span>
+                                                                ))
+                                                            ) : (
+                                                                <span className="text-xs text-white/45">{t("assistant.noCompletedCapabilities")}</span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div className="rounded border border-white/10 bg-black/30 p-3">
+                                                <p className="text-[10px] font-mono tracking-widest text-cyan-300">{t("assistant.stages")}</p>
+                                                <div className="mt-2 space-y-2">
+                                                    {sessionStageRecords.length > 0 ? (
+                                                        sessionStageRecords.map((stage, index) => {
+                                                            const statusClass =
+                                                                stage.status === "completed"
+                                                                    ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-200"
+                                                                    : stage.status === "running"
+                                                                      ? "border-cyan-500/45 bg-cyan-500/15 text-cyan-200"
+                                                                      : stage.status === "needs_approval"
+                                                                        ? "border-amber-500/35 bg-amber-500/10 text-amber-200"
+                                                                        : stage.status === "failed"
+                                                                          ? "border-rose-500/35 bg-rose-500/10 text-rose-200"
+                                                                          : stage.status === "blocked"
+                                                                            ? "border-orange-500/35 bg-orange-500/10 text-orange-200"
+                                                                            : "border-white/15 bg-white/5 text-white/65";
+                                                            return (
+                                                                <div
+                                                                    key={stage.id}
+                                                                    className="rounded border border-white/10 bg-black/25 px-2 py-2"
+                                                                >
+                                                                    <div className="flex items-start justify-between gap-2">
+                                                                        <div className="min-w-0">
+                                                                            <p className="text-xs text-white/90">
+                                                                                {index + 1}. {describeCapability(t, stage.capability)}
+                                                                            </p>
+                                                                            <p className="mt-1 text-[11px] text-white/55">
+                                                                                {localizeJarvisSummary(t, stage.summary) || describeCapabilityHint(t, stage.capability)}
+                                                                            </p>
+                                                                        </div>
+                                                                        <span
+                                                                            className={`rounded border px-1.5 py-0.5 text-[9px] font-mono uppercase tracking-widest ${statusClass}`}
+                                                                        >
+                                                                            {describeJarvisStatus(t, stage.status)}
+                                                                        </span>
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })
+                                                    ) : (
+                                                        <p className="text-xs text-white/45">{t("assistant.noStages")}</p>
+                                                    )}
+                                                </div>
+                                                <div className="mt-3 space-y-1">
+                                                    <p className="text-[10px] font-mono tracking-widest text-white/40">{t("assistant.latestUpdates")}</p>
+                                                    {latestSessionSummaries.length > 0 ? (
+                                                        latestSessionSummaries.map((summary, index) => (
+                                                            <p key={`${summary}-${index}`} className="text-[10px] font-mono text-white/55">
+                                                                {summary}
+                                                            </p>
+                                                        ))
+                                                    ) : activeHudSession ? (
+                                                        <p className="text-[10px] font-mono text-white/55">{t("assistant.event.updated")}</p>
+                                                    ) : null}
                                                 </div>
                                             </div>
                                             <div className="rounded border border-white/10 bg-black/30 p-3">
@@ -3268,7 +4430,10 @@ export function AssistantModule() {
                                                     <>
                                                         <p className="mt-2 text-sm text-white/90">{jarvisSessionDetail.dossier.title}</p>
                                                         <p className="mt-1 text-[10px] font-mono text-white/55">
-                                                            sources: {Number(jarvisSessionDetail.briefing?.sourceCount ?? 0)} · conflicts: {Number(jarvisSessionDetail.dossier.conflictsJson?.count ?? 0)}
+                                                            {t("assistant.evidenceSummary", {
+                                                                sources: Number(jarvisSessionDetail.briefing?.sourceCount ?? 0),
+                                                                conflicts: Number(jarvisSessionDetail.dossier.conflictsJson?.count ?? 0),
+                                                            })}
                                                         </p>
                                                     </>
                                                 ) : jarvisSessionDetail?.briefing ? (
@@ -3293,27 +4458,71 @@ export function AssistantModule() {
                                                                 </p>
                                                             ))}
                                                     </div>
+                                                ) : jarvisSessionDetail?.next_action?.kind === "open_action_center" ? (
+                                                    <div className="mt-2 space-y-2">
+                                                        <p className="text-xs text-white/55">{sessionNextActionLabel}</p>
+                                                        {sessionExecutionOptionDescriptor ? (
+                                                            <div className={`rounded border p-2 ${sessionExecutionOptionDescriptor.toneClassName}`}>
+                                                                <p className="text-[10px] font-mono tracking-widest text-white/60">
+                                                                    {t("assistant.executionOption")}
+                                                                </p>
+                                                                <p className="mt-1 text-sm">{sessionExecutionOptionDescriptor.label}</p>
+                                                                <p className="mt-1 text-[11px] text-white/75">{sessionExecutionOptionDescriptor.hint}</p>
+                                                            </div>
+                                                        ) : null}
+                                                        <div className="flex flex-wrap gap-2">
+                                                            <Link
+                                                                href="/?widget=action_center&focus=action_center"
+                                                                className="rounded border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-[10px] font-mono uppercase tracking-widest text-amber-200 hover:bg-amber-500/20"
+                                                            >
+                                                                {sessionNextActionButtonLabel ?? t("assistant.openActionCenter")}
+                                                            </Link>
+                                                        </div>
+                                                    </div>
                                                 ) : jarvisSessionDetail?.dossier ? (
                                                     <div className="mt-2 space-y-2">
                                                         <p className="text-xs text-white/55">
-                                                            {t("assistant.researchReady")}
+                                                            {sessionNextActionLabel ?? t("assistant.researchReady")}
                                                         </p>
                                                         <div className="flex flex-wrap gap-2">
                                                             <Link
                                                                 href={buildDossierSplitHref(jarvisSessionDetail.dossier.id)}
                                                                 className="rounded border border-cyan-400/30 bg-cyan-500/10 px-2 py-1 text-[10px] font-mono uppercase tracking-widest text-cyan-200 hover:bg-cyan-500/20"
                                                             >
-                                                                {t("assistant.openDossier")}
+                                                                {sessionPrimaryArtifactActionLabel}
                                                             </Link>
+                                                            {sessionShouldOfferMonitorAction ? (
+                                                                <Link
+                                                                    href={buildWatcherPrefillHref(
+                                                                        jarvisSessionDetail.dossier.title,
+                                                                        jarvisSessionDetail.session.prompt,
+                                                                        inferWatcherKindFromPrompt(jarvisSessionDetail.session.prompt)
+                                                                    )}
+                                                                    className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[10px] font-mono uppercase tracking-widest text-white/70 hover:border-white/30 hover:text-white"
+                                                                >
+                                                                    {sessionMonitorActionLabel}
+                                                                </Link>
+                                                            ) : null}
+                                                        </div>
+                                                    </div>
+                                                ) : jarvisSessionDetail?.next_action?.kind === "open_workbench" ? (
+                                                    <div className="mt-2 space-y-2">
+                                                        <p className="text-xs text-white/55">{sessionNextActionLabel}</p>
+                                                        {sessionExecutionOptionDescriptor ? (
+                                                            <div className={`rounded border p-2 ${sessionExecutionOptionDescriptor.toneClassName}`}>
+                                                                <p className="text-[10px] font-mono tracking-widest text-white/60">
+                                                                    {t("assistant.executionOption")}
+                                                                </p>
+                                                                <p className="mt-1 text-sm">{sessionExecutionOptionDescriptor.label}</p>
+                                                                <p className="mt-1 text-[11px] text-white/75">{sessionExecutionOptionDescriptor.hint}</p>
+                                                            </div>
+                                                        ) : null}
+                                                        <div className="flex flex-wrap gap-2">
                                                             <Link
-                                                                href={buildWatcherPrefillHref(
-                                                                    jarvisSessionDetail.dossier.title,
-                                                                    jarvisSessionDetail.session.prompt,
-                                                                    inferWatcherKindFromPrompt(jarvisSessionDetail.session.prompt)
-                                                                )}
-                                                                className="rounded border border-white/15 bg-black/30 px-2 py-1 text-[10px] font-mono uppercase tracking-widest text-white/70 hover:border-white/30 hover:text-white"
+                                                                href="/?widget=workbench&focus=workbench"
+                                                                className="rounded border border-cyan-400/30 bg-cyan-500/10 px-2 py-1 text-[10px] font-mono uppercase tracking-widest text-cyan-200 hover:bg-cyan-500/20"
                                                             >
-                                                                {t("assistant.trackTopic")}
+                                                                {sessionNextActionButtonLabel ?? t("assistant.openWorkbench")}
                                                             </Link>
                                                         </div>
                                                     </div>
@@ -3332,7 +4541,7 @@ export function AssistantModule() {
                                                         </div>
                                                     </div>
                                                 ) : (
-                                                    <p className="mt-2 text-xs text-white/45">{t("assistant.noApproval")}</p>
+                                                    <p className="mt-2 text-xs text-white/45">{t("assistant.noActionNeeded")}</p>
                                                 )}
                                             </div>
                                         </div>
@@ -3563,7 +4772,7 @@ export function AssistantModule() {
                         <div className="relative">
                             <textarea
                                 className="w-full bg-white/5 border border-white/10 rounded-lg pl-4 pr-12 py-3 text-sm focus:outline-none focus:border-cyan-500/50 resize-none h-14"
-                                placeholder="Message JARVIS..."
+                                placeholder={t("assistant.inputPlaceholder")}
                                 value={inputVal}
                                 onChange={e => setInputVal(e.target.value)}
                                 onKeyDown={(e) => {
@@ -3575,7 +4784,7 @@ export function AssistantModule() {
                             />
                             <button
                                 className="absolute right-2 top-2 p-2 rounded-md bg-cyan-500 hover:bg-cyan-400 text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                aria-label="Send Message"
+                                aria-label={t("assistant.sendMessage")}
                                 onClick={() => void sendMessage()}
                                 disabled={isRunning || !inputVal.trim()}
                             >

@@ -3,7 +3,14 @@ import { z } from 'zod';
 
 import { withAiInvocationTrace } from '../observability/ai-trace';
 import { resolveModelSelection } from '../providers/model-selection';
+import { generateWithPreferenceRecovery } from '../providers/preference-recovery';
 import { extractProviderAttempts, maskErrorForApi } from '../providers/router';
+import {
+  resolveJarvisMemoryContext,
+  resolveJarvisMemoryPreferences,
+  resolveMemoryBackedRouting
+} from '../jarvis/memory-context';
+import { syncJarvisSessionFromStages } from '../jarvis/stages';
 import type { ExecutionRunRecord } from '../store/types';
 import { sendError, sendSuccess } from '../lib/http';
 import type { RouteContext } from './types';
@@ -35,12 +42,23 @@ type SelectedCredentialView = {
   auth_access_token_expires_at: string | null;
 } | null;
 
+type ResolvedRouteView = {
+  provider: 'auto' | 'openai' | 'gemini' | 'anthropic' | 'local';
+  model: string | null;
+  strict_provider: boolean;
+  source: 'request_override' | 'feature_preference' | 'global_default' | 'auto' | 'runtime_result';
+  used_fallback: boolean;
+};
+
 function resolveSelectedCredentialForRun(run: ExecutionRunRecord): SelectedCredentialView {
-  if (!run.provider) {
-    return null;
-  }
-  const match = [...run.attempts].reverse().find((attempt) => attempt.provider === run.provider && attempt.status === 'success');
-  const credential = match?.credential;
+  const reversedAttempts = [...run.attempts].reverse();
+  const matchingAttempts = run.provider
+    ? reversedAttempts.filter((attempt) => attempt.provider === run.provider)
+    : reversedAttempts;
+  const credential =
+    matchingAttempts.find((attempt) => attempt.status === 'success')?.credential
+    ?? matchingAttempts.find((attempt) => attempt.credential)?.credential
+    ?? reversedAttempts.find((attempt) => attempt.credential)?.credential;
   if (!credential) {
     return null;
   }
@@ -52,10 +70,35 @@ function resolveSelectedCredentialForRun(run: ExecutionRunRecord): SelectedCrede
   };
 }
 
-function withRunCredential(run: ExecutionRunRecord): ExecutionRunRecord & { selected_credential: SelectedCredentialView } {
+function resolveRunRoute(run: ExecutionRunRecord, route?: Omit<ResolvedRouteView, 'used_fallback'>): ResolvedRouteView {
+  if (route) {
+    return {
+      ...route,
+      used_fallback: run.used_fallback
+    };
+  }
+
+  const reversedAttempts = [...run.attempts].reverse();
+  const attemptedProviders = Array.from(new Set(run.attempts.map((attempt) => attempt.provider)));
+  const provider: ResolvedRouteView['provider'] = run.provider ?? reversedAttempts[0]?.provider ?? 'auto';
+  const hasPinnedProvider = run.provider !== null || reversedAttempts.length > 0;
+  return {
+    provider,
+    model: typeof run.model === 'string' && run.model.trim().length > 0 ? run.model : null,
+    strict_provider: hasPinnedProvider ? !run.used_fallback && attemptedProviders.length <= 1 : false,
+    source: 'runtime_result',
+    used_fallback: run.used_fallback
+  };
+}
+
+function withRunCredential(
+  run: ExecutionRunRecord,
+  resolvedRoute?: Omit<ResolvedRouteView, 'used_fallback'>
+): ExecutionRunRecord & { selected_credential: SelectedCredentialView; resolved_route: ResolvedRouteView } {
   return {
     ...run,
-    selected_credential: resolveSelectedCredentialForRun(run)
+    selected_credential: resolveSelectedCredentialForRun(run),
+    resolved_route: resolveRunRoute(run, resolvedRoute)
   };
 }
 
@@ -79,15 +122,26 @@ export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): 
     const traceId = resolveRequestTraceId(request);
     const resolvedCredentials = await resolveRequestProviderCredentials(request);
     const credentialsByProvider = resolvedCredentials.credentialsByProvider;
+    const memoryContext = await resolveJarvisMemoryContext(store, {
+      userId,
+      prompt: parsed.data.prompt
+    });
+    const memoryPreferences = resolveJarvisMemoryPreferences(memoryContext);
+    const memoryRouting = resolveMemoryBackedRouting({
+      provider: parsed.data.provider,
+      strictProvider: parsed.data.strict_provider,
+      model: parsed.data.model,
+      memoryPreferences
+    });
     const featureKey = parsed.data.mode === 'code' ? 'execution_code' : 'execution_compute';
     const modelSelection = await resolveModelSelection({
       store,
       userId,
       featureKey,
       override: {
-        provider: parsed.data.provider,
-        strictProvider: parsed.data.strict_provider,
-        model: parsed.data.model
+        provider: memoryRouting.provider,
+        strictProvider: memoryRouting.strictProvider,
+        model: memoryRouting.model
       }
     });
     const idempotencyKey = resolveRequiredIdempotencyKey(request);
@@ -101,7 +155,18 @@ export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): 
         idempotencyKey
       });
       if (existing) {
-        return sendSuccess(reply, request, 200, withRunCredential(existing), { idempotent_replay: true });
+        return sendSuccess(
+          reply,
+          request,
+          200,
+          withRunCredential(existing, {
+            provider: modelSelection.provider,
+            model: modelSelection.model,
+            strict_provider: modelSelection.strictProvider,
+            source: modelSelection.source
+          }),
+          { idempotent_replay: true }
+        );
       }
 
       const run = await store.createExecutionRun({
@@ -203,6 +268,23 @@ export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): 
             idempotent_replay: false
           }
         });
+        await store.upsertJarvisSessionStage({
+          userId,
+          sessionId: linkedSession.id,
+          stageKey: 'execute',
+          capability: 'execute',
+          title: 'Execution',
+          status: 'running',
+          orderIndex: 0,
+          summary: parsed.data.mode === 'code' ? 'Execution run prepared' : 'Compute run prepared',
+          artifactRefsJson: {
+            execution_run_id: run.id,
+            task_id: taskId,
+            mode: parsed.data.mode
+          },
+          startedAt: new Date().toISOString()
+        });
+        await syncJarvisSessionFromStages(store, { userId, sessionId: linkedSession.id });
       }
 
       void (async () => {
@@ -224,30 +306,34 @@ export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): 
               model_selection_source: modelSelection.source
             },
             run: () =>
-              providerRouter.generate({
-                prompt: parsed.data.prompt,
-                systemPrompt: parsed.data.system_prompt,
-                provider: modelSelection.provider,
-                credentialsByProvider,
-                traceId,
-                onSpanEvent: (event) => {
-                  request.log.info(
-                    {
-                      trace_id: event.traceId,
-                      provider: event.provider,
-                      success: event.success,
-                      latency_ms: event.latencyMs,
-                      error: event.error
-                    },
-                    event.name
-                  );
-                },
-                excludeProviders: parsed.data.exclude_providers,
-                strictProvider: modelSelection.strictProvider,
-                taskType: parsed.data.mode,
-                model: modelSelection.model ?? undefined,
-                temperature: parsed.data.temperature,
-                maxOutputTokens: parsed.data.max_output_tokens
+              generateWithPreferenceRecovery({
+                providerRouter,
+                modelSelection,
+                request: {
+                  prompt: parsed.data.prompt,
+                  systemPrompt: parsed.data.system_prompt,
+                  provider: modelSelection.provider,
+                  credentialsByProvider,
+                  traceId,
+                  onSpanEvent: (event) => {
+                    request.log.info(
+                      {
+                        trace_id: event.traceId,
+                        provider: event.provider,
+                        success: event.success,
+                        latency_ms: event.latencyMs,
+                        error: event.error
+                      },
+                      event.name
+                    );
+                  },
+                  excludeProviders: parsed.data.exclude_providers,
+                  strictProvider: modelSelection.strictProvider,
+                  taskType: parsed.data.mode,
+                  model: modelSelection.model ?? undefined,
+                  temperature: parsed.data.temperature,
+                  maxOutputTokens: parsed.data.max_output_tokens
+                }
               })
           });
 
@@ -263,6 +349,22 @@ export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): 
           });
 
           if (parsed.data.client_session_id) {
+            await store.upsertJarvisSessionStage({
+              userId,
+              sessionId: parsed.data.client_session_id,
+              stageKey: 'execute',
+              capability: 'execute',
+              title: 'Execution',
+              status: 'completed',
+              summary: 'Execution run completed',
+              artifactRefsJson: {
+                execution_run_id: run.id,
+                task_id: taskId,
+                mode: parsed.data.mode
+              },
+              completedAt: new Date().toISOString()
+            });
+            await syncJarvisSessionFromStages(store, { userId, sessionId: parsed.data.client_session_id });
             await store.updateJarvisSession({
               sessionId: parsed.data.client_session_id,
               userId,
@@ -313,6 +415,23 @@ export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): 
           });
 
           if (parsed.data.client_session_id) {
+            await store.upsertJarvisSessionStage({
+              userId,
+              sessionId: parsed.data.client_session_id,
+              stageKey: 'execute',
+              capability: 'execute',
+              title: 'Execution',
+              status: 'failed',
+              summary: 'Execution run failed',
+              errorMessage: reason,
+              artifactRefsJson: {
+                execution_run_id: run.id,
+                task_id: taskId,
+                mode: parsed.data.mode
+              },
+              completedAt: new Date().toISOString()
+            });
+            await syncJarvisSessionFromStages(store, { userId, sessionId: parsed.data.client_session_id });
             await store.updateJarvisSession({
               sessionId: parsed.data.client_session_id,
               userId,
@@ -359,7 +478,12 @@ export async function executionRoutes(app: FastifyInstance, ctx: RouteContext): 
         request,
         202,
         {
-          ...withRunCredential(latest ?? run),
+          ...withRunCredential(latest ?? run, {
+            provider: modelSelection.provider,
+            model: modelSelection.model,
+            strict_provider: modelSelection.strictProvider,
+            source: modelSelection.source
+          }),
           session: linkedSession
         },
         { accepted: true }

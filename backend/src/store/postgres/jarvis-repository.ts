@@ -9,6 +9,7 @@ import type {
   DossierSourceRow,
   JarvisSessionEventRow,
   JarvisSessionRow,
+  JarvisSessionStageRow,
   WatcherRow,
   WatcherRunRow
 } from './types';
@@ -54,6 +55,27 @@ function mapJarvisSessionEventRow(row: JarvisSessionEventRow) {
     summary: row.summary,
     data: row.data ?? {},
     createdAt: row.created_at.toISOString()
+  };
+}
+
+function mapJarvisSessionStageRow(row: JarvisSessionStageRow) {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    stageKey: row.stage_key,
+    capability: row.capability,
+    title: row.title,
+    status: row.status,
+    orderIndex: row.order_index,
+    dependsOnJson: Array.isArray(row.depends_on_json) ? row.depends_on_json.map((value) => String(value)) : [],
+    artifactRefsJson: row.artifact_refs_json ?? {},
+    summary: row.summary,
+    errorCode: row.error_code,
+    errorMessage: row.error_message,
+    startedAt: row.started_at?.toISOString() ?? null,
+    completedAt: row.completed_at?.toISOString() ?? null,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString()
   };
 }
 
@@ -338,6 +360,139 @@ export function createJarvisRepository({ pool }: { pool: Pool }): JarvisReposito
         values
       );
       return rows.map(mapJarvisSessionEventRow);
+    },
+
+    async upsertJarvisSessionStage(input) {
+      const current = await pool.query<JarvisSessionRow>(
+        `SELECT id FROM jarvis_sessions WHERE id = $1::uuid AND user_id = $2::uuid LIMIT 1`,
+        [input.sessionId, input.userId]
+      );
+      if (!current.rows[0]) return null;
+
+      const { rows } = await pool.query<JarvisSessionStageRow>(
+        `
+          INSERT INTO jarvis_session_stages (
+            session_id,
+            stage_key,
+            capability,
+            title,
+            status,
+            order_index,
+            depends_on_json,
+            artifact_refs_json,
+            summary,
+            error_code,
+            error_message,
+            started_at,
+            completed_at
+          )
+          VALUES (
+            $1::uuid,
+            $2,
+            COALESCE($3, 'answer'),
+            COALESCE($4, $2),
+            COALESCE($5, 'queued'),
+            COALESCE($6, 0),
+            COALESCE($7::jsonb, '[]'::jsonb),
+            COALESCE($8::jsonb, '{}'::jsonb),
+            $9,
+            $10,
+            $11,
+            $12::timestamptz,
+            $13::timestamptz
+          )
+          ON CONFLICT (session_id, stage_key)
+          DO UPDATE SET
+            capability = CASE
+              WHEN $14 = true THEN EXCLUDED.capability
+              ELSE jarvis_session_stages.capability
+            END,
+            title = CASE
+              WHEN $15 = true THEN EXCLUDED.title
+              ELSE jarvis_session_stages.title
+            END,
+            status = CASE
+              WHEN $16 = true THEN EXCLUDED.status
+              ELSE jarvis_session_stages.status
+            END,
+            order_index = CASE
+              WHEN $17 = true THEN EXCLUDED.order_index
+              ELSE jarvis_session_stages.order_index
+            END,
+            depends_on_json = CASE
+              WHEN $18 = true THEN EXCLUDED.depends_on_json
+              ELSE jarvis_session_stages.depends_on_json
+            END,
+            artifact_refs_json = CASE
+              WHEN $19 = true THEN EXCLUDED.artifact_refs_json
+              ELSE jarvis_session_stages.artifact_refs_json
+            END,
+            summary = CASE
+              WHEN $20 = true THEN EXCLUDED.summary
+              ELSE jarvis_session_stages.summary
+            END,
+            error_code = CASE
+              WHEN $21 = true THEN EXCLUDED.error_code
+              ELSE jarvis_session_stages.error_code
+            END,
+            error_message = CASE
+              WHEN $22 = true THEN EXCLUDED.error_message
+              ELSE jarvis_session_stages.error_message
+            END,
+            started_at = CASE
+              WHEN $23 = true THEN $12::timestamptz
+              ELSE jarvis_session_stages.started_at
+            END,
+            completed_at = CASE
+              WHEN $24 = true THEN $13::timestamptz
+              ELSE jarvis_session_stages.completed_at
+            END,
+            updated_at = now()
+          RETURNING *
+        `,
+        [
+          input.sessionId,
+          input.stageKey,
+          input.capability ?? null,
+          input.title ?? null,
+          input.status ?? null,
+          typeof input.orderIndex === 'number' ? input.orderIndex : null,
+          input.dependsOnJson ? JSON.stringify(input.dependsOnJson) : null,
+          input.artifactRefsJson ? JSON.stringify(input.artifactRefsJson) : null,
+          Object.prototype.hasOwnProperty.call(input, 'summary') ? (input.summary ?? null) : null,
+          Object.prototype.hasOwnProperty.call(input, 'errorCode') ? (input.errorCode ?? null) : null,
+          Object.prototype.hasOwnProperty.call(input, 'errorMessage') ? (input.errorMessage ?? null) : null,
+          Object.prototype.hasOwnProperty.call(input, 'startedAt') ? (input.startedAt ?? null) : null,
+          Object.prototype.hasOwnProperty.call(input, 'completedAt') ? (input.completedAt ?? null) : null,
+          Object.prototype.hasOwnProperty.call(input, 'capability'),
+          Object.prototype.hasOwnProperty.call(input, 'title'),
+          Object.prototype.hasOwnProperty.call(input, 'status'),
+          Object.prototype.hasOwnProperty.call(input, 'orderIndex'),
+          Object.prototype.hasOwnProperty.call(input, 'dependsOnJson'),
+          Object.prototype.hasOwnProperty.call(input, 'artifactRefsJson'),
+          Object.prototype.hasOwnProperty.call(input, 'summary'),
+          Object.prototype.hasOwnProperty.call(input, 'errorCode'),
+          Object.prototype.hasOwnProperty.call(input, 'errorMessage'),
+          Object.prototype.hasOwnProperty.call(input, 'startedAt'),
+          Object.prototype.hasOwnProperty.call(input, 'completedAt')
+        ]
+      );
+      return rows[0] ? mapJarvisSessionStageRow(rows[0]) : null;
+    },
+
+    async listJarvisSessionStages(input) {
+      const { rows } = await pool.query<JarvisSessionStageRow>(
+        `
+          SELECT s.*
+          FROM jarvis_session_stages s
+          INNER JOIN jarvis_sessions j ON j.id = s.session_id
+          WHERE s.session_id = $1::uuid
+            AND j.user_id = $2::uuid
+          ORDER BY s.order_index ASC, s.created_at ASC
+        `,
+        [input.sessionId, input.userId]
+      );
+      return rows.map(mapJarvisSessionStageRow);
     },
 
     async createActionProposal(input) {

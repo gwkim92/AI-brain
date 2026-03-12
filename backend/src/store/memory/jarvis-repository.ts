@@ -8,6 +8,7 @@ import type {
   DossierSourceRecord,
   JarvisSessionEventRecord,
   JarvisSessionRecord,
+  JarvisSessionStageRecord,
   WatcherRecord,
   WatcherRunRecord
 } from '../types';
@@ -35,6 +36,14 @@ function toSession(row: JarvisSessionRecord): JarvisSessionRecord {
 
 function toEvent(row: JarvisSessionEventRecord): JarvisSessionEventRecord {
   return { ...row, data: { ...row.data } };
+}
+
+function toStage(row: JarvisSessionStageRecord): JarvisSessionStageRecord {
+  return {
+    ...row,
+    dependsOnJson: [...row.dependsOnJson],
+    artifactRefsJson: { ...row.artifactRefsJson }
+  };
 }
 
 function toActionProposal(row: ActionProposalRecord): ActionProposalRecord {
@@ -170,6 +179,50 @@ export function createMemoryJarvisRepository({ state, nowIso }: MemoryJarvisRepo
         .sort((left, right) => left.sequence - right.sequence)
         .slice(0, normalizeLimit(input.limit));
       return rows.map(toEvent);
+    },
+
+    async upsertJarvisSessionStage(input) {
+      const session = state.jarvisSessions.get(input.sessionId);
+      if (!session || session.userId !== input.userId) return null;
+      const existingRows = state.jarvisSessionStages.get(input.sessionId) ?? [];
+      const existing = existingRows.find((row) => row.stageKey === input.stageKey) ?? null;
+      const now = nowIso();
+      const next: JarvisSessionStageRecord = {
+        id: existing?.id ?? randomUUID(),
+        sessionId: input.sessionId,
+        stageKey: input.stageKey,
+        capability: input.capability ?? existing?.capability ?? 'answer',
+        title: input.title ?? existing?.title ?? input.stageKey,
+        status: input.status ?? existing?.status ?? 'queued',
+        orderIndex: typeof input.orderIndex === 'number' ? input.orderIndex : (existing?.orderIndex ?? existingRows.length),
+        dependsOnJson: input.dependsOnJson ? [...input.dependsOnJson] : (existing?.dependsOnJson ? [...existing.dependsOnJson] : []),
+        artifactRefsJson: input.artifactRefsJson ? { ...input.artifactRefsJson } : (existing?.artifactRefsJson ? { ...existing.artifactRefsJson } : {}),
+        summary: Object.prototype.hasOwnProperty.call(input, 'summary') ? (input.summary ?? null) : (existing?.summary ?? null),
+        errorCode: Object.prototype.hasOwnProperty.call(input, 'errorCode') ? (input.errorCode ?? null) : (existing?.errorCode ?? null),
+        errorMessage: Object.prototype.hasOwnProperty.call(input, 'errorMessage') ? (input.errorMessage ?? null) : (existing?.errorMessage ?? null),
+        startedAt: Object.prototype.hasOwnProperty.call(input, 'startedAt') ? (input.startedAt ?? null) : (existing?.startedAt ?? null),
+        completedAt: Object.prototype.hasOwnProperty.call(input, 'completedAt') ? (input.completedAt ?? null) : (existing?.completedAt ?? null),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now
+      };
+      const nextRows = existing
+        ? existingRows.map((row) => (row.stageKey === input.stageKey ? next : row))
+        : [...existingRows, next];
+      state.jarvisSessionStages.set(
+        input.sessionId,
+        nextRows.sort((left, right) => (left.orderIndex === right.orderIndex ? left.createdAt.localeCompare(right.createdAt) : left.orderIndex - right.orderIndex))
+      );
+      return toStage(next);
+    },
+
+    async listJarvisSessionStages(input) {
+      const session = state.jarvisSessions.get(input.sessionId);
+      if (!session || session.userId !== input.userId) return [];
+      const rows = (state.jarvisSessionStages.get(input.sessionId) ?? []).slice().sort((left, right) => {
+        if (left.orderIndex === right.orderIndex) return left.createdAt.localeCompare(right.createdAt);
+        return left.orderIndex - right.orderIndex;
+      });
+      return rows.map(toStage);
     },
 
     async createActionProposal(input) {

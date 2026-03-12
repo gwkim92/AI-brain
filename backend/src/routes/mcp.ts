@@ -23,7 +23,7 @@ export async function mcpRoutes(app: FastifyInstance, ctx: RouteContext) {
     const result = await handleMcpStreamRequest(
       { origin: typeof origin === 'string' ? origin : origin[0], payload },
       { allowedOrigins: ctx.env.allowedOrigins },
-      { store: ctx.store, providerRouter: ctx.providerRouter, userId }
+      { store: ctx.store, providerRouter: ctx.providerRouter, userId, notificationService: ctx.notificationService }
     );
 
     if (!result.accepted) {

@@ -19,6 +19,7 @@ import {
 import {
   createWorkspace,
   deleteWorkspace,
+  getJarvisSession,
   listProviderModels,
   listProviders,
   listWorkspaces,
@@ -37,17 +38,62 @@ import type {
   WorkspaceCommandImpactDimension,
   WorkspaceCommandPolicy,
   WorkspaceRecord,
+  JarvisSessionDetail,
+  RuntimeResolvedRoute,
 } from "@/lib/api/types";
 import { useHUD } from "@/components/providers/HUDProvider";
 import { useLocale } from "@/components/providers/LocaleProvider";
 import { publishSkillPrefill } from "@/lib/skills/prefill";
 import { dispatchJarvisDataRefresh } from "@/lib/hud/data-refresh";
+import { describeExecutionOption } from "@/lib/jarvis/execution-option";
+import type { TranslationKey } from "@/lib/locale";
 
 type ProviderSelection = "auto" | "openai" | "gemini" | "anthropic" | "local";
 
 function truncate(value: string, max = 220): string {
   if (value.length <= max) return value;
   return `${value.slice(0, max)}...`;
+}
+
+function createClientSessionId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `workbench_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function formatWorkspaceCommandError(
+  err: unknown,
+  t: (key: TranslationKey, params?: Record<string, string | number>) => string
+): { message: string; notice?: string | null } {
+  if (!(err instanceof ApiRequestError)) {
+    return {
+      message: t("workbench.error.runWorkspaceCommand"),
+      notice: null,
+    };
+  }
+
+  const details =
+    err.details && typeof err.details === "object" ? (err.details as Record<string, unknown>) : null;
+  const workspaceKind = typeof details?.workspace_kind === "string" ? details.workspace_kind : null;
+
+  if (err.status === 403 && err.code === "FORBIDDEN") {
+    if (workspaceKind === "current") {
+      return {
+        message: t("workbench.error.runWorkspaceCommandRoleCurrent"),
+        notice: t("workbench.workspace.notice.tryIsolatedRuntime"),
+      };
+    }
+    return {
+      message: t("workbench.error.runWorkspaceCommandRole"),
+      notice: null,
+    };
+  }
+
+  return {
+    message: `${err.code}: ${err.message}`,
+    notice: null,
+  };
 }
 
 function getImpactTone(level: string) {
@@ -93,6 +139,38 @@ function mergeWorkspaceRows(current: WorkspaceRecord[], nextRow: WorkspaceRecord
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
+function describeCapabilityKey(capability: string) {
+  if (capability === "answer") return "assistant.capability.answer" as const;
+  if (capability === "research") return "assistant.capability.research" as const;
+  if (capability === "brief") return "assistant.capability.brief" as const;
+  if (capability === "debate") return "assistant.capability.debate" as const;
+  if (capability === "plan") return "assistant.capability.plan" as const;
+  if (capability === "approve") return "assistant.capability.approve" as const;
+  if (capability === "execute") return "assistant.capability.execute" as const;
+  if (capability === "notify") return "assistant.capability.notify" as const;
+  return null;
+}
+
+function describeStageStatusKey(status: string) {
+  if (status === "queued") return "assistant.status.queued" as const;
+  if (status === "running") return "assistant.status.running" as const;
+  if (status === "blocked") return "assistant.status.blocked" as const;
+  if (status === "needs_approval") return "assistant.status.needsApproval" as const;
+  if (status === "completed") return "assistant.status.completed" as const;
+  if (status === "failed") return "assistant.status.failed" as const;
+  if (status === "stale") return "assistant.status.stale" as const;
+  if (status === "skipped") return "assistant.status.skipped" as const;
+  return null;
+}
+
+function describeRouteSourceKey(source: RuntimeResolvedRoute["source"]) {
+  if (source === "request_override") return "providerRoute.source.request_override" as const;
+  if (source === "feature_preference") return "providerRoute.source.feature_preference" as const;
+  if (source === "global_default") return "providerRoute.source.global_default" as const;
+  if (source === "auto") return "providerRoute.source.auto" as const;
+  return "providerRoute.source.runtime_result" as const;
+}
+
 export function WorkbenchModule() {
   const { t } = useLocale();
   const { openWidgets, startSession, linkSessionTask, sessions } = useHUD();
@@ -107,6 +185,7 @@ export function WorkbenchModule() {
   const [executionTimeMs, setExecutionTimeMs] = useState<number | undefined>(undefined);
   const [providerModel, setProviderModel] = useState<string>("-");
   const [credentialSummary, setCredentialSummary] = useState<string>("pending");
+  const [resolvedRoute, setResolvedRoute] = useState<RuntimeResolvedRoute | null>(null);
   const [taskId, setTaskId] = useState<string>("-");
   const [runId, setRunId] = useState<string>("-");
   const [error, setError] = useState<string | null>(null);
@@ -123,7 +202,6 @@ export function WorkbenchModule() {
   const [workspaceShell, setWorkspaceShell] = useState("");
   const [workspaceStdIn, setWorkspaceStdIn] = useState("");
   const [workspaceLog, setWorkspaceLog] = useState<string>(() => t("workbench.workspace.noOutput"));
-  const [workspaceCursor, setWorkspaceCursor] = useState(0);
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [workspaceLoading, setWorkspaceLoading] = useState(true);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
@@ -134,10 +212,10 @@ export function WorkbenchModule() {
   const [workspacePolicy, setWorkspacePolicy] = useState<WorkspaceCommandPolicy | null>(null);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [currentSessionKind, setCurrentSessionKind] = useState<"execution" | "runtime" | null>(null);
+  const [jarvisSessionDetail, setJarvisSessionDetail] = useState<JarvisSessionDetail | null>(null);
 
   const syncWorkspaceCursor = useCallback((nextSequence: number) => {
     workspaceCursorRef.current = nextSequence;
-    setWorkspaceCursor(nextSequence);
   }, []);
 
   const formatCredentialSummary = (credential: {
@@ -349,6 +427,77 @@ export function WorkbenchModule() {
     if (status === "error" || workspaceError) return t("workbench.session.state.failed");
     return t("workbench.session.state.completed");
   }, [currentSessionKind, status, t, workspaceBusy, workspaceError, workspacePolicy?.disposition]);
+  const sessionStageRecords = useMemo(
+    () => [...(jarvisSessionDetail?.stages ?? [])].sort((left, right) => left.orderIndex - right.orderIndex),
+    [jarvisSessionDetail?.stages]
+  );
+  const sessionExecutionOption = useMemo(() => {
+    for (const stage of sessionStageRecords) {
+      const refs = (stage.artifactRefsJson ?? undefined) as Record<string, unknown> | undefined;
+      const value = refs?.["execution_option"];
+      if (typeof value === "string" && value.trim().length > 0) {
+        return value;
+      }
+    }
+    return null;
+  }, [sessionStageRecords]);
+  const sessionExecutionOptionDescriptor = useMemo(
+    () => describeExecutionOption(t, sessionExecutionOption),
+    [sessionExecutionOption, t]
+  );
+  const requestedRouteSummary = useMemo(
+    () =>
+      t("providerRoute.requestedInput", {
+        provider: selectedProvider,
+        model: modelOverride.trim() || t("council.defaultModel"),
+        strict: selectedProvider === "auto" ? t("common.off") : strictProvider ? t("common.on") : t("common.off"),
+      }),
+    [modelOverride, selectedProvider, strictProvider, t]
+  );
+  const resolvedRouteSummary = useMemo(() => {
+    if (!resolvedRoute) return null;
+    return t("providerRoute.resolved", {
+      provider: resolvedRoute.provider,
+      model: resolvedRoute.model ?? t("council.defaultModel"),
+      strict: resolvedRoute.strict_provider ? t("common.on") : t("common.off"),
+      fallback: resolvedRoute.used_fallback ? t("common.on") : t("common.off"),
+      source: t(describeRouteSourceKey(resolvedRoute.source)),
+    });
+  }, [resolvedRoute, t]);
+  const pinnedRouteWarning = useMemo(() => {
+    if (!resolvedRoute) return null;
+    if (selectedProvider !== "auto") return null;
+    if (!resolvedRoute.strict_provider || resolvedRoute.provider === "auto") return null;
+    if (resolvedRoute.source !== "feature_preference" && resolvedRoute.source !== "global_default") return null;
+    return t("providerRoute.pinnedByPreference");
+  }, [resolvedRoute, selectedProvider, t]);
+
+  useEffect(() => {
+    if (!currentSessionId) {
+      setJarvisSessionDetail(null);
+      return;
+    }
+    let cancelled = false;
+    let timerId: number | null = null;
+    const load = async () => {
+      try {
+        const detail = await getJarvisSession(currentSessionId);
+        if (!cancelled) {
+          setJarvisSessionDetail(detail);
+          timerId = window.setTimeout(load, 4000);
+        }
+      } catch {
+        if (!cancelled) {
+          timerId = window.setTimeout(load, 4000);
+        }
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+      if (timerId !== null) window.clearTimeout(timerId);
+    };
+  }, [currentSessionId]);
 
   const runExecution = async () => {
     const trimmed = prompt.trim();
@@ -358,18 +507,9 @@ export function WorkbenchModule() {
     setError(null);
     setIdempotentReplay(false);
     setCredentialSummary("pending");
+    setResolvedRoute(null);
 
-    const clientSessionId = startSession(trimmed, {
-      activeWidgets: ["workbench", "tasks"],
-      mountedWidgets: ["workbench", "tasks"],
-      focusedWidget: "workbench",
-      intent: "code",
-      workspacePreset: "studio_code",
-      restoreMode: "full",
-    });
-    setCurrentSessionId(clientSessionId);
-    setCurrentSessionKind("execution");
-    dispatchJarvisDataRefresh({ scope: "sessions", source: "workbench" });
+    const clientSessionId = createClientSessionId();
 
     try {
       const mode = activeTab === "code" ? "code" : "compute";
@@ -389,19 +529,30 @@ export function WorkbenchModule() {
       }
 
       const run = await startExecutionRun(payload);
-      if (run.session?.id) {
-        setCurrentSessionId(run.session.id);
-      }
+      const resolvedSessionId = run.session?.id ?? clientSessionId;
+      startSession(trimmed, {
+        sessionId: resolvedSessionId,
+        activeWidgets: ["workbench", "tasks"],
+        mountedWidgets: ["workbench", "tasks"],
+        focusedWidget: "workbench",
+        intent: "code",
+        workspacePreset: "studio_code",
+        restoreMode: "full",
+      });
+      setCurrentSessionId(resolvedSessionId);
+      setCurrentSessionKind("execution");
+      dispatchJarvisDataRefresh({ scope: "sessions", source: "workbench" });
       setIdempotentReplay(run.idempotent_replay === true);
 
       setRunId(run.id);
       setTaskId(run.task_id ?? "-");
       setProviderModel(formatProviderModel(run.provider, run.model));
       setCredentialSummary(formatCredentialSummary(run.selected_credential));
+      setResolvedRoute(run.resolved_route ?? null);
       setOutput(run.output || t("workbench.executionCreated"));
       setExecutionTimeMs(run.duration_ms > 0 ? run.duration_ms : undefined);
       if (run.task_id) {
-        linkSessionTask(clientSessionId, run.task_id);
+        linkSessionTask(resolvedSessionId, run.task_id);
         dispatchJarvisDataRefresh({ scope: "tasks", source: "workbench" });
       }
       if (run.status === "completed") {
@@ -427,6 +578,7 @@ export function WorkbenchModule() {
                 selected_credential_mode: string | null;
                 credential_priority: string;
               } | null;
+              resolved_route?: RuntimeResolvedRoute | null;
             };
           };
           if (body.data?.output) {
@@ -437,6 +589,9 @@ export function WorkbenchModule() {
           }
           if ("selected_credential" in (body.data ?? {})) {
             setCredentialSummary(formatCredentialSummary(body.data?.selected_credential ?? null));
+          }
+          if ("resolved_route" in (body.data ?? {})) {
+            setResolvedRoute(body.data?.resolved_route ?? null);
           }
           if (body.data?.status === "running" || body.data?.status === "queued") {
             setStatus("running");
@@ -456,6 +611,7 @@ export function WorkbenchModule() {
                 selected_credential_mode: string | null;
                 credential_priority: string;
               } | null;
+              resolved_route?: RuntimeResolvedRoute | null;
             };
           };
           setOutput(body.data?.output ?? run.output);
@@ -467,6 +623,7 @@ export function WorkbenchModule() {
             setTaskId(body.data.task_id);
           }
           setCredentialSummary(formatCredentialSummary(body.data?.selected_credential ?? run.selected_credential));
+          setResolvedRoute(body.data?.resolved_route ?? run.resolved_route ?? null);
           setStatus("success");
         },
         onFailed: (payload) => {
@@ -481,6 +638,7 @@ export function WorkbenchModule() {
                 selected_credential_mode: string | null;
                 credential_priority: string;
               } | null;
+              resolved_route?: RuntimeResolvedRoute | null;
             };
           };
           setOutput(body.data?.output ?? t("workbench.error.executionFailed"));
@@ -488,6 +646,7 @@ export function WorkbenchModule() {
             setProviderModel(formatProviderModel(body.data?.provider, body.data?.model));
           }
           setCredentialSummary(formatCredentialSummary(body.data?.selected_credential ?? null));
+          setResolvedRoute(body.data?.resolved_route ?? run.resolved_route ?? null);
           setStatus("error");
         },
         onClose: () => {
@@ -596,7 +755,15 @@ export function WorkbenchModule() {
 
     try {
       const workspaceId = await ensureWorkspace();
-      const clientSessionId = startSession(trimmed, {
+      const clientSessionId = createClientSessionId();
+      const result = await spawnWorkspaceSession(workspaceId, {
+        command: trimmed,
+        client_session_id: clientSessionId,
+        shell: workspaceShell.trim() || undefined,
+      });
+      const resolvedSessionId = result.session?.id ?? clientSessionId;
+      startSession(trimmed, {
+        sessionId: resolvedSessionId,
         activeWidgets: ["workbench", "tasks"],
         mountedWidgets: ["workbench", "tasks"],
         focusedWidget: "workbench",
@@ -604,17 +771,9 @@ export function WorkbenchModule() {
         workspacePreset: "studio_code",
         restoreMode: "full",
       });
-      setCurrentSessionId(clientSessionId);
+      setCurrentSessionId(resolvedSessionId);
       setCurrentSessionKind("runtime");
       dispatchJarvisDataRefresh({ scope: "sessions", source: "workbench" });
-      const result = await spawnWorkspaceSession(workspaceId, {
-        command: trimmed,
-        client_session_id: clientSessionId,
-        shell: workspaceShell.trim() || undefined,
-      });
-      if (result.session?.id) {
-        setCurrentSessionId(result.session.id);
-      }
       setWorkspacePolicy(result.policy);
       setWorkspaces((current) => mergeWorkspaceRows(current, result.workspace));
       setSelectedWorkspaceId(result.workspace.id);
@@ -643,7 +802,9 @@ export function WorkbenchModule() {
           : t("workbench.workspace.notice.commandStartedElevated", { risk: result.policy.riskLevel })
       );
     } catch (err) {
-      setWorkspaceError(err instanceof ApiRequestError ? `${err.code}: ${err.message}` : t("workbench.error.runWorkspaceCommand"));
+      const formatted = formatWorkspaceCommandError(err, t);
+      setWorkspaceError(formatted.message);
+      setWorkspaceNotice(formatted.notice ?? null);
     } finally {
       setWorkspaceBusy(false);
     }
@@ -776,6 +937,15 @@ export function WorkbenchModule() {
                 {runId !== "-" ? ` · ${t("workbench.runId")} ${runId.slice(0, 8)}` : ""}
               </p>
               <p className="mt-2 text-[11px] text-white/55">{t("workbench.session.mirrored")}</p>
+              {sessionExecutionOptionDescriptor ? (
+                <div className={`mt-3 rounded border p-2 ${sessionExecutionOptionDescriptor.toneClassName}`}>
+                  <p className="text-[10px] font-mono tracking-widest text-white/60">
+                    {t("assistant.executionOption")}
+                  </p>
+                  <p className="mt-1 text-sm">{sessionExecutionOptionDescriptor.label}</p>
+                  <p className="mt-1 text-[11px] text-white/75">{sessionExecutionOptionDescriptor.hint}</p>
+                </div>
+              ) : null}
             </div>
             <div className="flex flex-wrap gap-2">
               <button
@@ -796,6 +966,43 @@ export function WorkbenchModule() {
               )}
             </div>
           </div>
+          {sessionStageRecords.length > 0 && (
+            <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+              <div className="rounded border border-white/10 bg-black/20 p-3">
+                <p className="text-[10px] font-mono tracking-widest text-white/45">{t("assistant.capabilities")}</p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {(jarvisSessionDetail?.requested_capabilities ?? []).map((capability) => {
+                    const key = describeCapabilityKey(capability);
+                    return (
+                      <span
+                        key={`workbench-capability-${capability}`}
+                        className="rounded border border-cyan-400/25 bg-cyan-500/10 px-2 py-1 text-[10px] font-mono uppercase tracking-widest text-cyan-100"
+                      >
+                        {key ? t(key) : capability}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="rounded border border-white/10 bg-black/20 p-3">
+                <p className="text-[10px] font-mono tracking-widest text-white/45">{t("assistant.stages")}</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {sessionStageRecords.map((stage) => {
+                    const statusKey = describeStageStatusKey(stage.status);
+                    const capabilityKey = describeCapabilityKey(stage.capability);
+                    return (
+                      <span
+                        key={stage.id}
+                        className="rounded border border-white/10 bg-black/20 px-2 py-1 text-[10px] font-mono text-white/75"
+                      >
+                        {capabilityKey ? t(capabilityKey) : stage.title} · {statusKey ? t(statusKey) : stage.status}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -865,13 +1072,9 @@ export function WorkbenchModule() {
           <span className="text-xs font-mono text-white/40">{t("workbench.task")}: {taskId === "-" ? "-" : taskId.slice(0, 8)}</span>
           <span className="text-xs font-mono text-white/40">{t("workbench.runId")}: {runId === "-" ? "-" : runId.slice(0, 8)}</span>
         </div>
-        <p className="mt-2 text-xs font-mono text-white/50">
-          {t("workbench.requestedRoute", {
-            provider: selectedProvider,
-            model: modelOverride.trim() || t("council.defaultModel"),
-            strict: selectedProvider === "auto" ? t("common.off") : strictProvider ? t("common.on") : t("common.off"),
-          })}
-        </p>
+        <p className="mt-2 text-xs font-mono text-white/50">{requestedRouteSummary}</p>
+        {resolvedRouteSummary ? <p className="mt-1 text-xs font-mono text-cyan-300/80">{resolvedRouteSummary}</p> : null}
+        {pinnedRouteWarning ? <p className="mt-2 text-xs font-mono text-amber-300">{pinnedRouteWarning}</p> : null}
         {error && <p className="mt-2 text-xs font-mono text-red-400">{error}</p>}
         {idempotentReplay && <p className="mt-2 text-xs font-mono text-amber-300">{t("council.idempotentReplay")}</p>}
       </div>

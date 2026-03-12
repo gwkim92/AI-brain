@@ -1,7 +1,15 @@
 import { embedAndStore } from '../memory/embed';
 import { withAiInvocationTrace } from '../observability/ai-trace';
 import { resolveModelSelection } from '../providers/model-selection';
+import type { ResolvedModelSelection } from '../providers/model-selection';
+import { generateWithPreferenceRecovery } from '../providers/preference-recovery';
 import { extractProviderAttempts, maskErrorForApi } from '../providers/router';
+import {
+  resolveJarvisMemoryContext,
+  resolveJarvisMemoryPreferences,
+  resolveMemoryBackedRouting
+} from '../jarvis/memory-context';
+import { syncJarvisSessionFromStages } from '../jarvis/stages';
 import type { ProviderAttempt, ProviderCredentialsByProvider, ProviderName } from '../providers/types';
 import type { RouteContext } from '../routes/types';
 import { COUNCIL_ROLES, createSpanId, truncateText } from '../routes/types';
@@ -41,6 +49,7 @@ export type StartCouncilRunInput = {
 export type StartCouncilRunResult = {
   run: CouncilRunRecord;
   idempotentReplay: boolean;
+  resolvedModelSelection: ResolvedModelSelection;
 };
 
 function buildRoundPrompt(question: string, roundSummaries: string[]): string {
@@ -124,7 +133,39 @@ function resolveConsensusStatus(
   return 'escalated_to_human';
 }
 
-async function executeCouncilRun(ctx: RouteContext, input: StartCouncilRunInput, run: CouncilRunRecord, taskId: string | null) {
+async function resolveCouncilModelSelection(ctx: RouteContext, input: StartCouncilRunInput): Promise<ResolvedModelSelection> {
+  const { store } = ctx;
+  const memoryContext = await resolveJarvisMemoryContext(store, {
+    userId: input.userId,
+    prompt: input.question
+  });
+  const memoryPreferences = resolveJarvisMemoryPreferences(memoryContext);
+  const memoryRouting = resolveMemoryBackedRouting({
+    provider: input.provider,
+    strictProvider: input.strictProvider,
+    model: input.model,
+    memoryPreferences
+  });
+
+  return resolveModelSelection({
+    store,
+    userId: input.userId,
+    featureKey: 'council_run',
+    override: {
+      provider: memoryRouting.provider,
+      strictProvider: memoryRouting.strictProvider,
+      model: memoryRouting.model
+    }
+  });
+}
+
+async function executeCouncilRun(
+  ctx: RouteContext,
+  input: StartCouncilRunInput,
+  run: CouncilRunRecord,
+  taskId: string | null,
+  modelSelection: ResolvedModelSelection
+) {
   const { store, providerRouter, env } = ctx;
   const maxRounds = input.maxRounds ?? 2;
   const consensusThreshold = maxRounds > 1 ? 2 : 1;
@@ -133,17 +174,6 @@ async function executeCouncilRun(ctx: RouteContext, input: StartCouncilRunInput,
   let routed: Awaited<ReturnType<typeof providerRouter.generate>> | null = null;
 
   try {
-    const modelSelection = await resolveModelSelection({
-      store,
-      userId: input.userId,
-      featureKey: 'council_run',
-      override: {
-        provider: input.provider,
-        strictProvider: input.strictProvider,
-        model: input.model
-      }
-    });
-
     for (let round = 1; round <= maxRounds; round += 1) {
       const roundPrompt = buildRoundPrompt(input.question, roundSummaries);
       const roundSystemPrompt = input.systemPrompt
@@ -166,19 +196,23 @@ async function executeCouncilRun(ctx: RouteContext, input: StartCouncilRunInput,
           model_selection_source: modelSelection.source
         },
         run: () =>
-          providerRouter.generate({
-            prompt: roundPrompt,
-            systemPrompt: roundSystemPrompt,
-            provider: modelSelection.provider,
-            credentialsByProvider: input.credentialsByProvider,
-            traceId: input.traceId,
-            onSpanEvent: input.onSpanEvent,
-            excludeProviders: input.excludeProviders,
-            strictProvider: modelSelection.strictProvider,
-            taskType: 'council',
-            model: modelSelection.model ?? undefined,
-            temperature: input.temperature,
-            maxOutputTokens: input.maxOutputTokens
+          generateWithPreferenceRecovery({
+            providerRouter,
+            modelSelection,
+            request: {
+              prompt: roundPrompt,
+              systemPrompt: roundSystemPrompt,
+              provider: modelSelection.provider,
+              credentialsByProvider: input.credentialsByProvider,
+              traceId: input.traceId,
+              onSpanEvent: input.onSpanEvent,
+              excludeProviders: input.excludeProviders,
+              strictProvider: modelSelection.strictProvider,
+              taskType: 'council',
+              model: modelSelection.model ?? undefined,
+              temperature: input.temperature,
+              maxOutputTokens: input.maxOutputTokens
+            }
           })
       });
 
@@ -225,12 +259,79 @@ async function executeCouncilRun(ctx: RouteContext, input: StartCouncilRunInput,
     });
 
     if (input.linkedSessionId) {
+      const briefing = await store.createBriefing({
+        userId: input.userId,
+        sessionId: input.linkedSessionId,
+        type: 'on_demand',
+        status: 'completed',
+        title: truncateText(input.question, 140),
+        query: input.question,
+        summary: truncateText(summaryWithRounds, 280),
+        answerMarkdown: summaryWithRounds,
+        sourceCount: 0,
+        qualityJson: {
+          source: 'council',
+          consensus_status: consensusStatus,
+          rounds_executed: roundSummaries.length
+        }
+      });
+      const dossier = await store.createDossier({
+        userId: input.userId,
+        sessionId: input.linkedSessionId,
+        briefingId: briefing.id,
+        title: truncateText(input.question, 140),
+        query: input.question,
+        status: 'ready',
+        summary: truncateText(summaryWithRounds, 280),
+        answerMarkdown: summaryWithRounds,
+        qualityJson: {
+          source: 'council',
+          consensus_status: consensusStatus
+        },
+        conflictsJson: {
+          consensus_status: consensusStatus
+        }
+      });
+      await store.upsertJarvisSessionStage({
+        userId: input.userId,
+        sessionId: input.linkedSessionId,
+        stageKey: 'debate',
+        capability: 'debate',
+        title: 'Council debate',
+        status: 'completed',
+        summary: truncateText(summaryWithRounds, 220),
+        artifactRefsJson: {
+          council_run_id: run.id,
+          task_id: taskId
+        },
+        completedAt: new Date().toISOString()
+      });
+      await store.upsertJarvisSessionStage({
+        userId: input.userId,
+        sessionId: input.linkedSessionId,
+        stageKey: 'brief',
+        capability: 'brief',
+        title: 'Brief synthesis',
+        status: 'completed',
+        summary: truncateText(summaryWithRounds, 220),
+        artifactRefsJson: {
+          briefing_id: briefing.id,
+          dossier_id: dossier.id
+        },
+        completedAt: new Date().toISOString()
+      });
+      const synced = await syncJarvisSessionFromStages(store, {
+        userId: input.userId,
+        sessionId: input.linkedSessionId
+      });
       await store.updateJarvisSession({
         sessionId: input.linkedSessionId,
         userId: input.userId,
-        status: 'completed',
+        status: synced?.snapshot.status ?? 'completed',
         taskId,
-        councilRunId: run.id
+        councilRunId: run.id,
+        briefingId: briefing.id,
+        dossierId: dossier.id
       });
     }
 
@@ -282,10 +383,38 @@ async function executeCouncilRun(ctx: RouteContext, input: StartCouncilRunInput,
     });
 
     if (input.linkedSessionId) {
+      await store.upsertJarvisSessionStage({
+        userId: input.userId,
+        sessionId: input.linkedSessionId,
+        stageKey: 'debate',
+        capability: 'debate',
+        title: 'Council debate',
+        status: 'failed',
+        summary: 'Council synthesis failed.',
+        errorMessage: reason,
+        artifactRefsJson: {
+          council_run_id: run.id,
+          task_id: taskId
+        },
+        completedAt: new Date().toISOString()
+      });
+      await store.upsertJarvisSessionStage({
+        userId: input.userId,
+        sessionId: input.linkedSessionId,
+        stageKey: 'brief',
+        capability: 'brief',
+        title: 'Brief synthesis',
+        status: 'blocked',
+        summary: 'Brief is blocked until the debate succeeds'
+      });
+      const synced = await syncJarvisSessionFromStages(store, {
+        userId: input.userId,
+        sessionId: input.linkedSessionId
+      });
       await store.updateJarvisSession({
         sessionId: input.linkedSessionId,
         userId: input.userId,
-        status: 'failed',
+        status: synced?.snapshot.status ?? 'failed',
         taskId,
         councilRunId: run.id
       });
@@ -311,6 +440,7 @@ async function executeCouncilRun(ctx: RouteContext, input: StartCouncilRunInput,
 
 export async function startCouncilRun(ctx: RouteContext, input: StartCouncilRunInput): Promise<StartCouncilRunResult> {
   const { store } = ctx;
+  const resolvedModelSelection = await resolveCouncilModelSelection(ctx, input);
   const existing = await store.getCouncilRunByIdempotency({
     userId: input.userId,
     idempotencyKey: input.idempotencyKey
@@ -347,10 +477,36 @@ export async function startCouncilRun(ctx: RouteContext, input: StartCouncilRunI
           councilRunId: existing.id
         });
       }
+      await store.upsertJarvisSessionStage({
+        userId: input.userId,
+        sessionId: input.linkedSessionId,
+        stageKey: 'debate',
+        capability: 'debate',
+        title: 'Council debate',
+        status: sessionStatus === 'completed' ? 'completed' : sessionStatus === 'failed' ? 'failed' : 'running',
+        orderIndex: 0,
+        summary: sessionStatus === 'completed' ? 'Reused completed council debate' : 'Reused council run',
+        artifactRefsJson: {
+          council_run_id: existing.id,
+          task_id: existing.task_id
+        },
+        completedAt: sessionStatus === 'completed' || sessionStatus === 'failed' ? new Date().toISOString() : null
+      });
+      await store.upsertJarvisSessionStage({
+        userId: input.userId,
+        sessionId: input.linkedSessionId,
+        stageKey: 'brief',
+        capability: 'brief',
+        title: 'Brief synthesis',
+        status: sessionStatus === 'completed' ? 'completed' : 'queued',
+        orderIndex: 1,
+        summary: sessionStatus === 'completed' ? 'Brief ready from prior council run' : 'Brief will follow after debate'
+      });
     }
     return {
       run: existing,
-      idempotentReplay: true
+      idempotentReplay: true,
+      resolvedModelSelection
     };
   }
 
@@ -434,13 +590,39 @@ export async function startCouncilRun(ctx: RouteContext, input: StartCouncilRunI
         councilRunId: run.id
       });
     }
+    await store.upsertJarvisSessionStage({
+      userId: input.userId,
+      sessionId: input.linkedSessionId,
+      stageKey: 'debate',
+      capability: 'debate',
+      title: 'Council debate',
+      status: 'running',
+      orderIndex: 0,
+      summary: 'Council debate started',
+      artifactRefsJson: {
+        council_run_id: run.id,
+        task_id: taskId
+      },
+      startedAt: new Date().toISOString()
+    });
+    await store.upsertJarvisSessionStage({
+      userId: input.userId,
+      sessionId: input.linkedSessionId,
+      stageKey: 'brief',
+      capability: 'brief',
+      title: 'Brief synthesis',
+      status: 'queued',
+      orderIndex: 1,
+      summary: 'Brief will be compiled after the debate'
+    });
   }
 
-  void executeCouncilRun(ctx, input, run, taskId);
+  void executeCouncilRun(ctx, input, run, taskId, resolvedModelSelection);
 
   const latest = await store.getCouncilRunById(run.id);
   return {
     run: latest ?? run,
-    idempotentReplay: false
+    idempotentReplay: false,
+    resolvedModelSelection
   };
 }

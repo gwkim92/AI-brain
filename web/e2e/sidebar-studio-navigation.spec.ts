@@ -650,6 +650,92 @@ test("research preset keeps watcher create form clickable beside empty dossier s
     createdAt: string;
     updatedAt: string;
   }> = [];
+  const staleApprovalSession = {
+    id: "jarvis-session-stale-1",
+    userId: "00000000-0000-4000-8000-000000000000",
+    title: "Stale approval from older mission",
+    prompt: "older mission approval",
+    source: "mission",
+    intent: "code",
+    status: "needs_approval",
+    workspacePreset: "control",
+    primaryTarget: "mission",
+    taskId: null,
+    missionId: "mission-stale-1",
+    assistantContextId: null,
+    councilRunId: null,
+    executionRunId: null,
+    briefingId: null,
+    dossierId: null,
+    lastEventAt: "2026-03-05T23:00:00.000Z",
+    createdAt: "2026-03-05T23:00:00.000Z",
+    updatedAt: "2026-03-05T23:00:00.000Z",
+  };
+  const staleApprovalAction = {
+    id: "proposal-stale-1",
+    userId: staleApprovalSession.userId,
+    sessionId: staleApprovalSession.id,
+    kind: "workspace_prepare",
+    title: "Approve stale write",
+    summary: "Stale write approval",
+    status: "pending",
+    payload: {
+      command: "touch stale.txt",
+      cwd: "/workspace",
+      risk_level: "write",
+      policy_severity: "high",
+      impact_profile: "file_mutation",
+      workspace_kind: "current",
+      policy_disposition: "approval_required",
+      policy_reason: "stale approval item",
+    },
+    decidedAt: null,
+    decidedBy: null,
+    createdAt: "2026-03-05T23:00:00.000Z",
+    updatedAt: "2026-03-05T23:00:00.000Z",
+  };
+  const followUpSession = {
+    id: "jarvis-session-e2e-1",
+    userId: "00000000-0000-4000-8000-000000000000",
+    title: "Policy change follow-up for watcher",
+    prompt: "Review the new policy change from the watcher run",
+    source: "watcher_follow_up",
+    intent: "research",
+    status: "needs_approval",
+    workspacePreset: "control",
+    primaryTarget: "briefing",
+    taskId: null,
+    missionId: null,
+    assistantContextId: null,
+    councilRunId: null,
+    executionRunId: null,
+    briefingId: "briefing-e2e-1",
+    dossierId: "dossier-e2e-1",
+    lastEventAt: "2026-03-06T00:05:00.000Z",
+    createdAt: "2026-03-06T00:05:00.000Z",
+    updatedAt: "2026-03-06T00:05:00.000Z",
+  };
+  const followUpAction = {
+    id: "proposal-e2e-1",
+    userId: followUpSession.userId,
+    sessionId: followUpSession.id,
+    kind: "custom",
+    title: "Review policy change",
+    summary: "A policy follow-up was created for review.",
+    status: "pending",
+    payload: {
+      change_class: "policy_change",
+      severity: "warning",
+      research_profile: "policy_regulation",
+      change_score: 62,
+      change_reasons: ["official_source_signal", "effective_date_signal"],
+      execution_option: "read_only_review",
+    },
+    decidedAt: null,
+    decidedBy: null,
+    createdAt: "2026-03-06T00:05:00.000Z",
+    updatedAt: "2026-03-06T00:05:00.000Z",
+  };
 
   await page.route(`${API_BASE}/api/v1/watchers**`, async (route) => {
     const url = new URL(route.request().url());
@@ -712,6 +798,68 @@ test("research preset keeps watcher create form clickable beside empty dossier s
             dossier: {
               id: "dossier-e2e-1",
             },
+            follow_up: {
+              session: {
+                id: "jarvis-session-e2e-1",
+              },
+              actionProposal: {
+                id: "proposal-e2e-1",
+                title: "Review policy change",
+              },
+              changeClass: "policy_change",
+              severity: "warning",
+              summary: "A policy follow-up was created for review.",
+              score: 62,
+              reasons: ["official_source_signal", "effective_date_signal"],
+            },
+          })
+        ),
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.route(`${API_BASE}/api/v1/jarvis/sessions**`, async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    if (path === "/api/v1/jarvis/sessions") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(envelope({ sessions: [staleApprovalSession, followUpSession] })),
+      });
+      return;
+    }
+    if (path === `/api/v1/jarvis/sessions/${followUpSession.id}`) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          envelope({
+            session: followUpSession,
+            events: [],
+            actions: [followUpAction],
+            stages: [],
+            briefing: null,
+            dossier: null,
+          })
+        ),
+      });
+      return;
+    }
+    if (path === `/api/v1/jarvis/sessions/${staleApprovalSession.id}`) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          envelope({
+            session: staleApprovalSession,
+            events: [],
+            actions: [staleApprovalAction],
+            stages: [],
+            briefing: null,
+            dossier: null,
           })
         ),
       });
@@ -748,6 +896,18 @@ test("research preset keeps watcher create form clickable beside empty dossier s
 
   await expect(page.getByText("Research lane watcher")).toBeVisible();
   await expect(page.getByText("External Topic · world major news and war updates")).toBeVisible();
+  await expect(page.getByText("Latest run result")).toBeVisible();
+  await expect(page.getByText("A follow-up review is ready.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open Dossier" })).toBeVisible();
+  const openActionCenterLink = page.getByRole("link", { name: "Open Action Center" });
+  await expect(openActionCenterLink).toBeVisible();
+  await openActionCenterLink.click();
+
+  const actionCenter = page.getByTestId("glass-widget-action_center");
+  await expect(actionCenter).toBeVisible();
+  await expect(actionCenter.getByText("Policy change follow-up for watcher")).toBeVisible();
+  await expect(actionCenter.getByText("Review policy change")).toBeVisible();
+  await expect(actionCenter.getByText("A policy follow-up was created for review.")).toBeVisible();
 });
 
 test("widget close remains closed and refresh does not reopen preset widgets", async ({ page, context }) => {
@@ -922,8 +1082,14 @@ test("approving an action refreshes inbox pending actions", async ({ page, conte
   await expect(page.getByText("1 proposal(s) waiting.")).toBeVisible();
 
   await page.getByTestId("sidebar-action-center").click();
-  await expect(page.getByTestId("glass-widget-action_center")).toBeVisible();
-  await page.getByRole("button", { name: "APPROVE", exact: true }).click();
+  const actionCenter = page.getByTestId("glass-widget-action_center");
+  await expect(actionCenter).toBeVisible();
+  const sessionButton = actionCenter.getByRole("button", { name: /Approve process launch in Inbox Sync Runtime/i });
+  await expect(sessionButton).toBeVisible();
+  await sessionButton.click();
+  const approveButton = actionCenter.getByRole("button", { name: "APPROVE", exact: true });
+  await expect(approveButton).toBeVisible();
+  await approveButton.click();
 
   await expect(page.getByText("0 proposal(s) waiting.")).toBeVisible();
 });
@@ -1128,6 +1294,109 @@ test("approval-required workspace commands hide stale transcript until approval"
   await expect(workspaceTranscript).not.toContainText("PREVIOUS-OUTPUT");
 });
 
+test("member current-runtime write commands show policy guidance without creating a fake session", async ({ page, context }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("jarvis.auth.role", "member");
+    window.localStorage.setItem("jarvis.auth.token", "e2e-token");
+    window.localStorage.setItem("jarvis.app.locale", "en");
+  });
+
+  await context.addCookies([
+    {
+      name: "jarvis_auth_token",
+      value: "e2e-token",
+      domain: "127.0.0.1",
+      path: "/",
+      httpOnly: false,
+      secure: false,
+      sameSite: "Lax",
+    },
+  ]);
+
+  await installAppApiMocks(page);
+
+  const workspace = {
+    id: "workspace-role-e2e",
+    userId: "00000000-0000-4000-8000-000000000000",
+    name: "Member Current Runtime",
+    cwd: "/workspace",
+    kind: "current",
+    baseRef: null,
+    sourceWorkspaceId: null,
+    containerName: null,
+    containerImage: null,
+    containerSource: null,
+    containerImageManaged: false,
+    containerBuildContext: null,
+    containerDockerfile: null,
+    containerFeatures: [],
+    containerAppliedFeatures: [],
+    containerWorkdir: null,
+    containerConfigPath: null,
+    containerRunArgs: [],
+    containerWarnings: [],
+    status: "stopped",
+    approvalRequired: true,
+    createdAt: "2026-03-06T00:00:00.000Z",
+    updatedAt: "2026-03-06T00:00:00.000Z",
+    sessionId: null,
+    activeCommand: null,
+    exitCode: 0,
+    lastError: null,
+  };
+
+  await page.route(`${API_BASE}/api/v1/workspaces`, async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(envelope({ workspaces: [workspace] })),
+    });
+  });
+
+  await page.route(`${API_BASE}/api/v1/workspaces/${workspace.id}/pty/read**`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(envelope({ workspace, chunks: [], nextSequence: 0 })),
+    });
+  });
+
+  await page.route(`${API_BASE}/api/v1/workspaces/${workspace.id}/pty/spawn`, async (route) => {
+    await route.fulfill({
+      status: 403,
+      contentType: "application/json",
+      body: JSON.stringify({
+        request_id: "req-e2e",
+        error: {
+          code: "FORBIDDEN",
+          message: "workspace command requires operator or admin role: current host runtime writes require elevated role review",
+          details: {
+            workspace_id: workspace.id,
+            workspace_kind: "current",
+            risk_level: "write",
+            policy_reason: "current host runtime writes require elevated role review",
+            required_roles: ["operator", "admin"],
+          },
+        },
+      }),
+    });
+  });
+
+  await page.goto("/?widget=workbench");
+  await expect(page.getByTestId("glass-widget-workbench")).toBeVisible();
+
+  await page.getByTestId("workbench-workspace-command").fill("echo hi > /tmp/jarvis-e2e");
+  await page.getByTestId("workbench-run-command").click();
+
+  await expect(page.getByText("Current repository write or runtime commands require operator/admin access. Use an isolated worktree or devcontainer instead.")).toBeVisible();
+  await expect(page.getByText("Try the isolated Git worktree or Docker devcontainer mode for member-safe write commands.")).toBeVisible();
+  await expect(page.getByText("New Session")).toHaveCount(0);
+});
+
 test("mission dock supports focus switch and recommendation controls", async ({ page, context }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem("jarvis.auth.role", "admin");
@@ -1177,4 +1446,82 @@ test("mission dock supports focus switch and recommendation controls", async ({ 
 
   await dock.getByTestId("dock-recommended-widget").click();
   await expect(page.getByTestId("glass-widget-workbench")).toBeVisible();
+});
+
+test("right panel prefers server jarvis sessions over browser-local hud sessions", async ({ page, context }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("jarvis.auth.role", "admin");
+    window.localStorage.setItem("jarvis.app.locale", "en");
+    window.localStorage.setItem(
+      "hud-sessions",
+      JSON.stringify([
+        {
+          id: "local-session-only",
+          prompt: "Local only HUD session",
+          createdAt: "2026-03-07T00:00:00.000Z",
+          activeWidgets: ["assistant"],
+          mountedWidgets: ["assistant", "tasks"],
+          focusedWidget: "assistant",
+          workspacePreset: null,
+          restoreMode: "full",
+          lastWorkspacePreset: null,
+          status: "active",
+        },
+      ]),
+    );
+  });
+
+  await context.addCookies([
+    {
+      name: "jarvis_auth_token",
+      value: "e2e-token",
+      domain: "127.0.0.1",
+      path: "/",
+      httpOnly: false,
+      secure: false,
+      sameSite: "Lax",
+    },
+  ]);
+
+  await installAppApiMocks(page);
+  await page.route(`${API_BASE}/api/v1/jarvis/sessions**`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(
+        envelope({
+          sessions: [
+            {
+              id: "server-session-1",
+              userId: "00000000-0000-4000-8000-000000000000",
+              title: "Server-backed Jarvis Session",
+              prompt: "Server-backed Jarvis Session",
+              source: "jarvis_request",
+              intent: "general",
+              status: "running",
+              workspacePreset: "jarvis",
+              primaryTarget: "assistant",
+              taskId: null,
+              missionId: null,
+              assistantContextId: null,
+              councilRunId: null,
+              executionRunId: null,
+              briefingId: null,
+              dossierId: null,
+              createdAt: "2026-03-07T00:00:00.000Z",
+              updatedAt: "2026-03-07T00:01:00.000Z",
+              lastEventAt: "2026-03-07T00:01:00.000Z",
+            },
+          ],
+        }),
+      ),
+    });
+  });
+
+  await page.goto("/");
+
+  const sessionCards = page.locator('[data-testid^="session-card-"]');
+  await expect(sessionCards).toHaveCount(1);
+  await expect(sessionCards.first()).toContainText("Server-backed Jarvis Session");
+  await expect(page.getByText("Local only HUD session")).toHaveCount(0);
 });

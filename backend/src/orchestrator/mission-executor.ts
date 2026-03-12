@@ -5,7 +5,8 @@ import type { ProviderRouter } from '../providers/router';
 import type { ProviderCredentialsByProvider, RoutingTaskType } from '../providers/types';
 import { runContextPipeline } from '../context/pipeline';
 import { embedAndStore } from '../memory/embed';
-import { resolveModelSelection } from '../providers/model-selection';
+import { resolveModelSelection, type ResolvedModelSelection } from '../providers/model-selection';
+import { generateWithPreferenceRecovery } from '../providers/preference-recovery';
 import { withAiInvocationTrace } from '../observability/ai-trace';
 import type { ModelSelectionOverrideInput } from '../providers/model-selection';
 
@@ -82,6 +83,7 @@ async function executeStep(
   missionId: string,
   userId: string,
   modelSelectionOverride?: ModelSelectionOverrideInput,
+  resolvedModelSelection?: ResolvedModelSelection,
   credentialsByProvider?: ProviderCredentialsByProvider
 ): Promise<unknown> {
   const contextSummary = Object.entries(dependencyResults)
@@ -94,7 +96,7 @@ async function executeStep(
 
   const pattern = resolveStepPattern(step);
   const taskType = resolveTaskType(step);
-  const modelSelection = await resolveModelSelection({
+  const modelSelection = resolvedModelSelection ?? await resolveModelSelection({
     store,
     userId,
     featureKey: 'mission_execute_step',
@@ -119,14 +121,18 @@ async function executeStep(
         model_selection_source: modelSelection.source
       },
       run: () =>
-        providerRouter.generate({
-          prompt,
-          systemPrompt,
-          provider: modelSelection.provider,
-          strictProvider: modelSelection.strictProvider,
-          model: modelSelection.model ?? undefined,
-          credentialsByProvider,
-          taskType: resolvedTaskType
+        generateWithPreferenceRecovery({
+          providerRouter,
+          modelSelection,
+          request: {
+            prompt,
+            systemPrompt,
+            provider: modelSelection.provider,
+            strictProvider: modelSelection.strictProvider,
+            model: modelSelection.model ?? undefined,
+            credentialsByProvider,
+            taskType: resolvedTaskType
+          }
         })
     });
 
@@ -180,6 +186,7 @@ export async function executeMission(
   callbacks?: MissionExecutionCallbacks,
   options?: {
     modelSelectionOverride?: ModelSelectionOverrideInput;
+    resolvedModelSelection?: ResolvedModelSelection;
   },
   credentialsByProvider?: ProviderCredentialsByProvider
 ): Promise<{ success: boolean; results: Record<string, unknown>; completedOrder: string[] }> {
@@ -214,6 +221,7 @@ export async function executeMission(
           mission.id,
           userId,
           options?.modelSelectionOverride,
+          options?.resolvedModelSelection,
           credentialsByProvider
         );
         await updateStepStatus(store, mission, userId, step.id, 'done');

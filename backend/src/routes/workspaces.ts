@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { sendError, sendSuccess } from '../lib/http';
 import { classifyWorkspaceCommand, getWorkspaceRuntimeManager } from '../workspaces/runtime-manager';
 import type { WorkspaceCommandImpactDimension, WorkspaceCommandPolicy } from '../workspaces/runtime-manager';
+import { syncJarvisSessionFromStages } from '../jarvis/stages';
 
 import type { RouteContext } from './types';
 import { truncateText } from './types';
@@ -94,6 +95,10 @@ function mapPolicySeverityToNotificationSeverity(severity: WorkspaceCommandPolic
   return 'info';
 }
 
+function resolveWorkspaceExecutionOption(policy: WorkspaceCommandPolicy): 'safe_auto_run' | 'approval_required_write' {
+  return policy.disposition === 'auto_run' ? 'safe_auto_run' : 'approval_required_write';
+}
+
 export async function workspaceRoutes(app: FastifyInstance, ctx: RouteContext) {
   const manager = getWorkspaceRuntimeManager();
 
@@ -102,6 +107,22 @@ export async function workspaceRoutes(app: FastifyInstance, ctx: RouteContext) {
     if (!sessionId) return;
     const userId = event.workspace.userId;
     if (event.type === 'error') {
+      await ctx.store.upsertJarvisSessionStage({
+        userId,
+        sessionId,
+        stageKey: 'execute',
+        capability: 'execute',
+        title: 'Execution',
+        status: 'failed',
+        summary: 'Workspace command failed',
+        errorMessage: event.error,
+        completedAt: new Date().toISOString(),
+        artifactRefsJson: {
+          workspace_id: event.workspace.id,
+          action_proposal_id: event.linkedActionProposalId
+        }
+      });
+      await syncJarvisSessionFromStages(ctx.store, { userId, sessionId });
       await ctx.store.updateJarvisSession({ sessionId, userId, status: 'failed' });
       await ctx.store.appendJarvisSessionEvent({
         userId,
@@ -124,6 +145,27 @@ export async function workspaceRoutes(app: FastifyInstance, ctx: RouteContext) {
         : event.reason === 'terminated'
           ? 'blocked'
           : 'failed';
+    await ctx.store.upsertJarvisSessionStage({
+      userId,
+      sessionId,
+      stageKey: 'execute',
+      capability: 'execute',
+      title: 'Execution',
+      status: nextStatus === 'completed' ? 'completed' : nextStatus === 'failed' ? 'failed' : 'blocked',
+      summary:
+        event.reason === 'completed'
+          ? 'Workspace command completed'
+          : event.reason === 'terminated'
+            ? 'Workspace command terminated'
+            : 'Workspace command failed',
+      artifactRefsJson: {
+        workspace_id: event.workspace.id,
+        action_proposal_id: event.linkedActionProposalId,
+        command: event.workspace.activeCommand
+      },
+      completedAt: new Date().toISOString()
+    });
+    await syncJarvisSessionFromStages(ctx.store, { userId, sessionId });
     await ctx.store.updateJarvisSession({ sessionId, userId, status: nextStatus });
     await ctx.store.appendJarvisSessionEvent({
       userId,
@@ -228,6 +270,7 @@ export async function workspaceRoutes(app: FastifyInstance, ctx: RouteContext) {
     }
     const policy = classifyWorkspaceCommand(command, workspace.kind);
     const lowRisk = policy.riskLevel === 'read_only';
+    const executionOption = resolveWorkspaceExecutionOption(policy);
     if (policy.disposition !== 'auto_run') {
       const role = ctx.resolveRequestRole(request);
       if (policy.disposition === 'role_required' && !ctx.env.highRiskAllowedRoles.includes(role)) {
@@ -290,6 +333,7 @@ export async function workspaceRoutes(app: FastifyInstance, ctx: RouteContext) {
             policy_severity: policy.severity,
             policy_reason: policy.reason,
             policy_disposition: policy.disposition,
+            execution_option: executionOption,
             impact: policy.impact
           }
         });
@@ -309,9 +353,40 @@ export async function workspaceRoutes(app: FastifyInstance, ctx: RouteContext) {
             policy_severity: policy.severity,
             policy_reason: policy.reason,
             policy_disposition: policy.disposition,
+            execution_option: executionOption,
             impact: policy.impact
           }
         });
+        await ctx.store.upsertJarvisSessionStage({
+          userId,
+          sessionId: session.id,
+          stageKey: 'approve',
+          capability: 'approve',
+          title: 'Approval gate',
+          status: 'needs_approval',
+          orderIndex: 0,
+          summary: proposal.title,
+          artifactRefsJson: {
+            action_proposal_id: proposal.id,
+            workspace_id: workspace.id,
+            execution_option: executionOption
+          }
+        });
+        await ctx.store.upsertJarvisSessionStage({
+          userId,
+          sessionId: session.id,
+          stageKey: 'execute',
+          capability: 'execute',
+          title: 'Execution',
+          status: 'blocked',
+          orderIndex: 1,
+          summary: 'Waiting for approval before execution',
+          artifactRefsJson: {
+            workspace_id: workspace.id,
+            execution_option: executionOption
+          }
+        });
+        await syncJarvisSessionFromStages(ctx.store, { userId, sessionId: session.id });
         ctx.notificationService?.emitActionProposalReady(session.id, proposal.id, proposal.title, {
           severity: mapPolicySeverityToNotificationSeverity(policy.severity),
           message: `${proposal.title} · ${policy.impactProfile} · ${policy.severity}`
@@ -367,6 +442,23 @@ export async function workspaceRoutes(app: FastifyInstance, ctx: RouteContext) {
         linkedJarvisSessionId: linkedSession?.id ?? null
       });
       if (linkedSession) {
+        await ctx.store.upsertJarvisSessionStage({
+          userId,
+          sessionId: linkedSession.id,
+          stageKey: 'execute',
+          capability: 'execute',
+          title: 'Execution',
+          status: 'running',
+          orderIndex: 0,
+          summary: `Workspace command started: ${truncateText(command, 96)}`,
+          artifactRefsJson: {
+            workspace_id: workspace.id,
+            command,
+            execution_option: executionOption
+          },
+          startedAt: new Date().toISOString()
+        });
+        await syncJarvisSessionFromStages(ctx.store, { userId, sessionId: linkedSession.id });
         await ctx.store.appendJarvisSessionEvent({
           userId,
           sessionId: linkedSession.id,
@@ -381,6 +473,7 @@ export async function workspaceRoutes(app: FastifyInstance, ctx: RouteContext) {
             impact_profile: policy.impactProfile,
             policy_severity: policy.severity,
             policy_disposition: policy.disposition,
+            execution_option: executionOption,
             impact: policy.impact
           }
         });

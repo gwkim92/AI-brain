@@ -52,13 +52,13 @@ export function CommandBar() {
   }, [runtimeDebugEnabled]);
 
   return (
-    <div className="w-full px-4 py-2 pointer-events-auto">
-      <div className="max-w-3xl mx-auto flex items-center gap-3 rounded-lg border border-cyan-500/25 bg-black/50 backdrop-blur-xl px-4 py-1.5 shadow-[0_0_20px_rgba(0,255,255,0.06)]">
+    <div className="w-full px-2.5 py-1 pointer-events-auto">
+      <div className="max-w-xl mx-auto flex items-center gap-2 rounded-lg border border-cyan-500/25 bg-black/50 backdrop-blur-xl px-2.5 py-1.5 shadow-[0_0_20px_rgba(0,255,255,0.06)]">
         <Zap size={14} className="text-cyan-500/60 shrink-0" />
         <input
           type="text"
           placeholder={t("commandBar.placeholder")}
-          className="flex-1 bg-transparent text-sm text-cyan-50 focus:outline-none font-mono placeholder:text-white/25"
+          className="flex-1 bg-transparent text-[13px] text-cyan-50 focus:outline-none font-mono placeholder:text-white/25"
           value={commandInput}
           onChange={(e) => setCommandInput(e.target.value)}
           onKeyDown={(e) => {
@@ -71,19 +71,19 @@ export function CommandBar() {
         {showDebugToggle && (
           <button
             type="button"
-            className={`text-[10px] font-mono font-bold tracking-widest border px-2 py-1 rounded transition-colors ${
+            className={`text-[9px] font-mono font-bold tracking-widest border px-2 py-1 rounded transition-colors ${
               runtimeDebugEnabled
                 ? "text-amber-200 border-amber-400/50 bg-amber-500/15 hover:bg-amber-500/25"
                 : "text-white/55 border-white/20 bg-white/5 hover:bg-white/10"
             }`}
             onClick={toggleRuntimeDebug}
-            aria-label="Toggle runtime debug events"
+            aria-label={t("commandBar.toggleDebug")}
           >
-            TRACE {runtimeDebugEnabled ? "ON" : "OFF"}
+            {runtimeDebugEnabled ? t("commandBar.traceOn") : t("commandBar.traceOff")}
           </button>
         )}
         <button
-          className="text-[10px] font-mono font-bold tracking-widest text-cyan-400 border border-cyan-500/40 bg-cyan-500/10 px-3 py-1 rounded hover:bg-cyan-500/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+          className="text-[9px] font-mono font-bold tracking-widest text-cyan-400 border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1 rounded hover:bg-cyan-500/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
           onClick={handleExecute}
           disabled={isSubmitting || !commandInput.trim()}
         >

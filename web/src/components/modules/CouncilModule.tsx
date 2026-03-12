@@ -5,7 +5,7 @@ import { AgentArgumentCard } from "@/components/ui/AgentArgumentCard";
 import { CouncilConsensusPanel } from "@/components/ui/CouncilConsensusPanel";
 import { Network, AlertCircle, Loader2 } from "lucide-react";
 
-import { getCouncilRun, listProviderModels, listProviders, startCouncilRun, streamCouncilRunEvents } from "@/lib/api/endpoints";
+import { getCouncilRun, getJarvisSession, listProviderModels, listProviders, startCouncilRun, streamCouncilRunEvents } from "@/lib/api/endpoints";
 import { ApiRequestError } from "@/lib/api/client";
 import { useHUD } from "@/components/providers/HUDProvider";
 import { useLocale } from "@/components/providers/LocaleProvider";
@@ -18,6 +18,8 @@ import type {
   ProviderAttempt,
   ProviderAvailability,
   ProviderModelCatalogEntry,
+  JarvisSessionDetail,
+  RuntimeResolvedRoute,
 } from "@/lib/api/types";
 
 type ConsensusStatus = "Consensus Reached" | "Contradiction Detected" | "Escalated to Human";
@@ -88,6 +90,38 @@ function parseRoundLogCount(summary: string): number | null {
   return matches.length;
 }
 
+function describeCapabilityKey(capability: string) {
+  if (capability === "answer") return "assistant.capability.answer" as const;
+  if (capability === "research") return "assistant.capability.research" as const;
+  if (capability === "brief") return "assistant.capability.brief" as const;
+  if (capability === "debate") return "assistant.capability.debate" as const;
+  if (capability === "plan") return "assistant.capability.plan" as const;
+  if (capability === "approve") return "assistant.capability.approve" as const;
+  if (capability === "execute") return "assistant.capability.execute" as const;
+  if (capability === "notify") return "assistant.capability.notify" as const;
+  return null;
+}
+
+function describeRouteSourceKey(source: RuntimeResolvedRoute["source"]) {
+  if (source === "request_override") return "providerRoute.source.request_override" as const;
+  if (source === "feature_preference") return "providerRoute.source.feature_preference" as const;
+  if (source === "global_default") return "providerRoute.source.global_default" as const;
+  if (source === "auto") return "providerRoute.source.auto" as const;
+  return "providerRoute.source.runtime_result" as const;
+}
+
+function describeStageStatusKey(status: string) {
+  if (status === "queued") return "assistant.status.queued" as const;
+  if (status === "running") return "assistant.status.running" as const;
+  if (status === "blocked") return "assistant.status.blocked" as const;
+  if (status === "needs_approval") return "assistant.status.needsApproval" as const;
+  if (status === "completed") return "assistant.status.completed" as const;
+  if (status === "failed") return "assistant.status.failed" as const;
+  if (status === "stale") return "assistant.status.stale" as const;
+  if (status === "skipped") return "assistant.status.skipped" as const;
+  return null;
+}
+
 export function CouncilModule() {
   const { t } = useLocale();
   const { startSession, linkSessionTask, openWidgets, sessions } = useHUD();
@@ -111,10 +145,12 @@ export function CouncilModule() {
   const [error, setError] = useState<string | null>(null);
   const [lastTaskId, setLastTaskId] = useState<string | null>(null);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [jarvisSessionDetail, setJarvisSessionDetail] = useState<JarvisSessionDetail | null>(null);
   const [idempotentReplay, setIdempotentReplay] = useState(false);
   const [providerAttempts, setProviderAttempts] = useState<ProviderAttempt[]>([]);
   const [lastExcludedProviders, setLastExcludedProviders] = useState<ProviderAttempt["provider"][]>([]);
   const [selectedCredentialSummary, setSelectedCredentialSummary] = useState<string>("pending");
+  const [resolvedRoute, setResolvedRoute] = useState<RuntimeResolvedRoute | null>(null);
   const [providers, setProviders] = useState<ProviderAvailability[]>([]);
   const [providerModelCatalog, setProviderModelCatalog] = useState<ProviderModelCatalogEntry[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<ProviderSelection>("auto");
@@ -202,6 +238,37 @@ export function CouncilModule() {
     if (councilPhase === "synthesis") return t("council.phase.next.synthesis");
     return null;
   }, [councilPhase, t]);
+  const sessionStageRecords = useMemo(
+    () => [...(jarvisSessionDetail?.stages ?? [])].sort((left, right) => left.orderIndex - right.orderIndex),
+    [jarvisSessionDetail?.stages]
+  );
+
+  React.useEffect(() => {
+    if (!currentSessionId) {
+      setJarvisSessionDetail(null);
+      return;
+    }
+    let cancelled = false;
+    let timerId: number | null = null;
+    const load = async () => {
+      try {
+        const detail = await getJarvisSession(currentSessionId);
+        if (!cancelled) {
+          setJarvisSessionDetail(detail);
+          timerId = window.setTimeout(load, 4000);
+        }
+      } catch {
+        if (!cancelled) {
+          timerId = window.setTimeout(load, 4000);
+        }
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+      if (timerId !== null) window.clearTimeout(timerId);
+    };
+  }, [currentSessionId]);
   const providerOptions = useMemo(
     () => [
       { provider: "auto" as const, enabled: true, label: t("common.auto").toUpperCase() },
@@ -260,6 +327,7 @@ export function CouncilModule() {
       selected_credential_mode: string | null;
       credential_priority: string;
     } | null;
+    resolved_route?: RuntimeResolvedRoute | null;
     task_id: string | null;
     participants: Array<{
       role: CouncilRole;
@@ -272,6 +340,9 @@ export function CouncilModule() {
     const credentialSummary = result.selected_credential?.selected_credential_mode
       ? `${result.selected_credential.selected_credential_mode} (${result.selected_credential.source}) · ${result.selected_credential.credential_priority}`
       : "none";
+    if (result.resolved_route) {
+      setResolvedRoute(result.resolved_route);
+    }
 
     if (result.status === "queued" || result.status === "running") {
       const progress = parseRoundProgress(result.summary);
@@ -440,6 +511,7 @@ export function CouncilModule() {
     setProviderAttempts([]);
     setLastExcludedProviders(options?.excludeProviders ?? []);
     setSelectedCredentialSummary("pending");
+    setResolvedRoute(null);
 
     const clientSessionId = startSession(prompt, {
       activeWidgets: ["council", "tasks"],
@@ -504,7 +576,34 @@ export function CouncilModule() {
         setRunning(false);
       }
     }
-  }, [applyCouncilResult, attachCouncilStream, modelOverride, query, running, selectedProvider, strictProvider, t]);
+  }, [applyCouncilResult, attachCouncilStream, linkSessionTask, modelOverride, query, running, selectedProvider, startSession, strictProvider, t]);
+
+  const requestedRouteSummary = useMemo(
+    () =>
+      t("providerRoute.requestedInput", {
+        provider: selectedProvider,
+        model: modelOverride.trim() || t("council.defaultModel"),
+        strict: selectedProvider === "auto" ? t("common.off") : strictProvider ? t("common.on") : t("common.off"),
+      }),
+    [modelOverride, selectedProvider, strictProvider, t]
+  );
+  const resolvedRouteSummary = useMemo(() => {
+    if (!resolvedRoute) return null;
+    return t("providerRoute.resolved", {
+      provider: resolvedRoute.provider,
+      model: resolvedRoute.model ?? t("council.defaultModel"),
+      strict: resolvedRoute.strict_provider ? t("common.on") : t("common.off"),
+      fallback: resolvedRoute.used_fallback ? t("common.on") : t("common.off"),
+      source: t(describeRouteSourceKey(resolvedRoute.source)),
+    });
+  }, [resolvedRoute, t]);
+  const pinnedRouteWarning = useMemo(() => {
+    if (!resolvedRoute) return null;
+    if (selectedProvider !== "auto") return null;
+    if (!resolvedRoute.strict_provider || resolvedRoute.provider === "auto") return null;
+    if (resolvedRoute.source !== "feature_preference" && resolvedRoute.source !== "global_default") return null;
+    return t("providerRoute.pinnedByPreference");
+  }, [resolvedRoute, selectedProvider, t]);
 
   return (
     <main className="w-full h-full relative overflow-hidden bg-transparent text-white flex">
@@ -549,6 +648,43 @@ export function CouncilModule() {
                 </button>
               </div>
             </div>
+            {sessionStageRecords.length > 0 && (
+              <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+                <div className="rounded border border-white/10 bg-black/20 p-3">
+                  <p className="text-[10px] font-mono tracking-widest text-white/45">{t("assistant.capabilities")}</p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {(jarvisSessionDetail?.requested_capabilities ?? []).map((capability) => {
+                      const key = describeCapabilityKey(capability);
+                      return (
+                        <span
+                          key={`council-capability-${capability}`}
+                          className="rounded border border-cyan-400/25 bg-cyan-500/10 px-2 py-1 text-[10px] font-mono uppercase tracking-widest text-cyan-100"
+                        >
+                          {key ? t(key) : capability}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="rounded border border-white/10 bg-black/20 p-3">
+                  <p className="text-[10px] font-mono tracking-widest text-white/45">{t("assistant.stages")}</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {sessionStageRecords.map((stage) => {
+                      const statusKey = describeStageStatusKey(stage.status);
+                      return (
+                        <span
+                          key={stage.id}
+                          className="rounded border border-white/10 bg-black/20 px-2 py-1 text-[10px] font-mono text-white/75"
+                        >
+                          {(describeCapabilityKey(stage.capability) ? t(describeCapabilityKey(stage.capability)!) : stage.title)} ·{" "}
+                          {statusKey ? t(statusKey) : stage.status}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -636,13 +772,8 @@ export function CouncilModule() {
           </div>
           {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
           {lastTaskId && <p className="mt-2 text-xs text-cyan-300">{t("council.taskQueued", { value: lastTaskId.slice(0, 8) })}</p>}
-          <p className="mt-2 text-xs text-white/60">
-            {t("council.requestedRoute", {
-              provider: selectedProvider,
-              model: modelOverride.trim() || t("council.defaultModel"),
-              strict: selectedProvider === "auto" ? t("common.off") : strictProvider ? t("common.on") : t("common.off"),
-            })}
-          </p>
+          <p className="mt-2 text-xs text-white/60">{requestedRouteSummary}</p>
+          {resolvedRouteSummary ? <p className="mt-1 text-xs text-cyan-200/80">{resolvedRouteSummary}</p> : null}
           <p className="mt-2 text-xs text-cyan-200/80">
             {t("council.credential")}:{" "}
             {selectedCredentialSummary === "pending"
@@ -651,6 +782,7 @@ export function CouncilModule() {
                 ? t("common.none")
                 : selectedCredentialSummary}
           </p>
+          {pinnedRouteWarning ? <p className="mt-2 text-xs text-amber-300">{pinnedRouteWarning}</p> : null}
           {lastExcludedProviders.length > 0 && (
             <p className="mt-2 text-xs text-amber-300">{t("council.excludedProviders", { value: lastExcludedProviders.join(", ") })}</p>
           )}

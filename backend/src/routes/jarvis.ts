@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import { executeJarvisRequest, mapMissionStatusToSessionStatus } from '../jarvis/request-service';
+import { resolveJarvisMemoryContext, resolveJarvisMemoryPlan, resolveJarvisMemoryPreferences } from '../jarvis/memory-context';
+import { getJarvisSessionOrchestrationSnapshot, syncJarvisSessionFromStages } from '../jarvis/stages';
 import { sendError, sendSuccess } from '../lib/http';
 import type { JarvisSessionRecord } from '../store/types';
 import { WorkspaceProposalPayloadSchema } from '../workspaces/proposal';
@@ -40,10 +42,32 @@ async function hydrateLinkedSessionState(ctx: RouteContext, session: JarvisSessi
     const context = await ctx.store.getAssistantContextById({ userId: session.userId, contextId: session.assistantContextId });
     if (context) {
       if (context.status === 'completed' && session.status !== 'completed') {
-        return (await ctx.store.updateJarvisSession({ sessionId: session.id, userId: session.userId, status: 'completed' })) ?? session;
+        await ctx.store.upsertJarvisSessionStage({
+          userId: session.userId,
+          sessionId: session.id,
+          stageKey: 'answer',
+          capability: 'answer',
+          title: 'Direct answer',
+          status: 'completed',
+          summary: 'Assistant response is ready',
+          completedAt: new Date().toISOString()
+        });
+        const synced = await syncJarvisSessionFromStages(ctx.store, { userId: session.userId, sessionId: session.id });
+        return synced?.session ?? session;
       }
       if (context.status === 'failed' && session.status !== 'failed') {
-        return (await ctx.store.updateJarvisSession({ sessionId: session.id, userId: session.userId, status: 'failed' })) ?? session;
+        await ctx.store.upsertJarvisSessionStage({
+          userId: session.userId,
+          sessionId: session.id,
+          stageKey: 'answer',
+          capability: 'answer',
+          title: 'Direct answer',
+          status: 'failed',
+          errorMessage: context.error ?? 'Assistant response failed',
+          completedAt: new Date().toISOString()
+        });
+        const synced = await syncJarvisSessionFromStages(ctx.store, { userId: session.userId, sessionId: session.id });
+        return synced?.session ?? session;
       }
     }
   }
@@ -63,7 +87,22 @@ async function hydrateLinkedSessionState(ctx: RouteContext, session: JarvisSessi
     if (run) {
       const nextStatus = run.status === 'completed' ? 'completed' : run.status === 'failed' ? 'failed' : 'running';
       if (nextStatus !== session.status) {
-        return (await ctx.store.updateJarvisSession({ sessionId: session.id, userId: session.userId, status: nextStatus })) ?? session;
+        await ctx.store.upsertJarvisSessionStage({
+          userId: session.userId,
+          sessionId: session.id,
+          stageKey: 'debate',
+          capability: 'debate',
+          title: 'Council debate',
+          status: nextStatus === 'completed' ? 'completed' : nextStatus === 'failed' ? 'failed' : 'running',
+          summary: run.summary,
+          artifactRefsJson: {
+            council_run_id: run.id,
+            task_id: run.task_id
+          },
+          completedAt: nextStatus === 'completed' || nextStatus === 'failed' ? new Date().toISOString() : null
+        });
+        const synced = await syncJarvisSessionFromStages(ctx.store, { userId: session.userId, sessionId: session.id });
+        return synced?.session ?? session;
       }
     }
   }
@@ -73,12 +112,35 @@ async function hydrateLinkedSessionState(ctx: RouteContext, session: JarvisSessi
     if (dossier) {
       const nextStatus = dossier.status === 'ready' ? 'completed' : dossier.status === 'failed' ? 'failed' : 'running';
       if (nextStatus !== session.status) {
-        return (await ctx.store.updateJarvisSession({ sessionId: session.id, userId: session.userId, status: nextStatus })) ?? session;
+        const synced = await syncJarvisSessionFromStages(ctx.store, { userId: session.userId, sessionId: session.id });
+        return synced?.session ?? ((await ctx.store.updateJarvisSession({ sessionId: session.id, userId: session.userId, status: nextStatus })) ?? session);
       }
     }
   }
 
   return session;
+}
+
+async function captureDecisionMemory(ctx: RouteContext, input: {
+  userId: string;
+  session: JarvisSessionRecord;
+  proposal: { id: string; kind: string; title: string; summary: string };
+  decision: 'approved' | 'rejected';
+}) {
+  await ctx.store.createMemoryNote({
+    userId: input.userId,
+    kind: 'decision_memory',
+    title: `${input.decision === 'approved' ? 'Approved' : 'Rejected'}: ${input.proposal.title}`,
+    content:
+      input.decision === 'approved'
+        ? `Approved ${input.proposal.kind} action. ${input.proposal.summary}`
+        : `Rejected ${input.proposal.kind} action. ${input.proposal.summary}`,
+    tags: [input.decision, input.proposal.kind],
+    pinned: false,
+    source: 'session',
+    relatedSessionId: input.session.id,
+    relatedTaskId: input.session.taskId
+  });
 }
 
 export async function jarvisRoutes(app: FastifyInstance, ctx: RouteContext) {
@@ -136,11 +198,68 @@ export async function jarvisRoutes(app: FastifyInstance, ctx: RouteContext) {
       notificationService?.emitSessionStalled(hydrated.id, hydrated.title);
     }
     const events = await store.listJarvisSessionEvents({ userId, sessionId, limit: 50 });
+    const orchestration = await getJarvisSessionOrchestrationSnapshot(store, { userId, sessionId });
+    const memoryContext = await resolveJarvisMemoryContext(store, {
+      userId,
+      prompt: hydrated.prompt,
+      limit: 4
+    });
+    const memoryPreferences = resolveJarvisMemoryPreferences(memoryContext);
+    const memoryPlan = resolveJarvisMemoryPlan(memoryContext);
+    const memoryPreferenceApplied = Array.from(
+      new Set(
+        events.flatMap((event) => {
+          const applied = event.data?.memory_preference_applied;
+          return Array.isArray(applied) ? applied.filter((value): value is string => typeof value === 'string') : [];
+        })
+      )
+    );
+    const preferredProviderApplied =
+      memoryPreferenceApplied.find((value) => value.startsWith('preferred_provider:'))?.slice('preferred_provider:'.length) ?? null;
+    const preferredModelApplied =
+      memoryPreferenceApplied.find((value) => value.startsWith('preferred_model:'))?.slice('preferred_model:'.length) ?? null;
+    const memoryInfluences = Array.from(
+      new Set([
+        ...(memoryPlan?.summary ?? []),
+        ...(memoryPreferences?.summary ?? []),
+        ...memoryPreferenceApplied,
+        ...(memoryContext?.projectContext?.summary ?? []),
+        ...(memoryContext?.recentDecisionSignals?.summary ?? []),
+      ])
+    );
     const actions = await store.listActionProposals({ userId, sessionId, limit: 20 });
     const briefing = hydrated.briefingId ? await store.getBriefingById({ userId, briefingId: hydrated.briefingId }) : null;
     const dossier = hydrated.dossierId ? await store.getDossierById({ userId, dossierId: hydrated.dossierId }) : null;
     return sendSuccess(reply, request, 200, {
       session: hydrated,
+      requested_capabilities: orchestration?.requestedCapabilities ?? [],
+      active_capabilities: orchestration?.activeCapabilities ?? [],
+      completed_capabilities: orchestration?.completedCapabilities ?? [],
+      stages: orchestration?.stages ?? [],
+      next_action: orchestration?.nextAction ?? null,
+      research_profile: orchestration?.researchProfile ?? null,
+      research_profile_reasons: orchestration?.researchProfileReasons ?? [],
+      quality_mode: orchestration?.qualityMode ?? null,
+      warning_codes: orchestration?.warningCodes ?? [],
+      format_hint: orchestration?.formatHint ?? null,
+      quality_dimensions: orchestration?.qualityDimensions ?? null,
+      memory_context: memoryContext,
+      memory_plan_signals: memoryPlan?.signals ?? [],
+      memory_plan_summary: memoryPlan?.summary ?? [],
+      memory_preference_summary: memoryPreferences?.summary ?? [],
+      memory_preference_applied: memoryPreferenceApplied,
+      memory_influences: memoryInfluences,
+      execution_option: orchestration?.executionOption ?? null,
+      preferred_provider_applied: preferredProviderApplied,
+      preferred_model_applied: preferredModelApplied,
+      project_context_refs: memoryContext?.projectContext
+        ? {
+            repo_slug: memoryContext.projectContext.repoSlug ?? null,
+            project_name: memoryContext.projectContext.projectName ?? null,
+            pinned_refs: memoryContext.projectContext.pinnedRefs ?? [],
+          }
+        : null,
+      monitoring_preference_applied: memoryContext?.preferences?.monitoringPreference ?? null,
       events,
       actions,
       briefing,
@@ -180,6 +299,12 @@ export async function jarvisRoutes(app: FastifyInstance, ctx: RouteContext) {
       decision: 'approved'
     });
     if (!proposal) return sendError(reply, request, 404, 'NOT_FOUND', 'action proposal not found');
+    await captureDecisionMemory(ctx, {
+      userId,
+      session,
+      proposal,
+      decision: 'approved'
+    });
     await store.appendJarvisSessionEvent({
       userId,
       sessionId,
@@ -192,6 +317,28 @@ export async function jarvisRoutes(app: FastifyInstance, ctx: RouteContext) {
       }
     });
     if (proposal.kind === 'workspace_prepare') {
+      await store.upsertJarvisSessionStage({
+        userId,
+        sessionId,
+        stageKey: 'approve',
+        capability: 'approve',
+        title: 'Approval gate',
+        status: 'completed',
+        summary: proposal.title,
+        artifactRefsJson: {
+          action_proposal_id: proposal.id
+        },
+        completedAt: new Date().toISOString()
+      });
+      await store.upsertJarvisSessionStage({
+        userId,
+        sessionId,
+        stageKey: 'execute',
+        capability: 'execute',
+        title: 'Execution',
+        status: 'running',
+        summary: 'Workspace execution started'
+      });
       const parsedPayload = WorkspaceProposalPayloadSchema.safeParse(proposal.payload ?? {});
       if (!parsedPayload.success) {
         await store.updateJarvisSession({ sessionId, userId, status: 'failed' });
@@ -219,7 +366,8 @@ export async function jarvisRoutes(app: FastifyInstance, ctx: RouteContext) {
           linkedActionProposalId: proposal.id
         });
         const updatedSession =
-          (await store.updateJarvisSession({ sessionId, userId, status: 'running' })) ?? session;
+          (await syncJarvisSessionFromStages(store, { userId, sessionId }))?.session ??
+          ((await store.updateJarvisSession({ sessionId, userId, status: 'running' })) ?? session);
         await store.appendJarvisSessionEvent({
           userId,
           sessionId,
@@ -254,8 +402,33 @@ export async function jarvisRoutes(app: FastifyInstance, ctx: RouteContext) {
       }
     }
 
+    await store.upsertJarvisSessionStage({
+      userId,
+      sessionId,
+      stageKey: 'approve',
+      capability: 'approve',
+      title: 'Approval gate',
+      status: 'completed',
+      summary: proposal.title,
+      artifactRefsJson: {
+        action_proposal_id: proposal.id
+      },
+      completedAt: new Date().toISOString()
+    });
+    if (session.executionRunId || session.missionId) {
+      await store.upsertJarvisSessionStage({
+        userId,
+        sessionId,
+        stageKey: 'execute',
+        capability: 'execute',
+        title: 'Execution',
+        status: 'queued',
+        summary: 'Execution unlocked by approval'
+      });
+    }
     const updatedSession =
-      (await store.updateJarvisSession({ sessionId, userId, status: 'queued' })) ?? session;
+      (await syncJarvisSessionFromStages(store, { userId, sessionId }))?.session ??
+      ((await store.updateJarvisSession({ sessionId, userId, status: 'queued' })) ?? session);
     return sendSuccess(reply, request, 200, { session: updatedSession, action: proposal });
   });
 
@@ -271,6 +444,12 @@ export async function jarvisRoutes(app: FastifyInstance, ctx: RouteContext) {
       decision: 'rejected'
     });
     if (!proposal) return sendError(reply, request, 404, 'NOT_FOUND', 'action proposal not found');
+    await captureDecisionMemory(ctx, {
+      userId,
+      session,
+      proposal,
+      decision: 'rejected'
+    });
     const updatedSession =
       (await store.updateJarvisSession({ sessionId, userId, status: 'blocked' })) ?? session;
     await store.appendJarvisSessionEvent({
@@ -284,6 +463,31 @@ export async function jarvisRoutes(app: FastifyInstance, ctx: RouteContext) {
         kind: proposal.kind
       }
     });
+    await store.upsertJarvisSessionStage({
+      userId,
+      sessionId,
+      stageKey: 'approve',
+      capability: 'approve',
+      title: 'Approval gate',
+      status: 'failed',
+      summary: proposal.title,
+      errorMessage: 'Approval was rejected',
+      artifactRefsJson: {
+        action_proposal_id: proposal.id
+      },
+      completedAt: new Date().toISOString()
+    });
+    if (session.executionRunId || session.missionId) {
+      await store.upsertJarvisSessionStage({
+        userId,
+        sessionId,
+        stageKey: 'execute',
+        capability: 'execute',
+        title: 'Execution',
+        status: 'blocked',
+        summary: 'Execution blocked after rejection'
+      });
+    }
     return sendSuccess(reply, request, 200, { session: updatedSession, action: proposal });
   });
 }

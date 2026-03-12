@@ -21,7 +21,7 @@ import { canAccessWidget, useCurrentRoleState } from "@/lib/auth/role";
 import { resolveMissionFocus } from "@/lib/hud/mission-focus";
 import { ContextDockBar } from "@/components/layout/ContextDockBar";
 import { useLocale } from "@/components/providers/LocaleProvider";
-import { measureHudViewport, spotlightWidgetLayout, tileWidgetLayouts } from "@/lib/hud/widget-layout";
+import { loadLegacyWidgetLayout, measureHudViewport, saveWidgetLayout, spotlightWidgetLayout, tileWidgetLayouts } from "@/lib/hud/widget-layout";
 import type { TranslationKey } from "@/lib/locale";
 import {
   HUD_DEFAULT_MISSION_AUTO_FOCUS_HOLD_SECONDS,
@@ -93,23 +93,25 @@ type RequestedMissionPlan = {
 };
 
 const WIDGET_DEFAULTS: Record<string, { x: number; y: number; w: number; h: number }> = {
-  inbox:     { x: 24,  y: 56,  w: 380, h: 360 },
-  tasks:     { x: 420, y: 56,  w: 360, h: 360 },
-  assistant: { x: 24,  y: 300, w: 420, h: 520 },
-  council:   { x: 400, y: 300, w: 380, h: 360 },
-  workbench: { x: 200, y: 80,  w: 400, h: 380 },
-  reports:   { x: 240, y: 70,  w: 380, h: 360 },
-  watchers:  { x: 24,  y: 72,  w: 500, h: 460 },
-  dossier:   { x: 560, y: 72,  w: 820, h: 760 },
-  action_center: { x: 200, y: 72, w: 760, h: 640 },
-  notifications: { x: 980, y: 72, w: 420, h: 560 },
-  skills: { x: 220, y: 72, w: 980, h: 720 },
-  approvals: { x: 60,  y: 120, w: 360, h: 340 },
-  memory:    { x: 280, y: 140, w: 360, h: 340 },
-  settings:  { x: 140, y: 72,  w: 620, h: 760 },
-  model_control: { x: 180, y: 72, w: 760, h: 760 },
-  ideation: { x: 120, y: 72, w: 920, h: 780 },
+  inbox:     { x: 16,  y: 50,  w: 308, h: 292 },
+  tasks:     { x: 344, y: 50,  w: 300, h: 292 },
+  assistant: { x: 16,  y: 254, w: 352, h: 424 },
+  council:   { x: 336, y: 254, w: 320, h: 300 },
+  workbench: { x: 156, y: 70,  w: 336, h: 320 },
+  reports:   { x: 188, y: 64,  w: 320, h: 300 },
+  watchers:  { x: 16,  y: 64,  w: 408, h: 372 },
+  dossier:   { x: 452, y: 64,  w: 640, h: 600 },
+  action_center: { x: 156, y: 64, w: 612, h: 512 },
+  notifications: { x: 820, y: 64, w: 332, h: 460 },
+  skills: { x: 172, y: 64, w: 756, h: 564 },
+  approvals: { x: 40,  y: 96,  w: 300, h: 282 },
+  memory:    { x: 224, y: 112, w: 300, h: 282 },
+  settings:  { x: 104, y: 64,  w: 500, h: 620 },
+  model_control: { x: 140, y: 64, w: 612, h: 620 },
+  ideation: { x: 88, y: 64, w: 736, h: 632 },
 };
+
+const HUD_LAYOUT_SCALE = 0.78;
 
 const WIDGET_TITLE_KEYS: Record<string, TranslationKey> = {
   inbox: "widget.title.inbox",
@@ -229,6 +231,25 @@ function parseRequestedMission(search: string): RequestedMissionPlan {
   };
 }
 
+function migrateLegacyHudLayouts() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  Object.entries(WIDGET_DEFAULTS).forEach(([widgetId, defaults]) => {
+    const legacy = loadLegacyWidgetLayout(widgetId);
+    if (!legacy) {
+      return;
+    }
+    saveWidgetLayout(widgetId, {
+      x: Math.max(12, Math.round(legacy.x * HUD_LAYOUT_SCALE)),
+      y: Math.max(48, Math.round(legacy.y * HUD_LAYOUT_SCALE)),
+      w: Math.max(defaults.w, Math.round(legacy.w * HUD_LAYOUT_SCALE)),
+      h: Math.max(defaults.h, Math.round(legacy.h * HUD_LAYOUT_SCALE)),
+    });
+  });
+}
+
 function useVisualCoreSignals() {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
@@ -236,6 +257,10 @@ function useVisualCoreSignals() {
 
   const lastSnapshotRef = useRef<VisualSignalSnapshot | null>(null);
   const pulseTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    migrateLegacyHudLayouts();
+  }, []);
 
   useEffect(() => {
     let stopped = false;

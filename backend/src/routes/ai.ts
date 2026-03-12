@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { sendError, sendSuccess } from '../lib/http';
 import { withAiInvocationTrace } from '../observability/ai-trace';
 import { resolveModelSelection } from '../providers/model-selection';
+import { generateWithPreferenceRecovery } from '../providers/preference-recovery';
 import { summarizeResult, maskErrorForApi, toProviderCredentialUsage } from '../providers/router';
 import type { ProviderName } from '../providers/types';
 import { buildRetrievalSystemInstruction, retrieveWebEvidence } from '../retrieval/adapter-router';
@@ -36,6 +37,13 @@ import {
   extractNewsFactsFromOutput,
   renderNewsBriefingFromFacts
 } from '../retrieval/news-briefing';
+import {
+  buildResponseInstructionWithMemory,
+  resolveMemoryBackedRouting,
+  resolveJarvisMemoryContext,
+  resolveJarvisMemoryPlan,
+  resolveJarvisMemoryPreferences
+} from '../jarvis/memory-context';
 import type { RouteContext } from './types';
 
 const AiRespondSchema = z.object({
@@ -63,14 +71,26 @@ export async function aiRoutes(app: FastifyInstance, ctx: RouteContext) {
     const resolvedCredentials = await ctx.resolveRequestProviderCredentials(request);
     const credentialsByProvider = resolvedCredentials.credentialsByProvider;
     const userId = ctx.resolveRequestUserId(request);
+    const memoryContext = await resolveJarvisMemoryContext(ctx.store, {
+      userId,
+      prompt: parsed.data.prompt
+    });
+    const memoryPreferences = resolveJarvisMemoryPreferences(memoryContext);
+    const memoryPlan = resolveJarvisMemoryPlan(memoryContext);
+    const memoryRouting = resolveMemoryBackedRouting({
+      provider: parsed.data.provider,
+      strictProvider: parsed.data.strict_provider,
+      model: parsed.data.model,
+      memoryPreferences
+    });
     const modelSelection = await resolveModelSelection({
       store: ctx.store,
       userId,
       featureKey: 'assistant_chat',
       override: {
-        provider: parsed.data.provider,
-        strictProvider: parsed.data.strict_provider,
-        model: parsed.data.model
+        provider: memoryRouting.provider,
+        strictProvider: memoryRouting.strictProvider,
+        model: memoryRouting.model
       }
     });
 
@@ -79,6 +99,11 @@ export async function aiRoutes(app: FastifyInstance, ctx: RouteContext) {
       taskType: parsed.data.task_type
     });
     const languagePolicy = buildLanguageSystemInstruction(parsed.data.prompt);
+    const memoryResponseInstruction = buildResponseInstructionWithMemory({
+      preferences: memoryPreferences,
+      memoryPlan,
+      expectedLanguage: languagePolicy.expectedLanguage
+    });
     const providerAvailability = ctx.providerRouter.listAvailability(credentialsByProvider);
     const externalProviderEnabled = providerAvailability.some((item) => item.enabled && item.provider !== 'local');
     const localProviderEnabled = providerAvailability.some((item) => item.provider === 'local' && item.enabled);
@@ -153,10 +178,13 @@ export async function aiRoutes(app: FastifyInstance, ctx: RouteContext) {
           )
         : mergeSystemPrompt(
             mergeSystemPrompt(
-              mergeSystemPrompt(parsed.data.system_prompt, groundingInstruction),
-              retrievalInstruction
+              mergeSystemPrompt(
+                mergeSystemPrompt(parsed.data.system_prompt, groundingInstruction),
+                retrievalInstruction
+              ),
+              languagePolicy.instruction
             ),
-            languagePolicy.instruction
+            memoryResponseInstruction
           );
       const routed = useRetrievalOnlyFallback
         ? null
@@ -174,32 +202,36 @@ export async function aiRoutes(app: FastifyInstance, ctx: RouteContext) {
               model_selection_source: modelSelection.source
             },
             run: () =>
-              ctx.providerRouter.generate({
-                prompt: generationPrompt,
-                systemPrompt: generationSystemPrompt,
-                provider: modelSelection.provider,
-                strictProvider: modelSelection.strictProvider,
-                credentialsByProvider,
-                traceId: ctx.resolveRequestTraceId(request),
-                onSpanEvent: (event) => {
-                  request.log.info(
-                    {
-                      trace_id: event.traceId,
-                      provider: event.provider,
-                      success: event.success,
-                      latency_ms: event.latencyMs,
-                      error: event.error
-                    },
-                    event.name
-                  );
-                },
-                taskType: parsed.data.task_type,
-                model: modelSelection.model ?? undefined,
-                temperature: grounding.requiresGrounding ? strictFactualTemperature : parsed.data.temperature,
-                topP: grounding.requiresGrounding ? 0.9 : undefined,
-                stop: grounding.requiresGrounding ? ['<|im_start|>', '<|im_end|>', '<|endoftext|>'] : undefined,
-                maxOutputTokens: grounding.requiresGrounding ? strictFactualMaxTokens : parsed.data.max_output_tokens,
-                excludeProviders: grounding.requiresGrounding && !canUseLocalGroundedFallback ? ['local'] : undefined
+              generateWithPreferenceRecovery({
+                providerRouter: ctx.providerRouter,
+                modelSelection,
+                request: {
+                  prompt: generationPrompt,
+                  systemPrompt: generationSystemPrompt,
+                  provider: modelSelection.provider,
+                  strictProvider: modelSelection.strictProvider,
+                  credentialsByProvider,
+                  traceId: ctx.resolveRequestTraceId(request),
+                  onSpanEvent: (event) => {
+                    request.log.info(
+                      {
+                        trace_id: event.traceId,
+                        provider: event.provider,
+                        success: event.success,
+                        latency_ms: event.latencyMs,
+                        error: event.error
+                      },
+                      event.name
+                    );
+                  },
+                  taskType: parsed.data.task_type,
+                  model: modelSelection.model ?? undefined,
+                  temperature: grounding.requiresGrounding ? strictFactualTemperature : parsed.data.temperature,
+                  topP: grounding.requiresGrounding ? 0.9 : undefined,
+                  stop: grounding.requiresGrounding ? ['<|im_start|>', '<|im_end|>', '<|endoftext|>'] : undefined,
+                  maxOutputTokens: grounding.requiresGrounding ? strictFactualMaxTokens : parsed.data.max_output_tokens,
+                  excludeProviders: grounding.requiresGrounding && !canUseLocalGroundedFallback ? ['local'] : undefined
+                }
               })
           });
       const groundedLocalViolation =

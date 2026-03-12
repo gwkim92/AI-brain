@@ -37,12 +37,23 @@ type SelectedCredentialView = {
   auth_access_token_expires_at: string | null;
 } | null;
 
+type ResolvedRouteView = {
+  provider: 'auto' | 'openai' | 'gemini' | 'anthropic' | 'local';
+  model: string | null;
+  strict_provider: boolean;
+  source: 'request_override' | 'feature_preference' | 'global_default' | 'auto' | 'runtime_result';
+  used_fallback: boolean;
+};
+
 function resolveSelectedCredentialForRun(run: CouncilRunRecord): SelectedCredentialView {
-  if (!run.provider) {
-    return null;
-  }
-  const match = [...run.attempts].reverse().find((attempt) => attempt.provider === run.provider && attempt.status === 'success');
-  const credential = match?.credential;
+  const reversedAttempts = [...run.attempts].reverse();
+  const matchingAttempts = run.provider
+    ? reversedAttempts.filter((attempt) => attempt.provider === run.provider)
+    : reversedAttempts;
+  const credential =
+    matchingAttempts.find((attempt) => attempt.status === 'success')?.credential
+    ?? matchingAttempts.find((attempt) => attempt.credential)?.credential
+    ?? reversedAttempts.find((attempt) => attempt.credential)?.credential;
   if (!credential) {
     return null;
   }
@@ -54,10 +65,35 @@ function resolveSelectedCredentialForRun(run: CouncilRunRecord): SelectedCredent
   };
 }
 
-function withRunCredential(run: CouncilRunRecord): CouncilRunRecord & { selected_credential: SelectedCredentialView } {
+function resolveRunRoute(run: CouncilRunRecord, route?: Omit<ResolvedRouteView, 'used_fallback'>): ResolvedRouteView {
+  if (route) {
+    return {
+      ...route,
+      used_fallback: run.used_fallback
+    };
+  }
+
+  const reversedAttempts = [...run.attempts].reverse();
+  const attemptedProviders = Array.from(new Set(run.attempts.map((attempt) => attempt.provider)));
+  const provider: ResolvedRouteView['provider'] = run.provider ?? reversedAttempts[0]?.provider ?? 'auto';
+  const hasPinnedProvider = run.provider !== null || reversedAttempts.length > 0;
+  return {
+    provider,
+    model: typeof run.model === 'string' && run.model.trim().length > 0 ? run.model : null,
+    strict_provider: hasPinnedProvider ? !run.used_fallback && attemptedProviders.length <= 1 : false,
+    source: 'runtime_result',
+    used_fallback: run.used_fallback
+  };
+}
+
+function withRunCredential(
+  run: CouncilRunRecord,
+  resolvedRoute?: Omit<ResolvedRouteView, 'used_fallback'>
+): CouncilRunRecord & { selected_credential: SelectedCredentialView; resolved_route: ResolvedRouteView } {
   return {
     ...run,
-    selected_credential: resolveSelectedCredentialForRun(run)
+    selected_credential: resolveSelectedCredentialForRun(run),
+    resolved_route: resolveRunRoute(run, resolvedRoute)
   };
 }
 
@@ -127,7 +163,12 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
         request,
         result.idempotentReplay ? 200 : 202,
         {
-          ...withRunCredential(result.run),
+          ...withRunCredential(result.run, {
+            provider: result.resolvedModelSelection.provider,
+            model: result.resolvedModelSelection.model,
+            strict_provider: result.resolvedModelSelection.strictProvider,
+            source: result.resolvedModelSelection.source
+          }),
           session: linkedSession
         },
         {
@@ -202,7 +243,7 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
       emitEvent(eventName, {
         run_id: runId,
         timestamp: new Date().toISOString(),
-        data: withRunCredential(row)
+          data: withRunCredential(row)
       });
     };
 
