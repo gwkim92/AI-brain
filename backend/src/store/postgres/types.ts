@@ -551,13 +551,22 @@ export type IntelligenceNarrativeClusterRow = {
   support_score: string | number;
   contradiction_score: string | number;
   time_coherence_score: string | number;
+  recurring_strength_trend: string | number;
+  divergence_trend: string | number;
+  support_decay_score: string | number;
+  contradiction_acceleration: string | number;
+  cluster_priority_score: number;
+  recent_execution_blocked_count: number;
   review_state: 'watch' | 'review' | 'ignore';
   review_reason: string | null;
   review_owner: string | null;
   review_updated_at: Date | null;
   review_updated_by: string | null;
   review_resolved_at: Date | null;
+  last_ledger_at: Date | null;
   last_event_at: Date | null;
+  last_recurring_at: Date | null;
+  last_diverging_at: Date | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -589,6 +598,39 @@ export type IntelligenceTemporalNarrativeLedgerEntryRow = {
   graph_contradiction_score: string | number;
   graph_hotspot_count: number;
   time_coherence_score: string | number;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type IntelligenceNarrativeClusterLedgerEntryRow = {
+  id: string;
+  workspace_id: string;
+  cluster_id: string;
+  entry_type:
+    | 'merge'
+    | 'split'
+    | 'recurring_strengthened'
+    | 'diverging_strengthened'
+    | 'supportive_history_added'
+    | 'stability_drop';
+  summary: string;
+  score_delta: string | number;
+  source_event_ids_json: unknown;
+  created_at: Date;
+};
+
+export type IntelligenceNarrativeClusterTimelineRow = {
+  id: string;
+  workspace_id: string;
+  cluster_id: string;
+  bucket_start: Date;
+  event_count: number;
+  recurring_score: string | number;
+  drift_score: string | number;
+  support_score: string | number;
+  contradiction_score: string | number;
+  time_coherence_score: string | number;
+  hotspot_event_count: number;
   created_at: Date;
   updated_at: Date;
 };

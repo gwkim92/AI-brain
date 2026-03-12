@@ -186,6 +186,74 @@ describe('Intelligence routes', () => {
     };
     expect(aliasesBody.data.bindings.global.length).toBeGreaterThan(0);
 
+    const updateResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/intelligence/runtime/aliases/structured_extraction/bindings',
+      headers,
+      payload: {
+        workspace_id: workspaceId,
+        scope: 'workspace',
+        bindings: [
+          {
+            provider: 'openai',
+            model_id: 'gpt-5-mini',
+            weight: 1,
+            fallback_rank: 1,
+            canary_percent: 5,
+            is_active: true,
+            requires_structured_output: true,
+            requires_tool_use: false,
+            requires_long_context: false,
+            max_cost_class: 'standard',
+          },
+        ],
+      },
+    });
+    expect(updateResponse.statusCode).toBe(200);
+    const updateBody = updateResponse.json() as {
+      data: {
+        binding_scope: 'workspace' | 'global';
+        bindings: Array<{ workspaceId: string | null; modelId: string }>;
+      };
+    };
+    expect(updateBody.data.binding_scope).toBe('workspace');
+    expect(updateBody.data.bindings[0]?.workspaceId).toBe(workspaceId);
+    expect(updateBody.data.bindings[0]?.modelId).toBe('gpt-5-mini');
+
+    const globalUpdateResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/intelligence/runtime/aliases/policy_judgment/bindings',
+      headers,
+      payload: {
+        workspace_id: workspaceId,
+        scope: 'global',
+        bindings: [
+          {
+            provider: 'gemini',
+            model_id: 'gemini-2.5-pro',
+            weight: 0.9,
+            fallback_rank: 1,
+            canary_percent: 0,
+            is_active: true,
+            requires_structured_output: true,
+            requires_tool_use: false,
+            requires_long_context: true,
+            max_cost_class: 'premium',
+          },
+        ],
+      },
+    });
+    expect(globalUpdateResponse.statusCode).toBe(200);
+    const globalUpdateBody = globalUpdateResponse.json() as {
+      data: {
+        binding_scope: 'workspace' | 'global';
+        bindings: Array<{ workspaceId: string | null; provider: string }>;
+      };
+    };
+    expect(globalUpdateBody.data.binding_scope).toBe('global');
+    expect(globalUpdateBody.data.bindings[0]?.workspaceId).toBeNull();
+    expect(globalUpdateBody.data.bindings[0]?.provider).toBe('gemini');
+
     await app.close();
   });
 
@@ -780,6 +848,92 @@ describe('Intelligence routes', () => {
     expect(refreshedDetailBody.data.linked_claims[0]?.reviewState).toBe('review');
     expect(refreshedDetailBody.data.linked_claims[0]?.reviewReason).toContain('source-level verification');
     expect(refreshedDetailBody.data.linked_claims[0]?.reviewOwner).toBe(headers['x-user-id']);
+
+    const clusterListResponse = await app.inject({
+      method: 'GET',
+      url: `/api/v1/intelligence/narrative-clusters?workspace_id=${workspace.id}`,
+      headers,
+    });
+    expect(clusterListResponse.statusCode).toBe(200);
+    const clusterListBody = clusterListResponse.json() as {
+      data: {
+        narrative_clusters: Array<{
+          id: string;
+          clusterPriorityScore: number;
+          recentExecutionBlockedCount: number;
+          lastLedgerAt: string | null;
+        }>;
+      };
+    };
+    expect(clusterListBody.data.narrative_clusters.length).toBeGreaterThan(0);
+    expect(clusterListBody.data.narrative_clusters[0]?.clusterPriorityScore).toBeGreaterThanOrEqual(0);
+
+    const clusterId = refreshedDetailBody.data.narrative_cluster?.id;
+    expect(clusterId).toBeTruthy();
+
+    const clusterDetailResponse = await app.inject({
+      method: 'GET',
+      url: `/api/v1/intelligence/narrative-clusters/${clusterId}?workspace_id=${workspace.id}`,
+      headers,
+    });
+    expect(clusterDetailResponse.statusCode).toBe(200);
+    const clusterDetailBody = clusterDetailResponse.json() as {
+      data: {
+        narrative_cluster: { id: string; clusterPriorityScore: number };
+        memberships: Array<{ eventId: string }>;
+        recent_events: Array<{ id: string }>;
+        ledger_entries: Array<{ entryType: string }>;
+        operator_notes: Array<{ scope: string }>;
+      };
+    };
+    expect(clusterDetailBody.data.narrative_cluster.id).toBe(clusterId);
+    expect(clusterDetailBody.data.memberships.length).toBeGreaterThan(0);
+    expect(clusterDetailBody.data.recent_events.length).toBeGreaterThan(0);
+    expect(Array.isArray(clusterDetailBody.data.ledger_entries)).toBe(true);
+    expect(clusterDetailBody.data.operator_notes.some((row) => row.scope === 'narrative_cluster')).toBe(true);
+
+    const clusterTimelineResponse = await app.inject({
+      method: 'GET',
+      url: `/api/v1/intelligence/narrative-clusters/${clusterId}/timeline?workspace_id=${workspace.id}`,
+      headers,
+    });
+    expect(clusterTimelineResponse.statusCode).toBe(200);
+    const clusterTimelineBody = clusterTimelineResponse.json() as {
+      data: {
+        trend_summary: {
+          recurring_strength_trend: number;
+          divergence_trend: number;
+          support_decay_score: number;
+          contradiction_acceleration: number;
+        };
+        timeline: Array<{ bucketStart: string; eventCount: number; contradictionScore: number }>;
+      };
+    };
+    expect(clusterTimelineBody.data.timeline.length).toBeGreaterThan(0);
+    expect(clusterTimelineBody.data.timeline[0]?.eventCount).toBeGreaterThan(0);
+    expect(typeof clusterTimelineBody.data.trend_summary.recurring_strength_trend).toBe('number');
+    expect(typeof clusterTimelineBody.data.trend_summary.divergence_trend).toBe('number');
+
+    const clusterGraphResponse = await app.inject({
+      method: 'GET',
+      url: `/api/v1/intelligence/narrative-clusters/${clusterId}/graph?workspace_id=${workspace.id}`,
+      headers,
+    });
+    expect(clusterGraphResponse.statusCode).toBe(200);
+    const clusterGraphBody = clusterGraphResponse.json() as {
+      data: {
+        summary: { graphHotspotCount: number; eventCount: number };
+        nodes: Array<{ id: string }>;
+        edges: Array<{ relation: string }>;
+        hotspot_clusters: Array<{ hotspotScore: number }>;
+        recent_events: Array<{ id: string }>;
+      };
+    };
+    expect(clusterGraphBody.data.summary.eventCount).toBeGreaterThan(0);
+    expect(clusterGraphBody.data.nodes.length).toBeGreaterThan(0);
+    expect(clusterGraphBody.data.edges.length).toBeGreaterThan(0);
+    expect(clusterGraphBody.data.hotspot_clusters.length).toBeGreaterThan(0);
+    expect(clusterGraphBody.data.recent_events.length).toBeGreaterThan(0);
 
     const refreshedHypothesesResponse = await app.inject({
       method: 'GET',

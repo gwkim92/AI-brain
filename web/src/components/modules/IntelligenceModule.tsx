@@ -14,8 +14,12 @@ import {
   getIntelligenceEvent,
   getIntelligenceEventGraph,
   getIntelligenceHypotheses,
+  getIntelligenceNarrativeCluster,
+  getIntelligenceNarrativeClusterGraph,
+  getIntelligenceNarrativeClusterTimeline,
   listIntelligenceFetchFailures,
   listIntelligenceEvents,
+  listIntelligenceNarrativeClusters,
   listIntelligenceRuntimeAliases,
   listIntelligenceRuntimeModels,
   listIntelligenceRuns,
@@ -24,6 +28,7 @@ import {
   retryIntelligenceSignal,
   retryIntelligenceSource,
   toggleIntelligenceSource,
+  updateIntelligenceAliasBindings,
   updateIntelligenceEventReviewState,
   updateIntelligenceHypothesisReviewState,
   updateIntelligenceLinkedClaimReviewState,
@@ -37,6 +42,7 @@ import type {
   HypothesisEvidenceLink,
   HypothesisLedgerEntry,
   IntelligenceBridgeDispatchRecord,
+  IntelligenceCapabilityAlias,
   IntelligenceCapabilityAliasBinding,
   IntelligenceCatalogSyncRun,
   IntelligenceEventClusterRecord,
@@ -49,6 +55,10 @@ import type {
   IntelligenceInvalidationEntryRecord,
   IntelligenceModelRegistryEntry,
   IntelligenceNarrativeClusterMemberSummary,
+  IntelligenceNarrativeClusterLedgerEntryRecord,
+  IntelligenceNarrativeClusterTimelineRecord,
+  IntelligenceNarrativeClusterTrendSummary,
+  IntelligenceNarrativeClusterGraphSummary,
   IntelligenceNarrativeClusterRecord,
   IntelligenceOutcomeEntryRecord,
   IntelligenceRelatedHistoricalEventSummary,
@@ -62,6 +72,7 @@ import type {
   LinkedClaimEdgeRecord,
   LinkedClaimRecord,
   OperatorNoteRecord,
+  ProviderName,
   ProviderHealthRecord,
   SemanticBacklogStatus,
 } from "@/lib/api/types";
@@ -100,6 +111,8 @@ type RuntimeSnapshot = {
   providerHealth: ProviderHealthRecord[];
 };
 
+type RuntimeBindingScope = "workspace" | "global";
+
 type SelectedEventDetail = {
   event: IntelligenceEventClusterRecord;
   linkedClaims: LinkedClaimRecord[];
@@ -136,6 +149,24 @@ type SelectedEventGraph = {
   relatedHistoricalEvents: IntelligenceRelatedHistoricalEventSummary[];
 };
 
+type SelectedNarrativeClusterDetail = {
+  narrativeCluster: IntelligenceNarrativeClusterRecord;
+  memberships: IntelligenceNarrativeClusterMemberSummary[];
+  recentEvents: IntelligenceEventClusterRecord[];
+  ledgerEntries: IntelligenceNarrativeClusterLedgerEntryRecord[];
+  operatorNotes: OperatorNoteRecord[];
+};
+
+type SelectedNarrativeClusterGraph = {
+  summary: IntelligenceNarrativeClusterGraphSummary;
+  nodes: LinkedClaimRecord[];
+  edges: Array<LinkedClaimEdgeRecord & { evidence_signal_count: number }>;
+  hotspots: string[];
+  neighborhoods: IntelligenceEventGraphNeighborhood[];
+  hotspotClusters: IntelligenceHotspotCluster[];
+  recentEvents: IntelligenceEventClusterRecord[];
+};
+
 export function IntelligenceModule() {
   const [workspaces, setWorkspaces] = useState<IntelligenceWorkspaceRecord[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
@@ -148,6 +179,12 @@ export function IntelligenceModule() {
   const [selectedEventDetail, setSelectedEventDetail] = useState<SelectedEventDetail | null>(null);
   const [selectedHypothesisDetail, setSelectedHypothesisDetail] = useState<SelectedHypothesisDetail | null>(null);
   const [selectedEventGraph, setSelectedEventGraph] = useState<SelectedEventGraph | null>(null);
+  const [narrativeClusters, setNarrativeClusters] = useState<IntelligenceNarrativeClusterRecord[]>([]);
+  const [selectedNarrativeClusterId, setSelectedNarrativeClusterId] = useState<string | null>(null);
+  const [selectedNarrativeClusterDetail, setSelectedNarrativeClusterDetail] = useState<SelectedNarrativeClusterDetail | null>(null);
+  const [selectedNarrativeClusterTimeline, setSelectedNarrativeClusterTimeline] = useState<IntelligenceNarrativeClusterTimelineRecord[]>([]);
+  const [selectedNarrativeClusterTrendSummary, setSelectedNarrativeClusterTrendSummary] = useState<IntelligenceNarrativeClusterTrendSummary | null>(null);
+  const [selectedNarrativeClusterGraph, setSelectedNarrativeClusterGraph] = useState<SelectedNarrativeClusterGraph | null>(null);
   const [runtime, setRuntime] = useState<RuntimeSnapshot>({
     scannerWorker: null,
     semanticWorker: null,
@@ -169,6 +206,10 @@ export function IntelligenceModule() {
   const [executionStatusFilter, setExecutionStatusFilter] = useState<"all" | "pending" | "blocked" | "executed">("all");
   const [executionBlockedReasonFilter, setExecutionBlockedReasonFilter] = useState<string>("all");
   const [executionToolFilter, setExecutionToolFilter] = useState<string>("all");
+  const [clusterStateFilter, setClusterStateFilter] = useState<"all" | "forming" | "recurring" | "diverging">("all");
+  const [clusterReviewFilter, setClusterReviewFilter] = useState<"all" | EventReviewState>("all");
+  const [clusterHotspotOnly, setClusterHotspotOnly] = useState(false);
+  const [clusterBlockedOnly, setClusterBlockedOnly] = useState(false);
 
   const loadWorkspaceBundle = useCallback(async (nextWorkspaceId?: string | null) => {
     setLoading(true);
@@ -187,6 +228,7 @@ export function IntelligenceModule() {
         setSelectedEvent(null);
         setSelectedEventDetail(null);
         setSelectedHypothesisDetail(null);
+        setSelectedNarrativeClusterTrendSummary(null);
         setRuntime({
           scannerWorker: null,
           semanticWorker: null,
@@ -205,10 +247,11 @@ export function IntelligenceModule() {
         return;
       }
 
-      const [sourceData, runData, eventData, modelData, aliasData, failureData] = await Promise.all([
+      const [sourceData, runData, eventData, clusterData, modelData, aliasData, failureData] = await Promise.all([
         listIntelligenceSources({ workspace_id: resolvedWorkspaceId }),
         listIntelligenceRuns({ workspace_id: resolvedWorkspaceId, limit: 20 }),
         listIntelligenceEvents({ workspace_id: resolvedWorkspaceId, limit: 50 }),
+        listIntelligenceNarrativeClusters({ workspace_id: resolvedWorkspaceId, limit: 50 }),
         listIntelligenceRuntimeModels({ workspace_id: resolvedWorkspaceId }),
         listIntelligenceRuntimeAliases({ workspace_id: resolvedWorkspaceId }),
         listIntelligenceFetchFailures({ workspace_id: resolvedWorkspaceId, limit: 20 }),
@@ -216,12 +259,20 @@ export function IntelligenceModule() {
       const nextSelectedEventId = selectedEventId && eventData.events.some((event) => event.id === selectedEventId)
         ? selectedEventId
         : eventData.events[0]?.id ?? null;
+      const nextSelectedClusterId =
+        selectedNarrativeClusterId && clusterData.narrative_clusters.some((cluster) => cluster.id === selectedNarrativeClusterId)
+          ? selectedNarrativeClusterId
+          : nextSelectedEventId
+            ? eventData.events.find((event) => event.id === nextSelectedEventId)?.narrativeClusterId ?? clusterData.narrative_clusters[0]?.id ?? null
+            : clusterData.narrative_clusters[0]?.id ?? null;
 
       setSources(sourceData.sources);
       setRuns(runData.runs);
       setFetchFailures(failureData.fetch_failures);
       setEvents(eventData.events);
+      setNarrativeClusters(clusterData.narrative_clusters);
       setSelectedEventId(nextSelectedEventId);
+      setSelectedNarrativeClusterId(nextSelectedClusterId);
       setRuntime({
         scannerWorker: sourceData.scanner_worker,
         semanticWorker: sourceData.semantic_worker,
@@ -279,6 +330,37 @@ export function IntelligenceModule() {
         setSelectedHypothesisDetail(null);
         setSelectedEventGraph(null);
       }
+
+      if (nextSelectedClusterId) {
+        const [clusterDetail, clusterTimeline, clusterGraph] = await Promise.all([
+          getIntelligenceNarrativeCluster(nextSelectedClusterId, { workspace_id: resolvedWorkspaceId }),
+          getIntelligenceNarrativeClusterTimeline(nextSelectedClusterId, { workspace_id: resolvedWorkspaceId }),
+          getIntelligenceNarrativeClusterGraph(nextSelectedClusterId, { workspace_id: resolvedWorkspaceId }),
+        ]);
+        setSelectedNarrativeClusterDetail({
+          narrativeCluster: clusterDetail.narrative_cluster,
+          memberships: clusterDetail.memberships,
+          recentEvents: clusterDetail.recent_events,
+          ledgerEntries: clusterDetail.ledger_entries,
+          operatorNotes: clusterDetail.operator_notes,
+        });
+        setSelectedNarrativeClusterTimeline(clusterTimeline.timeline);
+        setSelectedNarrativeClusterTrendSummary(clusterTimeline.trend_summary);
+        setSelectedNarrativeClusterGraph({
+          summary: clusterGraph.summary,
+          nodes: clusterGraph.nodes,
+          edges: clusterGraph.edges,
+          hotspots: clusterGraph.hotspots,
+          neighborhoods: clusterGraph.neighborhoods,
+          hotspotClusters: clusterGraph.hotspot_clusters,
+          recentEvents: clusterGraph.recent_events,
+        });
+      } else {
+        setSelectedNarrativeClusterDetail(null);
+        setSelectedNarrativeClusterTimeline([]);
+        setSelectedNarrativeClusterTrendSummary(null);
+        setSelectedNarrativeClusterGraph(null);
+      }
     } catch (err) {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
@@ -288,7 +370,7 @@ export function IntelligenceModule() {
     } finally {
       setLoading(false);
     }
-  }, [selectedEventId]);
+  }, [selectedEventId, selectedNarrativeClusterId]);
 
   useEffect(() => {
     void loadWorkspaceBundle();
@@ -343,6 +425,45 @@ export function IntelligenceModule() {
         setError(`${err.code}: ${err.message}`);
       } else {
         setError("Failed to load event detail.");
+      }
+    } finally {
+      setBusyKey(null);
+    }
+  }, [workspaceId]);
+
+  const selectNarrativeCluster = useCallback(async (clusterId: string) => {
+    if (!workspaceId) return;
+    setBusyKey(`cluster:${clusterId}`);
+    setSelectedNarrativeClusterId(clusterId);
+    try {
+      const [clusterDetail, clusterTimeline, clusterGraph] = await Promise.all([
+        getIntelligenceNarrativeCluster(clusterId, { workspace_id: workspaceId }),
+        getIntelligenceNarrativeClusterTimeline(clusterId, { workspace_id: workspaceId }),
+        getIntelligenceNarrativeClusterGraph(clusterId, { workspace_id: workspaceId }),
+      ]);
+      setSelectedNarrativeClusterDetail({
+        narrativeCluster: clusterDetail.narrative_cluster,
+        memberships: clusterDetail.memberships,
+        recentEvents: clusterDetail.recent_events,
+        ledgerEntries: clusterDetail.ledger_entries,
+        operatorNotes: clusterDetail.operator_notes,
+      });
+      setSelectedNarrativeClusterTimeline(clusterTimeline.timeline);
+      setSelectedNarrativeClusterTrendSummary(clusterTimeline.trend_summary);
+      setSelectedNarrativeClusterGraph({
+        summary: clusterGraph.summary,
+        nodes: clusterGraph.nodes,
+        edges: clusterGraph.edges,
+        hotspots: clusterGraph.hotspots,
+        neighborhoods: clusterGraph.neighborhoods,
+        hotspotClusters: clusterGraph.hotspot_clusters,
+        recentEvents: clusterGraph.recent_events,
+      });
+    } catch (err) {
+      if (err instanceof ApiRequestError) {
+        setError(`${err.code}: ${err.message}`);
+      } else {
+        setError("Failed to load narrative cluster detail.");
       }
     } finally {
       setBusyKey(null);
@@ -527,8 +648,12 @@ export function IntelligenceModule() {
   }, [selectedEvent, selectedHypothesisDetail, selectEvent, workspaceId]);
 
   const updateReviewStateForNarrativeCluster = useCallback(async (clusterId: string, reviewState: EventReviewState) => {
-    const currentCluster = selectedEventDetail?.narrativeCluster ?? null;
-    if (!workspaceId || !currentCluster || !selectedEvent) return;
+    const currentCluster =
+      (selectedNarrativeClusterDetail?.narrativeCluster?.id === clusterId
+        ? selectedNarrativeClusterDetail.narrativeCluster
+        : null) ??
+      (selectedEventDetail?.narrativeCluster?.id === clusterId ? selectedEventDetail.narrativeCluster : null);
+    if (!workspaceId || !currentCluster) return;
     const reviewReason = typeof window !== "undefined" && reviewState !== "watch"
       ? window.prompt("narrative cluster review reason을 입력해라", currentCluster.reviewReason ?? "")?.trim() ?? null
       : null;
@@ -544,7 +669,7 @@ export function IntelligenceModule() {
         review_owner: reviewOwner,
         review_resolved_at: reviewState === "ignore" ? new Date().toISOString() : null,
       });
-      await selectEvent(selectedEvent.id);
+      await loadWorkspaceBundle(workspaceId);
     } catch (err) {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
@@ -554,19 +679,26 @@ export function IntelligenceModule() {
     } finally {
       setBusyKey(null);
     }
-  }, [selectedEvent, selectedEventDetail, selectEvent, workspaceId]);
+  }, [loadWorkspaceBundle, selectedEventDetail, selectedNarrativeClusterDetail, workspaceId]);
 
   const addOperatorNoteAction = useCallback(async (
     scope: OperatorNoteRecord["scope"] = "event",
     scopeId: string | null = null,
-    label = "이벤트"
+    label = "이벤트",
+    eventIdOverride: string | null = null,
   ) => {
-    if (!workspaceId || !selectedEvent) return;
+    if (!workspaceId) return;
+    const targetEventId =
+      eventIdOverride ??
+      selectedEvent?.id ??
+      selectedNarrativeClusterDetail?.recentEvents[0]?.id ??
+      null;
+    if (!targetEventId) return;
     const note = typeof window !== "undefined" ? window.prompt(`${label} 메모를 입력해라`)?.trim() : null;
     if (!note) return;
     setBusyKey(`operator-note:create:${scope}:${scopeId ?? "event"}`);
     try {
-      await createIntelligenceOperatorNote(selectedEvent.id, {
+      await createIntelligenceOperatorNote(targetEventId, {
         workspace_id: workspaceId,
         scope,
         scope_id: scopeId,
@@ -582,7 +714,44 @@ export function IntelligenceModule() {
     } finally {
       setBusyKey(null);
     }
-  }, [loadWorkspaceBundle, selectedEvent, workspaceId]);
+  }, [loadWorkspaceBundle, selectedEvent, selectedNarrativeClusterDetail, workspaceId]);
+
+  const saveRuntimeAliasBindings = useCallback(async (input: {
+    alias: IntelligenceCapabilityAlias;
+    scope: RuntimeBindingScope;
+    bindings: Array<{
+      provider: ProviderName;
+      model_id: string;
+      weight?: number;
+      fallback_rank?: number;
+      canary_percent?: number;
+      is_active?: boolean;
+      requires_structured_output?: boolean;
+      requires_tool_use?: boolean;
+      requires_long_context?: boolean;
+      max_cost_class?: "free" | "low" | "standard" | "premium" | null;
+    }>;
+  }) => {
+    if (!workspaceId) return;
+    setBusyKey(`runtime-alias:${input.scope}:${input.alias}`);
+    try {
+      await updateIntelligenceAliasBindings(input.alias, {
+        workspace_id: workspaceId,
+        scope: input.scope,
+        bindings: input.bindings,
+      });
+      await loadWorkspaceBundle(workspaceId);
+    } catch (err) {
+      if (err instanceof ApiRequestError) {
+        setError(`${err.code}: ${err.message}`);
+      } else {
+        setError("Failed to update runtime alias bindings.");
+      }
+      throw err;
+    } finally {
+      setBusyKey(null);
+    }
+  }, [loadWorkspaceBundle, workspaceId]);
 
   const pendingExecutionCount = useMemo(
     () => events.reduce((total, event) => total + event.executionCandidates.filter((candidate) => candidate.status === "pending").length, 0),
@@ -848,6 +1017,37 @@ export function IntelligenceModule() {
           note.scopeId === (selectedEventDetail?.narrativeCluster?.id ?? null),
       ),
     [selectedEventDetail],
+  );
+  const clusterInbox = useMemo(
+    () =>
+      narrativeClusters
+        .filter((cluster) => {
+          if (clusterStateFilter !== "all" && cluster.state !== clusterStateFilter) return false;
+          if (clusterReviewFilter !== "all" && cluster.reviewState !== clusterReviewFilter) return false;
+          if (clusterHotspotOnly && cluster.hotspotEventCount < 1) return false;
+          if (clusterBlockedOnly && cluster.recentExecutionBlockedCount < 1) return false;
+          return true;
+        })
+        .sort((left, right) => {
+          return (
+            right.clusterPriorityScore - left.clusterPriorityScore ||
+            Date.parse(right.updatedAt) - Date.parse(left.updatedAt)
+          );
+        }),
+    [clusterBlockedOnly, clusterHotspotOnly, clusterReviewFilter, clusterStateFilter, narrativeClusters],
+  );
+  const selectedClusterInboxNotes = useMemo(
+    () =>
+      (selectedNarrativeClusterDetail?.operatorNotes ?? []).filter(
+        (note) =>
+          note.scope === "narrative_cluster" &&
+          note.scopeId === selectedNarrativeClusterDetail?.narrativeCluster.id,
+      ),
+    [selectedNarrativeClusterDetail],
+  );
+  const selectedClusterInboxRecentEvents = useMemo(
+    () => selectedNarrativeClusterDetail?.recentEvents ?? [],
+    [selectedNarrativeClusterDetail],
   );
   const hypothesisEvidenceSummaryMap = useMemo(
     () =>
@@ -1143,6 +1343,7 @@ export function IntelligenceModule() {
                   members={selectedNarrativeClusterMembers}
                   notes={selectedNarrativeClusterNotes}
                   onSelectEvent={(eventId) => void selectEvent(eventId)}
+                  onOpenClusterInbox={(clusterId) => void selectNarrativeCluster(clusterId)}
                   onNoteClick={() => {
                     if (!selectedNarrativeCluster) return;
                     void addOperatorNoteAction("narrative_cluster", selectedNarrativeCluster.id, "narrative cluster");
@@ -1366,74 +1567,15 @@ export function IntelligenceModule() {
             </div>
           </section>
 
-          <section className="rounded-3xl border border-white/10 bg-black/35 p-4 backdrop-blur-xl">
-            <h2 className="mb-3 text-sm font-mono uppercase tracking-[0.25em] text-white/70">Model Control Plane</h2>
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                <p className="text-xs font-mono uppercase tracking-[0.2em] text-white/50">Registry</p>
-                <p className="mt-2 text-2xl font-semibold text-white">{runtime.models.length}</p>
-                <p className="mt-1 text-xs text-white/50">available model entries</p>
-              </div>
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                <p className="text-xs font-mono uppercase tracking-[0.2em] text-white/50">Alias Bindings</p>
-                <p className="mt-2 text-2xl font-semibold text-white">{runtime.aliases.workspace.length + runtime.aliases.global.length}</p>
-                <p className="mt-1 text-xs text-white/50">workspace + global bindings</p>
-              </div>
-            </div>
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                <p className="text-xs font-mono uppercase tracking-[0.2em] text-white/50">Provider Health</p>
-                <div className="mt-3 space-y-2">
-                  {runtime.providerHealth.length === 0 ? (
-                    <p className="text-xs text-white/40">No provider health telemetry yet</p>
-                  ) : (
-                    runtime.providerHealth.map((row) => (
-                      <div key={row.provider} className="rounded-xl border border-white/8 bg-black/20 px-3 py-2 text-xs text-white/70">
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="font-mono text-cyan-200">{row.provider}</span>
-                          <span className={row.available ? "text-emerald-200" : "text-amber-200"}>
-                            {row.available ? "available" : "degraded"}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-[11px] text-white/45">
-                          failures {row.failureCount} · cooldown {formatDateTime(row.cooldownUntil)} · {row.reasonCode ?? "ok"}
-                        </p>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-                <p className="text-xs font-mono uppercase tracking-[0.2em] text-white/50">Alias Rollouts</p>
-                <div className="mt-3 space-y-2">
-                  {runtime.rollouts.workspace.concat(runtime.rollouts.global).slice(0, 8).map((rollout) => (
-                    <div key={rollout.id} className="rounded-xl border border-white/8 bg-black/20 px-3 py-2 text-xs text-white/70">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-mono text-cyan-200">{rollout.alias}</span>
-                        <span className="text-white/40">{formatDateTime(rollout.createdAt)}</span>
-                      </div>
-                      <p className="mt-1 text-[11px] text-white/45">
-                        {rollout.workspaceId ? "workspace" : "global"} · bindings {rollout.bindingIds.length} · {rollout.note ?? "no note"}
-                      </p>
-                    </div>
-                  ))}
-                  {runtime.rollouts.workspace.length + runtime.rollouts.global.length === 0 ? (
-                    <p className="text-xs text-white/40">No rollout history yet</p>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-            <div className="mt-4 space-y-2">
-              {runtime.aliases.workspace.concat(runtime.aliases.global).slice(0, 12).map((binding) => (
-                <div key={binding.id} className="rounded-2xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/70">
-                  <span className="font-mono text-cyan-200">{binding.alias}</span> → {binding.provider}:{binding.modelId}
-                </div>
-              ))}
-            </div>
-          </section>
+          <RuntimeControlPlanePanel
+            runtime={runtime}
+            workspaceId={workspaceId}
+            busyKey={busyKey}
+            onSaveBindings={saveRuntimeAliasBindings}
+          />
         </section>
 
-        <section className="grid gap-6 xl:grid-cols-3">
+        <section className="grid gap-6 xl:grid-cols-4">
           <section className="rounded-3xl border border-white/10 bg-black/35 p-4 backdrop-blur-xl">
             <h2 className="mb-3 text-sm font-mono uppercase tracking-[0.25em] text-white/70">Fetch Failures</h2>
             {fetchFailureSummary.length > 0 ? (
@@ -1559,6 +1701,30 @@ export function IntelligenceModule() {
               ) : null}
             </div>
           </section>
+
+          <NarrativeClusterInboxPanel
+            clusters={clusterInbox}
+            selectedClusterId={selectedNarrativeClusterId}
+            selectedClusterDetail={selectedNarrativeClusterDetail}
+            selectedClusterTimeline={selectedNarrativeClusterTimeline}
+            selectedClusterTrendSummary={selectedNarrativeClusterTrendSummary}
+            selectedClusterGraph={selectedNarrativeClusterGraph}
+            notes={selectedClusterInboxNotes}
+            recentEvents={selectedClusterInboxRecentEvents}
+            busyKey={busyKey}
+            stateFilter={clusterStateFilter}
+            reviewFilter={clusterReviewFilter}
+            hotspotOnly={clusterHotspotOnly}
+            blockedOnly={clusterBlockedOnly}
+            onStateFilterChange={setClusterStateFilter}
+            onReviewFilterChange={setClusterReviewFilter}
+            onHotspotOnlyChange={setClusterHotspotOnly}
+            onBlockedOnlyChange={setClusterBlockedOnly}
+            onSelectCluster={(clusterId) => void selectNarrativeCluster(clusterId)}
+            onSelectEvent={(eventId) => void selectEvent(eventId)}
+            onReviewStateChange={(clusterId, state) => void updateReviewStateForNarrativeCluster(clusterId, state)}
+            onNoteClick={(clusterId, eventId) => void addOperatorNoteAction("narrative_cluster", clusterId, "narrative cluster", eventId)}
+          />
 
           <section className="rounded-3xl border border-white/10 bg-black/35 p-4 backdrop-blur-xl">
             <h2 className="mb-3 text-sm font-mono uppercase tracking-[0.25em] text-white/70">Hypothesis Drift</h2>
@@ -1856,6 +2022,7 @@ function NarrativeClusterPanel({
   members,
   notes,
   onSelectEvent,
+  onOpenClusterInbox,
   onNoteClick,
   onReviewStateChange,
   reviewBusyState,
@@ -1864,6 +2031,7 @@ function NarrativeClusterPanel({
   members: IntelligenceNarrativeClusterMemberSummary[];
   notes: OperatorNoteRecord[];
   onSelectEvent: (eventId: string) => void;
+  onOpenClusterInbox: (clusterId: string) => void;
   onNoteClick: () => void;
   onReviewStateChange: (clusterId: string, state: EventReviewState) => void;
   reviewBusyState: EventReviewState | null;
@@ -1907,6 +2075,13 @@ function NarrativeClusterPanel({
                   {reviewBusyState === state ? "..." : state}
                 </button>
               ))}
+              <button
+                type="button"
+                onClick={() => onOpenClusterInbox(cluster.id)}
+                className="rounded-lg border border-violet-300/25 bg-violet-400/10 px-2.5 py-1 text-[11px] text-violet-100"
+              >
+                cluster inbox
+              </button>
               <button
                 type="button"
                 onClick={onNoteClick}
@@ -1963,6 +2138,686 @@ function NarrativeClusterPanel({
           </div>
         </div>
       )}
+    </section>
+  );
+}
+
+type RuntimeBindingDraft = {
+  id: string;
+  provider: ProviderName;
+  modelId: string;
+  weight: number;
+  fallbackRank: number;
+  canaryPercent: number;
+  isActive: boolean;
+  requiresStructuredOutput: boolean;
+  requiresToolUse: boolean;
+  requiresLongContext: boolean;
+  maxCostClass: "free" | "low" | "standard" | "premium" | null;
+};
+
+const RUNTIME_ALIAS_OPTIONS: IntelligenceCapabilityAlias[] = [
+  "fast_triage",
+  "structured_extraction",
+  "cross_doc_linking",
+  "skeptical_critique",
+  "deep_synthesis",
+  "policy_judgment",
+  "deep_research",
+  "execution_planning",
+];
+
+const PROVIDER_OPTIONS: ProviderName[] = ["openai", "gemini", "anthropic", "local"];
+
+function toRuntimeBindingDraft(binding: IntelligenceCapabilityAliasBinding): RuntimeBindingDraft {
+  return {
+    id: binding.id,
+    provider: binding.provider,
+    modelId: binding.modelId,
+    weight: binding.weight,
+    fallbackRank: binding.fallbackRank,
+    canaryPercent: binding.canaryPercent,
+    isActive: binding.isActive,
+    requiresStructuredOutput: binding.requiresStructuredOutput,
+    requiresToolUse: binding.requiresToolUse,
+    requiresLongContext: binding.requiresLongContext,
+    maxCostClass: binding.maxCostClass,
+  };
+}
+
+function createEmptyRuntimeBindingDraft(provider: ProviderName, modelId = ""): RuntimeBindingDraft {
+  return {
+    id: `draft-${provider}-${modelId || "new"}`,
+    provider,
+    modelId,
+    weight: 1,
+    fallbackRank: 1,
+    canaryPercent: 0,
+    isActive: true,
+    requiresStructuredOutput: false,
+    requiresToolUse: false,
+    requiresLongContext: false,
+    maxCostClass: null,
+  };
+}
+
+function serializeRuntimeBindingDrafts(drafts: RuntimeBindingDraft[]): string {
+  return JSON.stringify(
+    drafts
+      .map((draft) => ({
+        provider: draft.provider,
+        modelId: draft.modelId,
+        weight: Number(draft.weight.toFixed(3)),
+        fallbackRank: draft.fallbackRank,
+        canaryPercent: draft.canaryPercent,
+        isActive: draft.isActive,
+        requiresStructuredOutput: draft.requiresStructuredOutput,
+        requiresToolUse: draft.requiresToolUse,
+        requiresLongContext: draft.requiresLongContext,
+        maxCostClass: draft.maxCostClass,
+      }))
+      .sort((left, right) => left.fallbackRank - right.fallbackRank || left.provider.localeCompare(right.provider)),
+  );
+}
+
+function RuntimeControlPlanePanel({
+  runtime,
+  workspaceId,
+  busyKey,
+  onSaveBindings,
+}: {
+  runtime: RuntimeSnapshot;
+  workspaceId: string | null;
+  busyKey: string | null;
+  onSaveBindings: (input: {
+    alias: IntelligenceCapabilityAlias;
+    scope: RuntimeBindingScope;
+    bindings: Array<{
+      provider: ProviderName;
+      model_id: string;
+      weight?: number;
+      fallback_rank?: number;
+      canary_percent?: number;
+      is_active?: boolean;
+      requires_structured_output?: boolean;
+      requires_tool_use?: boolean;
+      requires_long_context?: boolean;
+      max_cost_class?: "free" | "low" | "standard" | "premium" | null;
+    }>;
+  }) => Promise<void>;
+}) {
+  const [scope, setScope] = useState<RuntimeBindingScope>("workspace");
+  const [alias, setAlias] = useState<IntelligenceCapabilityAlias>("structured_extraction");
+  const [drafts, setDrafts] = useState<RuntimeBindingDraft[]>([]);
+  const availableBindings = scope === "workspace" ? runtime.aliases.workspace : runtime.aliases.global;
+  const aliasBindings = useMemo(
+    () => availableBindings.filter((binding) => binding.alias === alias).sort((left, right) => left.fallbackRank - right.fallbackRank),
+    [alias, availableBindings],
+  );
+  const modelIdsByProvider = useMemo(() => {
+    const next = new Map<ProviderName, string[]>();
+    for (const provider of PROVIDER_OPTIONS) {
+      const values = runtime.models
+        .filter((row) => row.provider === provider)
+        .map((row) => row.modelId);
+      next.set(provider, [...new Set(values)].sort());
+    }
+    return next;
+  }, [runtime.models]);
+  const baselineSerialized = useMemo(
+    () => serializeRuntimeBindingDrafts(aliasBindings.map(toRuntimeBindingDraft)),
+    [aliasBindings],
+  );
+  const draftSerialized = useMemo(() => serializeRuntimeBindingDrafts(drafts), [drafts]);
+  const dirty = baselineSerialized !== draftSerialized;
+  const effectiveBusyKey = `runtime-alias:${scope}:${alias}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    const nextDrafts =
+      aliasBindings.length > 0
+        ? aliasBindings.map(toRuntimeBindingDraft)
+        : [createEmptyRuntimeBindingDraft("openai", modelIdsByProvider.get("openai")?.[0] ?? "")];
+    queueMicrotask(() => {
+      if (!cancelled) {
+        setDrafts(nextDrafts);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [alias, aliasBindings, modelIdsByProvider, scope]);
+
+  const updateDraft = useCallback((index: number, patch: Partial<RuntimeBindingDraft>) => {
+    setDrafts((current) =>
+      current.map((draft, draftIndex) => (draftIndex === index ? { ...draft, ...patch } : draft)),
+    );
+  }, []);
+
+  const addDraft = useCallback(() => {
+    const provider: ProviderName = "openai";
+    const modelId = modelIdsByProvider.get(provider)?.[0] ?? "";
+    setDrafts((current) => [
+      ...current,
+      createEmptyRuntimeBindingDraft(provider, modelId),
+    ]);
+  }, [modelIdsByProvider]);
+
+  const removeDraft = useCallback((index: number) => {
+    setDrafts((current) => (current.length > 1 ? current.filter((_, draftIndex) => draftIndex !== index) : current));
+  }, []);
+
+  const submit = useCallback(async () => {
+    const normalized = drafts
+      .map((draft, index) => ({
+        provider: draft.provider,
+        model_id: draft.modelId.trim(),
+        weight: draft.weight,
+        fallback_rank: index + 1,
+        canary_percent: draft.canaryPercent,
+        is_active: draft.isActive,
+        requires_structured_output: draft.requiresStructuredOutput,
+        requires_tool_use: draft.requiresToolUse,
+        requires_long_context: draft.requiresLongContext,
+        max_cost_class: draft.maxCostClass,
+      }))
+      .filter((draft) => draft.model_id.length > 0);
+    if (normalized.length === 0) {
+      return;
+    }
+    await onSaveBindings({
+      alias,
+      scope,
+      bindings: normalized,
+    });
+  }, [alias, drafts, onSaveBindings, scope]);
+
+  return (
+    <section className="rounded-3xl border border-white/10 bg-black/35 p-4 backdrop-blur-xl">
+      <h2 className="mb-3 text-sm font-mono uppercase tracking-[0.25em] text-white/70">Model Control Plane</h2>
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+          <p className="text-xs font-mono uppercase tracking-[0.2em] text-white/50">Registry</p>
+          <p className="mt-2 text-2xl font-semibold text-white">{runtime.models.length}</p>
+          <p className="mt-1 text-xs text-white/50">available model entries</p>
+        </div>
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+          <p className="text-xs font-mono uppercase tracking-[0.2em] text-white/50">Alias Bindings</p>
+          <p className="mt-2 text-2xl font-semibold text-white">{runtime.aliases.workspace.length + runtime.aliases.global.length}</p>
+          <p className="mt-1 text-xs text-white/50">workspace + global bindings</p>
+        </div>
+      </div>
+      <div className="mt-4 grid gap-4 md:grid-cols-2">
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+          <p className="text-xs font-mono uppercase tracking-[0.2em] text-white/50">Provider Health</p>
+          <div className="mt-3 space-y-2">
+            {runtime.providerHealth.length === 0 ? (
+              <p className="text-xs text-white/40">No provider health telemetry yet</p>
+            ) : (
+              runtime.providerHealth.map((row) => (
+                <div key={row.provider} className="rounded-xl border border-white/8 bg-black/20 px-3 py-2 text-xs text-white/70">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-mono text-cyan-200">{row.provider}</span>
+                    <span className={row.available ? "text-emerald-200" : "text-amber-200"}>
+                      {row.available ? "available" : "degraded"}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-white/45">
+                    failures {row.failureCount} · cooldown {formatDateTime(row.cooldownUntil)} · {row.reasonCode ?? "ok"}
+                  </p>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+          <p className="text-xs font-mono uppercase tracking-[0.2em] text-white/50">Alias Rollouts</p>
+          <div className="mt-3 space-y-2">
+            {runtime.rollouts.workspace.concat(runtime.rollouts.global).slice(0, 8).map((rollout) => (
+              <div key={rollout.id} className="rounded-xl border border-white/8 bg-black/20 px-3 py-2 text-xs text-white/70">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-cyan-200">{rollout.alias}</span>
+                  <span className="text-white/40">{formatDateTime(rollout.createdAt)}</span>
+                </div>
+                <p className="mt-1 text-[11px] text-white/45">
+                  {rollout.workspaceId ? "workspace" : "global"} · bindings {rollout.bindingIds.length} · {rollout.note ?? "no note"}
+                </p>
+              </div>
+            ))}
+            {runtime.rollouts.workspace.length + runtime.rollouts.global.length === 0 ? (
+              <p className="text-xs text-white/40">No rollout history yet</p>
+            ) : null}
+          </div>
+        </div>
+      </div>
+      <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+        <div className="grid gap-3 md:grid-cols-3">
+          <label className="space-y-1 text-[11px] text-white/55">
+            <span className="font-mono uppercase tracking-[0.18em]">Alias</span>
+            <select
+              value={alias}
+              onChange={(event) => setAlias(event.target.value as IntelligenceCapabilityAlias)}
+              className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
+            >
+              {RUNTIME_ALIAS_OPTIONS.map((value) => (
+                <option key={value} value={value} className="bg-slate-900">{value}</option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1 text-[11px] text-white/55">
+            <span className="font-mono uppercase tracking-[0.18em]">Scope</span>
+            <select
+              value={scope}
+              onChange={(event) => setScope(event.target.value as RuntimeBindingScope)}
+              className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
+            >
+              <option value="workspace" className="bg-slate-900">workspace</option>
+              <option value="global" className="bg-slate-900">global</option>
+            </select>
+          </label>
+          <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/60">
+            <p className="font-mono uppercase tracking-[0.18em] text-white/40">Diff Preview</p>
+            <p className="mt-2">workspace {workspaceId ?? "—"}</p>
+            <p className="mt-1">baseline {aliasBindings.length} · draft {drafts.length} · {dirty ? "changed" : "clean"}</p>
+          </div>
+        </div>
+        <div className="mt-4 space-y-3">
+          {drafts.map((draft, index) => {
+            const availableModelIds = modelIdsByProvider.get(draft.provider) ?? [];
+            return (
+              <div key={draft.id} className="rounded-2xl border border-white/10 bg-black/20 p-3">
+                <div className="grid gap-3 lg:grid-cols-4">
+                  <label className="space-y-1 text-[11px] text-white/55">
+                    <span className="font-mono uppercase tracking-[0.18em]">Provider</span>
+                    <select
+                      value={draft.provider}
+                      onChange={(event) => {
+                        const nextProvider = event.target.value as ProviderName;
+                        const nextModel = modelIdsByProvider.get(nextProvider)?.[0] ?? draft.modelId;
+                        updateDraft(index, { provider: nextProvider, modelId: nextModel });
+                      }}
+                      className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
+                    >
+                      {PROVIDER_OPTIONS.map((provider) => (
+                        <option key={provider} value={provider} className="bg-slate-900">{provider}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="space-y-1 text-[11px] text-white/55">
+                    <span className="font-mono uppercase tracking-[0.18em]">Model</span>
+                    <select
+                      value={draft.modelId}
+                      onChange={(event) => updateDraft(index, { modelId: event.target.value })}
+                      className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
+                    >
+                      {availableModelIds.length === 0 ? (
+                        <option value="" className="bg-slate-900">no models</option>
+                      ) : null}
+                      {availableModelIds.map((modelId) => (
+                        <option key={modelId} value={modelId} className="bg-slate-900">{modelId}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="space-y-1 text-[11px] text-white/55">
+                    <span className="font-mono uppercase tracking-[0.18em]">Weight</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={10}
+                      step={0.05}
+                      value={draft.weight}
+                      onChange={(event) => updateDraft(index, { weight: Number(event.target.value) })}
+                      className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
+                    />
+                  </label>
+                  <label className="space-y-1 text-[11px] text-white/55">
+                    <span className="font-mono uppercase tracking-[0.18em]">Canary %</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={draft.canaryPercent}
+                      onChange={(event) => updateDraft(index, { canaryPercent: Number(event.target.value) })}
+                      className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
+                    />
+                  </label>
+                </div>
+                <div className="mt-3 grid gap-3 lg:grid-cols-4">
+                  <label className="space-y-1 text-[11px] text-white/55">
+                    <span className="font-mono uppercase tracking-[0.18em]">Fallback Rank</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={10}
+                      step={1}
+                      value={draft.fallbackRank}
+                      onChange={(event) => updateDraft(index, { fallbackRank: Number(event.target.value) })}
+                      className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
+                    />
+                  </label>
+                  <label className="space-y-1 text-[11px] text-white/55">
+                    <span className="font-mono uppercase tracking-[0.18em]">Max Cost</span>
+                    <select
+                      value={draft.maxCostClass ?? "none"}
+                      onChange={(event) =>
+                        updateDraft(index, {
+                          maxCostClass: event.target.value === "none" ? null : event.target.value as RuntimeBindingDraft["maxCostClass"],
+                        })
+                      }
+                      className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
+                    >
+                      <option value="none" className="bg-slate-900">none</option>
+                      <option value="free" className="bg-slate-900">free</option>
+                      <option value="low" className="bg-slate-900">low</option>
+                      <option value="standard" className="bg-slate-900">standard</option>
+                      <option value="premium" className="bg-slate-900">premium</option>
+                    </select>
+                  </label>
+                  <div className="col-span-2 flex flex-wrap items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-white/65">
+                    <label className="inline-flex items-center gap-2">
+                      <input type="checkbox" checked={draft.isActive} onChange={(event) => updateDraft(index, { isActive: event.target.checked })} />
+                      active
+                    </label>
+                    <label className="inline-flex items-center gap-2">
+                      <input type="checkbox" checked={draft.requiresStructuredOutput} onChange={(event) => updateDraft(index, { requiresStructuredOutput: event.target.checked })} />
+                      structured
+                    </label>
+                    <label className="inline-flex items-center gap-2">
+                      <input type="checkbox" checked={draft.requiresToolUse} onChange={(event) => updateDraft(index, { requiresToolUse: event.target.checked })} />
+                      tool use
+                    </label>
+                    <label className="inline-flex items-center gap-2">
+                      <input type="checkbox" checked={draft.requiresLongContext} onChange={(event) => updateDraft(index, { requiresLongContext: event.target.checked })} />
+                      long context
+                    </label>
+                  </div>
+                </div>
+                <div className="mt-3 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => removeDraft(index)}
+                    disabled={drafts.length <= 1}
+                    className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-white/70 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    remove
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-[11px] text-white/45">
+            수정은 additive rollout로 저장된다. global 편집도 backend 권한 검사를 그대로 탄다.
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={addDraft}
+              className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] text-white/70"
+            >
+              add binding
+            </button>
+            <button
+              type="button"
+              onClick={() => void submit()}
+              disabled={!workspaceId || !dirty || busyKey === effectiveBusyKey}
+              className="rounded-lg border border-cyan-300/40 bg-cyan-400/10 px-3 py-1.5 text-[11px] text-cyan-100 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {busyKey === effectiveBusyKey ? "saving..." : "save bindings"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function NarrativeClusterInboxPanel({
+  clusters,
+  selectedClusterId,
+  selectedClusterDetail,
+  selectedClusterTimeline,
+  selectedClusterTrendSummary,
+  selectedClusterGraph,
+  notes,
+  recentEvents,
+  busyKey,
+  stateFilter,
+  reviewFilter,
+  hotspotOnly,
+  blockedOnly,
+  onStateFilterChange,
+  onReviewFilterChange,
+  onHotspotOnlyChange,
+  onBlockedOnlyChange,
+  onSelectCluster,
+  onSelectEvent,
+  onReviewStateChange,
+  onNoteClick,
+}: {
+  clusters: IntelligenceNarrativeClusterRecord[];
+  selectedClusterId: string | null;
+  selectedClusterDetail: SelectedNarrativeClusterDetail | null;
+  selectedClusterTimeline: IntelligenceNarrativeClusterTimelineRecord[];
+  selectedClusterTrendSummary: IntelligenceNarrativeClusterTrendSummary | null;
+  selectedClusterGraph: SelectedNarrativeClusterGraph | null;
+  notes: OperatorNoteRecord[];
+  recentEvents: IntelligenceEventClusterRecord[];
+  busyKey: string | null;
+  stateFilter: "all" | "forming" | "recurring" | "diverging";
+  reviewFilter: "all" | EventReviewState;
+  hotspotOnly: boolean;
+  blockedOnly: boolean;
+  onStateFilterChange: (value: "all" | "forming" | "recurring" | "diverging") => void;
+  onReviewFilterChange: (value: "all" | EventReviewState) => void;
+  onHotspotOnlyChange: (value: boolean) => void;
+  onBlockedOnlyChange: (value: boolean) => void;
+  onSelectCluster: (clusterId: string) => void;
+  onSelectEvent: (eventId: string) => void;
+  onReviewStateChange: (clusterId: string, state: EventReviewState) => void;
+  onNoteClick: (clusterId: string, eventId: string | null) => void;
+}) {
+  const activeCluster = selectedClusterDetail?.narrativeCluster ?? null;
+  return (
+    <section className="rounded-3xl border border-white/10 bg-black/35 p-4 backdrop-blur-xl">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 className="text-sm font-mono uppercase tracking-[0.25em] text-white/70">Narrative Cluster Inbox</h2>
+        <span className="text-xs text-white/45">{clusters.length} clusters</span>
+      </div>
+      <div className="mb-4 grid gap-3 md:grid-cols-2">
+        <label className="space-y-1 text-[11px] text-white/55">
+          <span className="font-mono uppercase tracking-[0.18em]">State</span>
+          <select
+            value={stateFilter}
+            onChange={(event) => onStateFilterChange(event.target.value as "all" | "forming" | "recurring" | "diverging")}
+            className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
+          >
+            {["all", "forming", "recurring", "diverging"].map((value) => (
+              <option key={value} value={value} className="bg-slate-900">{value}</option>
+            ))}
+          </select>
+        </label>
+        <label className="space-y-1 text-[11px] text-white/55">
+          <span className="font-mono uppercase tracking-[0.18em]">Review</span>
+          <select
+            value={reviewFilter}
+            onChange={(event) => onReviewFilterChange(event.target.value as "all" | EventReviewState)}
+            className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
+          >
+            {["all", "watch", "review", "ignore"].map((value) => (
+              <option key={value} value={value} className="bg-slate-900">{value}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="mb-4 flex flex-wrap gap-2 text-[11px] text-white/60">
+        <button
+          type="button"
+          onClick={() => onHotspotOnlyChange(!hotspotOnly)}
+          className={`rounded-full border px-3 py-1 ${hotspotOnly ? "border-rose-300/40 bg-rose-500/10 text-rose-100" : "border-white/10 bg-white/[0.04] text-white/60"}`}
+        >
+          hotspot only
+        </button>
+        <button
+          type="button"
+          onClick={() => onBlockedOnlyChange(!blockedOnly)}
+          className={`rounded-full border px-3 py-1 ${blockedOnly ? "border-amber-300/40 bg-amber-500/10 text-amber-100" : "border-white/10 bg-white/[0.04] text-white/60"}`}
+        >
+          blocked only
+        </button>
+      </div>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,280px)_minmax(0,1fr)]">
+        <div className="space-y-2">
+          {clusters.length === 0 ? (
+            <p className="text-xs text-white/40">No narrative clusters</p>
+          ) : (
+            clusters.map((cluster) => {
+              const active = cluster.id === selectedClusterId;
+              return (
+                <button
+                  key={cluster.id}
+                  type="button"
+                  onClick={() => onSelectCluster(cluster.id)}
+                  className={`w-full rounded-2xl border p-3 text-left ${active ? "border-violet-300/50 bg-violet-500/10" : "border-white/10 bg-white/[0.03]"}`}
+                >
+                  <p className="text-sm text-white">{cluster.title}</p>
+                  <p className="mt-1 text-[11px] text-white/45">
+                    priority {cluster.clusterPriorityScore} · {cluster.state} · review {cluster.reviewState}
+                  </p>
+                  <p className="mt-1 text-[11px] text-white/35">
+                    drift {cluster.driftScore.toFixed(2)} · contradiction {cluster.contradictionScore.toFixed(2)} · hotspot {cluster.hotspotEventCount} · blocked {cluster.recentExecutionBlockedCount}
+                  </p>
+                  <p className="mt-1 text-[11px] text-white/35">
+                    recur trend {cluster.recurringStrengthTrend.toFixed(2)} · div trend {cluster.divergenceTrend.toFixed(2)} · decay {cluster.supportDecayScore.toFixed(2)} · accel {cluster.contradictionAcceleration.toFixed(2)}
+                  </p>
+                </button>
+              );
+            })
+          )}
+        </div>
+        <div className="space-y-3">
+          {!activeCluster ? (
+            <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-6 text-sm text-white/45">
+              cluster를 선택하면 timeline, ledger, recent event, graph hotspot을 볼 수 있다.
+            </div>
+          ) : (
+            <>
+              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-white">{activeCluster.title}</p>
+                    <p className="mt-1 text-[11px] text-white/45">
+                      priority {activeCluster.clusterPriorityScore} · {activeCluster.state} · review {activeCluster.reviewState}
+                    </p>
+                    <p className="mt-1 text-[11px] text-white/35">
+                      drift {activeCluster.driftScore.toFixed(2)} · support {activeCluster.supportScore.toFixed(2)} · contradiction {activeCluster.contradictionScore.toFixed(2)} · time {activeCluster.timeCoherenceScore.toFixed(2)}
+                    </p>
+                    <p className="mt-1 text-[11px] text-white/35">
+                      events {activeCluster.eventCount} · recurring {activeCluster.recurringEventCount} · diverging {activeCluster.divergingEventCount} · blocked {activeCluster.recentExecutionBlockedCount}
+                    </p>
+                    <p className="mt-1 text-[11px] text-white/35">
+                      recur trend {activeCluster.recurringStrengthTrend.toFixed(2)} · div trend {activeCluster.divergenceTrend.toFixed(2)} · support decay {activeCluster.supportDecayScore.toFixed(2)} · contradiction accel {activeCluster.contradictionAcceleration.toFixed(2)}
+                    </p>
+                    <p className="mt-1 text-[11px] text-white/35">
+                      last recurring {formatDateTime(activeCluster.lastRecurringAt)} · last diverging {formatDateTime(activeCluster.lastDivergingAt)}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    {(["watch", "review", "ignore"] as EventReviewState[]).map((state) => (
+                      <button
+                        key={`${activeCluster.id}-${state}`}
+                        type="button"
+                        onClick={() => onReviewStateChange(activeCluster.id, state)}
+                        className={`rounded-lg border px-2.5 py-1 text-[11px] ${
+                          activeCluster.reviewState === state
+                            ? "border-cyan-300/60 bg-cyan-400/10 text-cyan-100"
+                            : "border-white/10 bg-white/[0.04] text-white/65"
+                        }`}
+                      >
+                        {busyKey === `narrative-cluster-review:${activeCluster.id}:${state}` ? "..." : state}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => onNoteClick(activeCluster.id, recentEvents[0]?.id ?? null)}
+                      className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-white/70"
+                    >
+                      {busyKey === `operator-note:create:narrative_cluster:${activeCluster.id}` ? "..." : "note"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <DetailBlock
+                  title="Cluster Timeline"
+                  items={selectedClusterTimeline.map((entry) => `${formatDateTime(entry.bucketStart)} · events ${entry.eventCount} · recurring ${entry.recurringScore.toFixed(2)} · drift ${entry.driftScore.toFixed(2)} · contradiction ${entry.contradictionScore.toFixed(2)} · hotspot ${entry.hotspotEventCount}`)}
+                />
+                <DetailBlock
+                  title="Cluster Ledger"
+                  items={(selectedClusterDetail?.ledgerEntries ?? []).map((entry) => `${entry.entryType} · ${entry.summary} · Δ ${entry.scoreDelta.toFixed(2)} · ${formatDateTime(entry.createdAt)}`)}
+                />
+              </div>
+              {selectedClusterTrendSummary ? (
+                <DetailBlock
+                  title="Trend Summary"
+                  items={[
+                    `recurring trend ${selectedClusterTrendSummary.recurring_strength_trend.toFixed(2)} · divergence trend ${selectedClusterTrendSummary.divergence_trend.toFixed(2)}`,
+                    `support decay ${selectedClusterTrendSummary.support_decay_score.toFixed(2)} · contradiction acceleration ${selectedClusterTrendSummary.contradiction_acceleration.toFixed(2)}`,
+                    `last recurring ${formatDateTime(selectedClusterTrendSummary.last_recurring_at)} · last diverging ${formatDateTime(selectedClusterTrendSummary.last_diverging_at)}`,
+                  ]}
+                />
+              ) : null}
+              <div className="grid gap-3 md:grid-cols-2">
+                <DetailBlock
+                  title="Recent Events"
+                  items={recentEvents.map((event) => `${event.title} · ${event.temporalNarrativeState ?? "new"} · graph +${event.graphSupportScore.toFixed(2)} / -${event.graphContradictionScore.toFixed(2)} / hot ${event.graphHotspotCount}`)}
+                />
+                <DetailBlock
+                  title="Cluster Graph"
+                  items={
+                    selectedClusterGraph
+                      ? [
+                          `linked claims ${selectedClusterGraph.summary.linkedClaimCount} · edges ${selectedClusterGraph.summary.edgeCount}`,
+                          `support ${selectedClusterGraph.summary.graphSupportScore.toFixed(2)} · contradiction ${selectedClusterGraph.summary.graphContradictionScore.toFixed(2)} · hotspots ${selectedClusterGraph.summary.graphHotspotCount}`,
+                          ...selectedClusterGraph.hotspotClusters.slice(0, 4).map((cluster) => `${cluster.label} · hotspot ${cluster.hotspotScore.toFixed(2)} · members ${cluster.memberLinkedClaimIds.length}`),
+                        ]
+                      : []
+                  }
+                />
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="text-xs font-mono uppercase tracking-[0.2em] text-white/60">Cluster Memberships</h3>
+                  <span className="text-[11px] text-white/45">{selectedClusterDetail?.memberships.length ?? 0}</span>
+                </div>
+                <div className="space-y-2">
+                  {(selectedClusterDetail?.memberships ?? []).map((member) => (
+                    <button
+                      key={member.membershipId}
+                      type="button"
+                      onClick={() => onSelectEvent(member.eventId)}
+                      className="w-full rounded-xl border border-white/8 bg-black/25 px-3 py-3 text-left text-xs text-white/70"
+                    >
+                      <p className="text-white/85">{member.title}</p>
+                      <p className="mt-1 text-[11px] text-white/45">
+                        {member.relation} · score {member.score.toFixed(2)} · days Δ {member.daysDelta ?? "—"} · time {member.timeCoherenceScore.toFixed(2)}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {notes.length > 0 ? (
+                <DetailBlock
+                  title="Cluster Notes"
+                  items={notes.map((note) => `${formatDateTime(note.createdAt)} · ${note.note}`)}
+                />
+              ) : null}
+            </>
+          )}
+        </div>
+      </div>
     </section>
   );
 }

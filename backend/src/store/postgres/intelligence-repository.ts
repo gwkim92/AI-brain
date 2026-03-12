@@ -15,8 +15,10 @@ import type {
   IntelligenceEventGraphSummary,
   IntelligenceExpectedSignalEntryRecord,
   IntelligenceInvalidationEntryRecord,
+  IntelligenceNarrativeClusterLedgerEntryRecord,
   IntelligenceNarrativeClusterMembershipRecord,
   IntelligenceNarrativeClusterRecord,
+  IntelligenceNarrativeClusterTimelineRecord,
   IntelligenceOutcomeEntryRecord,
   IntelligenceTemporalNarrativeLedgerEntryRecord,
   HypothesisEvidenceLink,
@@ -54,6 +56,8 @@ import type {
   IntelligenceOutcomeEntryRow,
   IntelligenceNarrativeClusterMembershipRow,
   IntelligenceNarrativeClusterRow,
+  IntelligenceNarrativeClusterLedgerEntryRow,
+  IntelligenceNarrativeClusterTimelineRow,
   IntelligenceTemporalNarrativeLedgerEntryRow,
   IntelligenceOperatorNoteRow,
   IntelligenceProviderHealthRow,
@@ -503,13 +507,22 @@ function mapNarrativeClusterRow(row: IntelligenceNarrativeClusterRow): Intellige
     supportScore: Number(row.support_score),
     contradictionScore: Number(row.contradiction_score),
     timeCoherenceScore: Number(row.time_coherence_score),
+    recurringStrengthTrend: Number(row.recurring_strength_trend),
+    divergenceTrend: Number(row.divergence_trend),
+    supportDecayScore: Number(row.support_decay_score),
+    contradictionAcceleration: Number(row.contradiction_acceleration),
+    clusterPriorityScore: row.cluster_priority_score,
+    recentExecutionBlockedCount: row.recent_execution_blocked_count,
     reviewState: row.review_state,
     reviewReason: row.review_reason,
     reviewOwner: row.review_owner,
     reviewUpdatedAt: toIso(row.review_updated_at),
     reviewUpdatedBy: row.review_updated_by,
     reviewResolvedAt: toIso(row.review_resolved_at),
+    lastLedgerAt: toIso(row.last_ledger_at),
     lastEventAt: toIso(row.last_event_at),
+    lastRecurringAt: toIso(row.last_recurring_at),
+    lastDivergingAt: toIso(row.last_diverging_at),
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
@@ -549,6 +562,41 @@ function mapTemporalNarrativeLedgerEntryRow(
     graphContradictionScore: Number(row.graph_contradiction_score),
     graphHotspotCount: row.graph_hotspot_count,
     timeCoherenceScore: Number(row.time_coherence_score),
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+function mapNarrativeClusterLedgerEntryRow(
+  row: IntelligenceNarrativeClusterLedgerEntryRow,
+): IntelligenceNarrativeClusterLedgerEntryRecord {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    clusterId: row.cluster_id,
+    entryType: row.entry_type,
+    summary: row.summary,
+    scoreDelta: Number(row.score_delta),
+    sourceEventIds: normalizeStringArray(row.source_event_ids_json),
+    createdAt: row.created_at.toISOString(),
+  };
+}
+
+function mapNarrativeClusterTimelineRow(
+  row: IntelligenceNarrativeClusterTimelineRow,
+): IntelligenceNarrativeClusterTimelineRecord {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    clusterId: row.cluster_id,
+    bucketStart: row.bucket_start.toISOString(),
+    eventCount: row.event_count,
+    recurringScore: Number(row.recurring_score),
+    driftScore: Number(row.drift_score),
+    supportScore: Number(row.support_score),
+    contradictionScore: Number(row.contradiction_score),
+    timeCoherenceScore: Number(row.time_coherence_score),
+    hotspotEventCount: row.hotspot_event_count,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
@@ -1836,11 +1884,13 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
            id, workspace_id, cluster_key, title, event_family, top_domain_id, anchor_entities_json, state,
            event_count, recurring_event_count, diverging_event_count, supportive_history_count, hotspot_event_count,
            latest_recurring_score, drift_score, support_score, contradiction_score, time_coherence_score,
+           recurring_strength_trend, divergence_trend, support_decay_score, contradiction_acceleration,
+           cluster_priority_score, recent_execution_blocked_count,
            review_state, review_reason, review_owner, review_updated_at, review_updated_by, review_resolved_at,
-           last_event_at
+           last_ledger_at, last_event_at, last_recurring_at, last_diverging_at
          ) VALUES (
-           $1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
-           $22::timestamptz,$23,$24::timestamptz,$25::timestamptz
+           $1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,
+           $25,$26,$27,$28::timestamptz,$29,$30::timestamptz,$31::timestamptz,$32::timestamptz,$33::timestamptz
          )
          ON CONFLICT (workspace_id, cluster_key) DO UPDATE SET
            title = EXCLUDED.title,
@@ -1858,13 +1908,22 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
            support_score = EXCLUDED.support_score,
            contradiction_score = EXCLUDED.contradiction_score,
            time_coherence_score = EXCLUDED.time_coherence_score,
+           recurring_strength_trend = EXCLUDED.recurring_strength_trend,
+           divergence_trend = EXCLUDED.divergence_trend,
+           support_decay_score = EXCLUDED.support_decay_score,
+           contradiction_acceleration = EXCLUDED.contradiction_acceleration,
+           cluster_priority_score = EXCLUDED.cluster_priority_score,
+           recent_execution_blocked_count = EXCLUDED.recent_execution_blocked_count,
            review_state = COALESCE(EXCLUDED.review_state, intelligence_narrative_clusters.review_state),
            review_reason = COALESCE(EXCLUDED.review_reason, intelligence_narrative_clusters.review_reason),
            review_owner = COALESCE(EXCLUDED.review_owner, intelligence_narrative_clusters.review_owner),
            review_updated_at = COALESCE(EXCLUDED.review_updated_at, intelligence_narrative_clusters.review_updated_at),
            review_updated_by = COALESCE(EXCLUDED.review_updated_by, intelligence_narrative_clusters.review_updated_by),
            review_resolved_at = COALESCE(EXCLUDED.review_resolved_at, intelligence_narrative_clusters.review_resolved_at),
+           last_ledger_at = EXCLUDED.last_ledger_at,
            last_event_at = EXCLUDED.last_event_at,
+           last_recurring_at = EXCLUDED.last_recurring_at,
+           last_diverging_at = EXCLUDED.last_diverging_at,
            updated_at = now()
          RETURNING *`,
         [
@@ -1886,13 +1945,22 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
           input.supportScore,
           input.contradictionScore,
           input.timeCoherenceScore,
+          input.recurringStrengthTrend,
+          input.divergenceTrend,
+          input.supportDecayScore,
+          input.contradictionAcceleration,
+          input.clusterPriorityScore,
+          input.recentExecutionBlockedCount,
           input.reviewState ?? 'watch',
           input.reviewReason ?? null,
           input.reviewOwner ?? null,
           input.reviewUpdatedAt ?? null,
           input.reviewUpdatedBy ?? null,
           input.reviewResolvedAt ?? null,
+          input.lastLedgerAt ?? null,
           input.lastEventAt ?? null,
+          input.lastRecurringAt ?? null,
+          input.lastDivergingAt ?? null,
         ],
       );
       return mapNarrativeClusterRow(rows[0]!);
@@ -1917,6 +1985,15 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
         [input.workspaceId, input.clusterId],
       );
       return rows[0] ? mapNarrativeClusterRow(rows[0]) : null;
+    },
+
+    async deleteIntelligenceNarrativeCluster(input) {
+      const result = await pool.query(
+        `DELETE FROM intelligence_narrative_clusters
+         WHERE workspace_id = $1 AND id = $2`,
+        [input.workspaceId, input.clusterId],
+      );
+      return (result.rowCount ?? 0) > 0;
     },
 
     async updateIntelligenceNarrativeClusterReviewState(input) {
@@ -2036,6 +2113,84 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
         [input.workspaceId, input.eventId],
       );
       return rows.map(mapTemporalNarrativeLedgerEntryRow);
+    },
+
+    async createIntelligenceNarrativeClusterLedgerEntry(input) {
+      const { rows } = await pool.query<IntelligenceNarrativeClusterLedgerEntryRow>(
+        `INSERT INTO intelligence_narrative_cluster_ledger (
+           id, workspace_id, cluster_id, entry_type, summary, score_delta, source_event_ids_json
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
+         RETURNING *`,
+        [
+          input.id ?? null,
+          input.workspaceId,
+          input.clusterId,
+          input.entryType,
+          input.summary,
+          input.scoreDelta,
+          JSON.stringify(input.sourceEventIds),
+        ],
+      );
+      return mapNarrativeClusterLedgerEntryRow(rows[0]!);
+    },
+
+    async listIntelligenceNarrativeClusterLedgerEntries(input) {
+      const params: unknown[] = [input.workspaceId, input.clusterId];
+      let limitSql = '';
+      if (input.limit) {
+        params.push(input.limit);
+        limitSql = ` LIMIT $${params.length}`;
+      }
+      const { rows } = await pool.query<IntelligenceNarrativeClusterLedgerEntryRow>(
+        `SELECT * FROM intelligence_narrative_cluster_ledger
+         WHERE workspace_id = $1 AND cluster_id = $2
+         ORDER BY created_at DESC${limitSql}`,
+        params,
+      );
+      return rows.map(mapNarrativeClusterLedgerEntryRow);
+    },
+
+    async replaceIntelligenceNarrativeClusterTimelineEntries(input) {
+      await pool.query(
+        `DELETE FROM intelligence_narrative_cluster_timeline
+         WHERE workspace_id = $1 AND cluster_id = $2`,
+        [input.workspaceId, input.clusterId],
+      );
+      const rows: IntelligenceNarrativeClusterTimelineRecord[] = [];
+      for (const entry of input.entries) {
+        const result = await pool.query<IntelligenceNarrativeClusterTimelineRow>(
+          `INSERT INTO intelligence_narrative_cluster_timeline (
+             id, workspace_id, cluster_id, bucket_start, event_count, recurring_score, drift_score, support_score,
+             contradiction_score, time_coherence_score, hotspot_event_count
+           ) VALUES ($1,$2,$3,$4::timestamptz,$5,$6,$7,$8,$9,$10,$11)
+           RETURNING *`,
+          [
+            entry.id ?? null,
+            input.workspaceId,
+            input.clusterId,
+            entry.bucketStart,
+            entry.eventCount,
+            entry.recurringScore,
+            entry.driftScore,
+            entry.supportScore,
+            entry.contradictionScore,
+            entry.timeCoherenceScore,
+            entry.hotspotEventCount,
+          ],
+        );
+        rows.push(mapNarrativeClusterTimelineRow(result.rows[0]!));
+      }
+      return rows;
+    },
+
+    async listIntelligenceNarrativeClusterTimelineEntries(input) {
+      const { rows } = await pool.query<IntelligenceNarrativeClusterTimelineRow>(
+        `SELECT * FROM intelligence_narrative_cluster_timeline
+         WHERE workspace_id = $1 AND cluster_id = $2
+         ORDER BY bucket_start DESC, created_at DESC`,
+        [input.workspaceId, input.clusterId],
+      );
+      return rows.map(mapNarrativeClusterTimelineRow);
     },
 
     async createIntelligenceExecutionAudit(input) {

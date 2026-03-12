@@ -377,6 +377,10 @@ describe('runIntelligenceScannerPass', () => {
       clusterId: memberships[0]!.clusterId,
     });
     expect(cluster?.eventCount).toBeGreaterThanOrEqual(2);
+    expect(typeof cluster?.recurringStrengthTrend).toBe('number');
+    expect(typeof cluster?.divergenceTrend).toBe('number');
+    expect(typeof cluster?.supportDecayScore).toBe('number');
+    expect(typeof cluster?.contradictionAcceleration).toBe('number');
   });
 
   it('links sparse multi-document claims into one event and records absence evidence', async () => {
@@ -1238,5 +1242,45 @@ describe('runIntelligenceScannerPass', () => {
     });
     expect(edges.some((row) => row.relation === 'supports')).toBe(true);
     expect(edges.length).toBeGreaterThan(0);
+
+    const clusterMemberships = await store.listIntelligenceNarrativeClusterMemberships({
+      workspaceId: workspace.id,
+      eventId: events[0]!.id,
+      limit: 1,
+    });
+    expect(clusterMemberships[0]?.clusterId).toBeTruthy();
+
+    const cluster = await store.getIntelligenceNarrativeClusterById({
+      workspaceId: workspace.id,
+      clusterId: clusterMemberships[0]!.clusterId,
+    });
+    expect(cluster?.clusterPriorityScore).toBeGreaterThanOrEqual(0);
+
+    const clusterTimeline = await store.listIntelligenceNarrativeClusterTimelineEntries({
+      workspaceId: workspace.id,
+      clusterId: clusterMemberships[0]!.clusterId,
+    });
+    expect(clusterTimeline.length).toBeGreaterThan(0);
+    expect(clusterTimeline[0]?.eventCount).toBeGreaterThan(0);
+
+    const latestEvent = events[0]!;
+    if (
+      cluster &&
+      (
+        cluster.state === 'diverging' ||
+        cluster.driftScore >= 0.58 ||
+        cluster.contradictionScore >= 0.32 ||
+        cluster.recentExecutionBlockedCount >= 2
+      )
+    ) {
+      expect(
+        latestEvent.executionCandidates.some(
+          (candidate) =>
+            candidate.status === 'blocked' &&
+            typeof candidate.resultJson?.blocked_reason === 'string' &&
+            String(candidate.resultJson.blocked_reason).startsWith('cluster_'),
+        ),
+      ).toBe(true);
+    }
   });
 });

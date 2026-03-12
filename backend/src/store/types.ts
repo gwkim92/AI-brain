@@ -2418,6 +2418,8 @@ export type IntelligenceEventClusterRecord = {
   recurringNarrativeScore?: number;
   relatedHistoricalEventCount?: number;
   temporalNarrativeState?: IntelligenceTemporalNarrativeState;
+  narrativeClusterId?: string | null;
+  narrativeClusterState?: IntelligenceNarrativeClusterState | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -2481,6 +2483,14 @@ export type IntelligenceTemporalNarrativeLedgerEntryRecord = {
 
 export type IntelligenceNarrativeClusterState = 'forming' | 'recurring' | 'diverging';
 
+export type IntelligenceNarrativeClusterLedgerEntryType =
+  | 'merge'
+  | 'split'
+  | 'recurring_strengthened'
+  | 'diverging_strengthened'
+  | 'supportive_history_added'
+  | 'stability_drop';
+
 export type IntelligenceNarrativeClusterRecord = {
   id: string;
   workspaceId: string;
@@ -2500,13 +2510,22 @@ export type IntelligenceNarrativeClusterRecord = {
   supportScore: number;
   contradictionScore: number;
   timeCoherenceScore: number;
+  recurringStrengthTrend: number;
+  divergenceTrend: number;
+  supportDecayScore: number;
+  contradictionAcceleration: number;
+  clusterPriorityScore: number;
+  recentExecutionBlockedCount: number;
   reviewState: EventReviewState;
   reviewReason: string | null;
   reviewOwner: string | null;
   reviewUpdatedAt: string | null;
   reviewUpdatedBy: string | null;
   reviewResolvedAt: string | null;
+  lastLedgerAt: string | null;
   lastEventAt: string | null;
+  lastRecurringAt: string | null;
+  lastDivergingAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -2566,6 +2585,70 @@ export type IntelligenceNarrativeClusterMemberSummary = {
   graphHotspotCount: number;
   timeCoherenceScore: number;
   lastEventAt: string | null;
+};
+
+export type IntelligenceNarrativeClusterLedgerEntryRecord = {
+  id: string;
+  workspaceId: string;
+  clusterId: string;
+  entryType: IntelligenceNarrativeClusterLedgerEntryType;
+  summary: string;
+  scoreDelta: number;
+  sourceEventIds: string[];
+  createdAt: string;
+};
+
+export type CreateIntelligenceNarrativeClusterLedgerEntryInput = Omit<
+  IntelligenceNarrativeClusterLedgerEntryRecord,
+  'createdAt'
+> & {
+  id?: string;
+  createdAt?: string;
+};
+
+export type IntelligenceNarrativeClusterTimelineRecord = {
+  id: string;
+  workspaceId: string;
+  clusterId: string;
+  bucketStart: string;
+  eventCount: number;
+  recurringScore: number;
+  driftScore: number;
+  supportScore: number;
+  contradictionScore: number;
+  timeCoherenceScore: number;
+  hotspotEventCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type IntelligenceNarrativeClusterTrendSummary = {
+  recurringStrengthTrend: number;
+  divergenceTrend: number;
+  supportDecayScore: number;
+  contradictionAcceleration: number;
+  lastRecurringAt: string | null;
+  lastDivergingAt: string | null;
+};
+
+export type CreateIntelligenceNarrativeClusterTimelineInput = Omit<
+  IntelligenceNarrativeClusterTimelineRecord,
+  'createdAt' | 'updatedAt'
+> & {
+  id?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type IntelligenceNarrativeClusterGraphSummary = {
+  clusterId: string;
+  eventCount: number;
+  linkedClaimCount: number;
+  edgeCount: number;
+  graphSupportScore: number;
+  graphContradictionScore: number;
+  graphHotspotCount: number;
+  hotspotClusterCount: number;
 };
 
 export type CreateIntelligenceTemporalNarrativeLedgerEntryInput = Omit<
@@ -3309,6 +3392,10 @@ export type JarvisStore = {
     workspaceId: string;
     clusterId: string;
   }) => Promise<IntelligenceNarrativeClusterRecord | null>;
+  deleteIntelligenceNarrativeCluster: (input: {
+    workspaceId: string;
+    clusterId: string;
+  }) => Promise<boolean>;
   updateIntelligenceNarrativeClusterReviewState: (
     input: UpdateIntelligenceNarrativeClusterReviewStateInput
   ) => Promise<IntelligenceNarrativeClusterRecord | null>;
@@ -3330,6 +3417,23 @@ export type JarvisStore = {
     workspaceId: string;
     eventId: string;
   }) => Promise<IntelligenceTemporalNarrativeLedgerEntryRecord[]>;
+  createIntelligenceNarrativeClusterLedgerEntry: (
+    input: CreateIntelligenceNarrativeClusterLedgerEntryInput
+  ) => Promise<IntelligenceNarrativeClusterLedgerEntryRecord>;
+  listIntelligenceNarrativeClusterLedgerEntries: (input: {
+    workspaceId: string;
+    clusterId: string;
+    limit?: number;
+  }) => Promise<IntelligenceNarrativeClusterLedgerEntryRecord[]>;
+  replaceIntelligenceNarrativeClusterTimelineEntries: (input: {
+    workspaceId: string;
+    clusterId: string;
+    entries: CreateIntelligenceNarrativeClusterTimelineInput[];
+  }) => Promise<IntelligenceNarrativeClusterTimelineRecord[]>;
+  listIntelligenceNarrativeClusterTimelineEntries: (input: {
+    workspaceId: string;
+    clusterId: string;
+  }) => Promise<IntelligenceNarrativeClusterTimelineRecord[]>;
   createIntelligenceExecutionAudit: (input: CreateExecutionAuditInput) => Promise<ExecutionAuditRecord>;
   listIntelligenceExecutionAudits: (input: {
     workspaceId: string;

@@ -132,6 +132,10 @@ import type {
   IntelligenceModelRegistryEntry,
   IntelligenceOutcomeEntryRecord,
   IntelligenceNarrativeClusterMemberSummary,
+  IntelligenceNarrativeClusterLedgerEntryRecord,
+  IntelligenceNarrativeClusterTimelineRecord,
+  IntelligenceNarrativeClusterTrendSummary,
+  IntelligenceNarrativeClusterGraphSummary,
   IntelligenceNarrativeClusterRecord,
   IntelligenceRelatedHistoricalEventSummary,
   IntelligenceTemporalNarrativeLedgerEntryRecord,
@@ -346,6 +350,50 @@ export async function getIntelligenceHypotheses(eventId: string, query: { worksp
   return apiRequest(`/api/v1/intelligence/hypotheses/${eventId}`, { method: "GET", query });
 }
 
+export async function listIntelligenceNarrativeClusters(query: {
+  workspace_id?: string;
+  limit?: number;
+} = {}): Promise<{
+  workspace_id: string;
+  narrative_clusters: IntelligenceNarrativeClusterRecord[];
+}> {
+  return apiRequest("/api/v1/intelligence/narrative-clusters", { method: "GET", query });
+}
+
+export async function getIntelligenceNarrativeCluster(clusterId: string, query: { workspace_id?: string } = {}): Promise<{
+  workspace_id: string;
+  narrative_cluster: IntelligenceNarrativeClusterRecord;
+  memberships: IntelligenceNarrativeClusterMemberSummary[];
+  recent_events: IntelligenceEventClusterRecord[];
+  ledger_entries: IntelligenceNarrativeClusterLedgerEntryRecord[];
+  operator_notes: OperatorNoteRecord[];
+}> {
+  return apiRequest(`/api/v1/intelligence/narrative-clusters/${clusterId}`, { method: "GET", query });
+}
+
+export async function getIntelligenceNarrativeClusterTimeline(clusterId: string, query: { workspace_id?: string } = {}): Promise<{
+  workspace_id: string;
+  cluster_id: string;
+  trend_summary: IntelligenceNarrativeClusterTrendSummary;
+  timeline: IntelligenceNarrativeClusterTimelineRecord[];
+}> {
+  return apiRequest(`/api/v1/intelligence/narrative-clusters/${clusterId}/timeline`, { method: "GET", query });
+}
+
+export async function getIntelligenceNarrativeClusterGraph(clusterId: string, query: { workspace_id?: string } = {}): Promise<{
+  workspace_id: string;
+  cluster_id: string;
+  summary: IntelligenceNarrativeClusterGraphSummary;
+  nodes: LinkedClaimRecord[];
+  edges: Array<LinkedClaimEdgeRecord & { evidence_signal_count: number }>;
+  hotspots: string[];
+  neighborhoods: IntelligenceEventGraphNeighborhood[];
+  hotspot_clusters: IntelligenceHotspotCluster[];
+  recent_events: IntelligenceEventClusterRecord[];
+}> {
+  return apiRequest(`/api/v1/intelligence/narrative-clusters/${clusterId}/graph`, { method: "GET", query });
+}
+
 export async function listIntelligenceFetchFailures(query: {
   workspace_id?: string;
   source_id?: string;
@@ -526,6 +574,7 @@ export async function updateIntelligenceAliasBindings(
   alias: IntelligenceCapabilityAlias,
   payload: {
     workspace_id?: string;
+    scope?: "workspace" | "global";
     bindings: Array<{
       provider: ProviderName;
       model_id: string;
@@ -541,6 +590,7 @@ export async function updateIntelligenceAliasBindings(
   }
 ): Promise<{
   workspace_id: string;
+  binding_scope: "workspace" | "global";
   alias: IntelligenceCapabilityAlias;
   bindings: IntelligenceCapabilityAliasBinding[];
   rollout: AliasRolloutRecord;

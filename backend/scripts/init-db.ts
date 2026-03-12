@@ -1,46 +1,51 @@
-import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { access } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
-import { Client } from 'pg';
+import { Pool } from 'pg';
 
-async function main() {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error('DATABASE_URL is required');
+import { loadEnv } from '../src/config/env';
+import { initializePostgresStore } from '../src/store/postgres/initializer';
+
+function tryLoadEnvFile(filePath: string): void {
+  if (typeof process.loadEnvFile !== 'function') {
+    return;
   }
-
-  const schemaPath = await resolveSchemaPath();
-  const sql = await readFile(schemaPath, 'utf8');
-
-  const client = new Client({ connectionString: databaseUrl });
-  await client.connect();
-
+  if (!existsSync(filePath)) {
+    return;
+  }
   try {
-    await client.query(sql);
-    console.log('[db:init] schema applied successfully');
-  } finally {
-    await client.end();
+    process.loadEnvFile(filePath);
+  } catch {
+    // Optional local .env file may be absent in some environments.
   }
 }
 
-async function resolveSchemaPath(): Promise<string> {
-  const candidates = [
-    process.env.DB_SCHEMA_PATH,
-    path.resolve(process.cwd(), 'db-schema-v1.sql'),
-    path.resolve(process.cwd(), '../docs/db-schema-v1.sql')
-  ].filter((value): value is string => Boolean(value));
-
-  for (const candidate of candidates) {
-    try {
-      await access(candidate);
-      return candidate;
-    } catch {
-      // continue
-    }
+async function main() {
+  const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+  const backendRoot = path.resolve(scriptDir, '..');
+  tryLoadEnvFile(path.join(backendRoot, '.env'));
+  if (process.cwd() !== backendRoot) {
+    tryLoadEnvFile(path.join(process.cwd(), '.env'));
   }
 
-  throw new Error('Could not locate db schema file. Set DB_SCHEMA_PATH explicitly.');
+  const env = loadEnv();
+  if (!env.DATABASE_URL) {
+    throw new Error('DATABASE_URL is required');
+  }
+
+  const pool = new Pool({ connectionString: env.DATABASE_URL });
+
+  try {
+    await initializePostgresStore({
+      pool,
+      defaultUserId: env.DEFAULT_USER_ID,
+      defaultUserEmail: env.DEFAULT_USER_EMAIL,
+    });
+    console.log('[db:init] initializer schema applied successfully');
+  } finally {
+    await pool.end();
+  }
 }
 
 main().catch((error) => {

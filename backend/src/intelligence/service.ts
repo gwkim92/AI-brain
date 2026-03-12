@@ -9,6 +9,7 @@ import type { ProviderRouter } from '../providers/router';
 import type { RouteContext } from '../routes/types';
 import type {
   ClaimLinkRecord,
+  CreateIntelligenceNarrativeClusterTimelineInput,
   DeliberationResult,
   ExecutionCandidateRecord,
   IntelligenceBridgeDispatchRecord,
@@ -19,6 +20,8 @@ import type {
   IntelligenceInvalidationEntryRecord,
   IntelligenceNarrativeClusterMembershipRecord,
   IntelligenceNarrativeClusterRecord,
+  IntelligenceNarrativeClusterLedgerEntryRecord,
+  IntelligenceNarrativeClusterTimelineRecord,
   LinkedClaimEdgeRecord,
   LinkedClaimRecord,
   IntelligenceOutcomeRecord,
@@ -104,10 +107,15 @@ type WorkspaceScopedStore = Pick<
   | 'upsertIntelligenceNarrativeCluster'
   | 'listIntelligenceNarrativeClusters'
   | 'getIntelligenceNarrativeClusterById'
+  | 'deleteIntelligenceNarrativeCluster'
   | 'upsertIntelligenceNarrativeClusterMembership'
   | 'listIntelligenceNarrativeClusterMemberships'
   | 'replaceIntelligenceTemporalNarrativeLedgerEntries'
   | 'listIntelligenceTemporalNarrativeLedgerEntries'
+  | 'createIntelligenceNarrativeClusterLedgerEntry'
+  | 'listIntelligenceNarrativeClusterLedgerEntries'
+  | 'replaceIntelligenceNarrativeClusterTimelineEntries'
+  | 'listIntelligenceNarrativeClusterTimelineEntries'
   | 'createIntelligenceExecutionAudit'
   | 'listIntelligenceExecutionAudits'
   | 'getIntelligenceEventById'
@@ -210,8 +218,75 @@ export function computeIntelligenceOperatorPriorityScore(event: Pick<
   );
 }
 
+export function computeNarrativeClusterPriorityScore(input: {
+  cluster: Pick<
+    IntelligenceNarrativeClusterRecord,
+    | 'eventCount'
+    | 'driftScore'
+    | 'supportScore'
+    | 'contradictionScore'
+    | 'hotspotEventCount'
+    | 'recurringStrengthTrend'
+    | 'divergenceTrend'
+    | 'supportDecayScore'
+    | 'contradictionAcceleration'
+    | 'reviewState'
+    | 'recentExecutionBlockedCount'
+  >;
+  recentEvents: Array<
+    Pick<
+      IntelligenceEventClusterRecord,
+      'graphHotspotCount' | 'graphContradictionScore' | 'nonSocialCorroborationCount' | 'executionCandidates'
+    >
+  >;
+}): number {
+  const eventCount = Math.max(1, input.cluster.eventCount);
+  const hotspotRatio = input.cluster.hotspotEventCount / eventCount;
+  const contradictionHeavyRecentEvents = input.recentEvents.filter(
+    (row) => row.graphHotspotCount > 0 || row.graphContradictionScore >= 0.28,
+  ).length;
+  const lowCorroborationTrend =
+    input.recentEvents.length === 0
+      ? 0
+      : input.recentEvents.filter((row) => row.nonSocialCorroborationCount < 1).length / input.recentEvents.length;
+  const unresolvedReviewWeight =
+    input.cluster.reviewState === 'review'
+      ? 3
+      : input.cluster.reviewState === 'watch'
+        ? 1
+        : 0;
+  const blockedExecutionWeight = Math.min(6, input.cluster.recentExecutionBlockedCount * 2);
+  const contradictionPressure = Math.round(input.cluster.contradictionScore * 10);
+  const driftPressure = Math.round(input.cluster.driftScore * 10);
+  const divergenceTrendPressure = Math.round(Math.max(0, input.cluster.divergenceTrend) * 8);
+  const supportDecayPressure = Math.round(input.cluster.supportDecayScore * 6);
+  const contradictionAccelerationPressure = Math.round(input.cluster.contradictionAcceleration * 6);
+  const hotspotPressure = Math.round(hotspotRatio * 8);
+  const recentHotspotPressure = contradictionHeavyRecentEvents;
+  const corroborationPenalty = Math.round(lowCorroborationTrend * 5);
+  const supportPenalty = input.cluster.supportScore < 0.4 ? 1 : 0;
+  return Math.max(
+    0,
+    contradictionPressure +
+      driftPressure +
+      divergenceTrendPressure +
+      supportDecayPressure +
+      contradictionAccelerationPressure +
+      hotspotPressure +
+      recentHotspotPressure +
+      corroborationPenalty +
+      unresolvedReviewWeight +
+      blockedExecutionWeight +
+      supportPenalty,
+  );
+}
+
 function clampScore(value: number): number {
   return Math.max(0, Math.min(1, Number(value.toFixed(3))));
+}
+
+function clampTrend(value: number): number {
+  return Math.max(-1, Math.min(1, Number(value.toFixed(3))));
 }
 
 function tokenize(value: string): string[] {
@@ -611,17 +686,876 @@ async function syncTemporalNarrativeLedgerForEvent(input: {
   return temporal;
 }
 
-function buildNarrativeClusterKey(event: IntelligenceEventClusterRecord): string {
-  const anchorEntities = [...event.entities]
-    .map((row) => row.trim().toLowerCase())
-    .filter((row) => row.length > 0)
+type NarrativeClusterAggregate = {
+  clusterKey: string;
+  title: string;
+  eventFamily: IntelligenceNarrativeClusterRecord['eventFamily'];
+  topDomainId: IntelligenceNarrativeClusterRecord['topDomainId'];
+  anchorEntities: string[];
+  state: IntelligenceNarrativeClusterRecord['state'];
+  eventCount: number;
+  recurringEventCount: number;
+  divergingEventCount: number;
+  supportiveHistoryCount: number;
+  hotspotEventCount: number;
+  latestRecurringScore: number;
+  driftScore: number;
+  supportScore: number;
+  contradictionScore: number;
+  timeCoherenceScore: number;
+  recurringStrengthTrend: number;
+  divergenceTrend: number;
+  supportDecayScore: number;
+  contradictionAcceleration: number;
+  clusterPriorityScore: number;
+  recentExecutionBlockedCount: number;
+  lastLedgerAt: string | null;
+  lastEventAt: string | null;
+  lastRecurringAt: string | null;
+  lastDivergingAt: string | null;
+};
+
+function normalizeNarrativeAnchorEntities(values: string[]): string[] {
+  return mergeUniqueStrings(values.map((row) => row.trim().toLowerCase()).filter(Boolean))
     .sort()
-    .slice(0, 3);
+    .slice(0, 6);
+}
+
+function buildNarrativeClusterKey(event: Pick<
+  IntelligenceEventClusterRecord,
+  'eventFamily' | 'topDomainId' | 'entities'
+>): string {
+  const anchorEntities = normalizeNarrativeAnchorEntities(event.entities).slice(0, 3);
   return [
     event.eventFamily,
     event.topDomainId ?? 'unknown',
     anchorEntities.join('|') || 'no-entities',
   ].join('::');
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) return 0;
+  return values.reduce((total, value) => total + value, 0) / values.length;
+}
+
+function eventAnchorIso(event: Pick<IntelligenceEventClusterRecord, 'timeWindowEnd' | 'updatedAt'>): string | null {
+  return event.timeWindowEnd ?? event.updatedAt ?? null;
+}
+
+function bucketStartIso(value: string | null): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())).toISOString();
+}
+
+function clusterRecentReferenceMs(cluster: Pick<IntelligenceNarrativeClusterRecord, 'lastEventAt'> | null, memberEvents: IntelligenceEventClusterRecord[]): number {
+  const values = memberEvents
+    .map((row) => publishedMs(eventAnchorIso(row)))
+    .filter((row): row is number => row !== null);
+  const clusterValue = publishedMs(cluster?.lastEventAt ?? null);
+  return Math.max(...values, clusterValue ?? 0, Date.now());
+}
+
+type NarrativeClusterTrendSummary = {
+  recurringStrengthTrend: number;
+  divergenceTrend: number;
+  supportDecayScore: number;
+  contradictionAcceleration: number;
+  lastRecurringAt: string | null;
+  lastDivergingAt: string | null;
+};
+
+function computeNarrativeClusterTrendSummary(input: {
+  memberEvents: IntelligenceEventClusterRecord[];
+  referenceMs: number;
+}): NarrativeClusterTrendSummary {
+  const anchoredEvents = input.memberEvents
+    .map((event) => ({
+      event,
+      anchorIso: eventAnchorIso(event),
+      anchorMs: publishedMs(eventAnchorIso(event)),
+    }))
+    .filter((row): row is { event: IntelligenceEventClusterRecord; anchorIso: string | null; anchorMs: number } => row.anchorMs !== null);
+  const recentWindow = anchoredEvents
+    .filter((row) => input.referenceMs - row.anchorMs <= 30 * DAY_MS)
+    .map((row) => row.event);
+  const priorWindow = anchoredEvents
+    .filter((row) => input.referenceMs - row.anchorMs > 30 * DAY_MS && input.referenceMs - row.anchorMs <= 60 * DAY_MS)
+    .map((row) => row.event);
+  const recurringSignal = (event: IntelligenceEventClusterRecord) =>
+    Math.max(
+      event.recurringNarrativeScore ?? 0,
+      event.temporalNarrativeState === 'recurring' ? 0.7 : 0,
+      event.temporalNarrativeState === 'diverging' ? 0 : 0.15,
+    );
+  const divergenceSignal = (event: IntelligenceEventClusterRecord) =>
+    clampScore(
+      0.45 * (event.temporalNarrativeState === 'diverging' ? 1 : 0) +
+        0.3 * event.graphContradictionScore +
+        0.15 * (event.graphHotspotCount > 0 ? 1 : 0) +
+        0.1 * (1 - event.timeCoherenceScore),
+    );
+  const recentRecurring = average(recentWindow.map(recurringSignal));
+  const priorRecurring = average(priorWindow.map(recurringSignal));
+  const recentDivergence = average(recentWindow.map(divergenceSignal));
+  const priorDivergence = average(priorWindow.map(divergenceSignal));
+  const recentSupport = average(recentWindow.map((event) => event.graphSupportScore));
+  const priorSupport = average(priorWindow.map((event) => event.graphSupportScore));
+  const recentContradiction = average(recentWindow.map((event) => event.graphContradictionScore));
+  const priorContradiction = average(priorWindow.map((event) => event.graphContradictionScore));
+  const lastRecurringAt =
+    anchoredEvents
+      .filter((row) => row.event.temporalNarrativeState === 'recurring' || (row.event.recurringNarrativeScore ?? 0) >= 0.55)
+      .sort((left, right) => right.anchorMs - left.anchorMs)[0]?.anchorIso ?? null;
+  const lastDivergingAt =
+    anchoredEvents
+      .filter((row) => row.event.temporalNarrativeState === 'diverging' || row.event.graphContradictionScore >= 0.32 || row.event.graphHotspotCount > 0)
+      .sort((left, right) => right.anchorMs - left.anchorMs)[0]?.anchorIso ?? null;
+
+  return {
+    recurringStrengthTrend: clampTrend(recentRecurring - priorRecurring),
+    divergenceTrend: clampTrend(recentDivergence - priorDivergence),
+    supportDecayScore: clampScore(Math.max(0, priorSupport - recentSupport)),
+    contradictionAcceleration: clampScore(Math.max(0, recentContradiction - priorContradiction)),
+    lastRecurringAt,
+    lastDivergingAt,
+  };
+}
+
+function anchorOverlap(left: string[], right: string[]): { count: number; ratio: number } {
+  const leftSet = new Set(normalizeNarrativeAnchorEntities(left));
+  const rightSet = new Set(normalizeNarrativeAnchorEntities(right));
+  const overlapCount = [...leftSet].filter((row) => rightSet.has(row)).length;
+  const ratio = Math.max(
+    leftSet.size === 0 && rightSet.size === 0 ? 1 : 0,
+    overlapCount / Math.max(1, Math.min(leftSet.size || 1, rightSet.size || 1)),
+  );
+  return { count: overlapCount, ratio };
+}
+
+function domainsCompatible(left: IntelligenceDomainId | null, right: IntelligenceDomainId | null): boolean {
+  return left === right || left === null || right === null;
+}
+
+async function hydrateNarrativeClusterMemberEvents(input: {
+  store: WorkspaceScopedStore;
+  workspaceId: string;
+  memberships: IntelligenceNarrativeClusterMembershipRecord[];
+  candidateEventsById: Map<string, IntelligenceEventClusterRecord>;
+}): Promise<IntelligenceEventClusterRecord[]> {
+  const rows = await Promise.all(
+    input.memberships.map(async (membership) => {
+      const cached = input.candidateEventsById.get(membership.eventId);
+      if (cached) return cached;
+      return input.store.getIntelligenceEventById({
+        workspaceId: input.workspaceId,
+        eventId: membership.eventId,
+      });
+    }),
+  );
+  return rows.filter((row): row is IntelligenceEventClusterRecord => row !== null);
+}
+
+function computeNarrativeClusterAggregate(input: {
+  baseCluster: IntelligenceNarrativeClusterRecord | null;
+  memberships: IntelligenceNarrativeClusterMembershipRecord[];
+  memberEvents: IntelligenceEventClusterRecord[];
+  defaultEvent: IntelligenceEventClusterRecord;
+  latestRecurringScore: number;
+  lastLedgerAt: string | null;
+}): NarrativeClusterAggregate {
+  const eventCount = Math.max(1, input.memberships.length);
+  const recurringEventCount = input.memberships.filter((row) => row.relation === 'recurring').length;
+  const divergingEventCount = input.memberships.filter((row) => row.relation === 'diverging').length;
+  const supportiveHistoryCount = input.memberships.filter((row) => row.relation === 'supportive_history').length;
+  const hotspotEventCount = input.memberEvents.filter((row) => row.graphHotspotCount > 0).length;
+  const supportScore = clampScore(average(input.memberEvents.map((row) => row.graphSupportScore)));
+  const contradictionScore = clampScore(average(input.memberEvents.map((row) => row.graphContradictionScore)));
+  const timeCoherenceScore = clampScore(average(input.memberEvents.map((row) => row.timeCoherenceScore)));
+  const recentReferenceMs = clusterRecentReferenceMs(input.baseCluster, input.memberEvents);
+  const trendSummary = computeNarrativeClusterTrendSummary({
+    memberEvents: input.memberEvents,
+    referenceMs: recentReferenceMs,
+  });
+  const driftScore = clampScore(
+    0.4 * (divergingEventCount / eventCount) +
+      0.32 * contradictionScore +
+      0.18 * (hotspotEventCount / eventCount) +
+      0.06 * trendSummary.contradictionAcceleration +
+      0.04 * (1 - timeCoherenceScore),
+  );
+  const state: IntelligenceNarrativeClusterRecord['state'] =
+    divergingEventCount > 0 ||
+    driftScore >= 0.58 ||
+    trendSummary.divergenceTrend >= 0.18 ||
+    trendSummary.contradictionAcceleration >= 0.16
+      ? 'diverging'
+      : recurringEventCount > 0 ||
+          supportiveHistoryCount > 0 ||
+          trendSummary.recurringStrengthTrend >= 0.12
+        ? 'recurring'
+        : 'forming';
+  const lastEventAt = input.memberEvents
+    .map((row) => eventAnchorIso(row))
+    .filter((row): row is string => Boolean(row))
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0] ?? null;
+  const recentBlockedEvents = input.memberEvents.filter((row) => {
+    const anchorMs = publishedMs(eventAnchorIso(row));
+    if (anchorMs === null || recentReferenceMs - anchorMs > 7 * DAY_MS) return false;
+    return row.executionCandidates.some((candidate) => candidate.status === 'blocked');
+  });
+  const recentEvents = input.memberEvents.filter((row) => {
+    const anchorMs = publishedMs(eventAnchorIso(row));
+    return anchorMs !== null && recentReferenceMs - anchorMs <= 14 * DAY_MS;
+  });
+  const topDomainId = input.baseCluster?.topDomainId ??
+    input.memberEvents.map((row) => row.topDomainId).find((row): row is IntelligenceDomainId => row !== null) ??
+    input.defaultEvent.topDomainId ??
+    null;
+  const anchorEntities = normalizeNarrativeAnchorEntities([
+    ...(input.baseCluster?.anchorEntities ?? []),
+    ...input.memberEvents.flatMap((row) => row.entities),
+    ...input.defaultEvent.entities,
+  ]);
+  const partialCluster: Pick<
+    IntelligenceNarrativeClusterRecord,
+    | 'eventCount'
+    | 'driftScore'
+    | 'supportScore'
+    | 'contradictionScore'
+    | 'hotspotEventCount'
+    | 'recurringStrengthTrend'
+    | 'divergenceTrend'
+    | 'supportDecayScore'
+    | 'contradictionAcceleration'
+    | 'reviewState'
+    | 'recentExecutionBlockedCount'
+  > = {
+    eventCount,
+    driftScore,
+    supportScore,
+    contradictionScore,
+    hotspotEventCount,
+    recurringStrengthTrend: trendSummary.recurringStrengthTrend,
+    divergenceTrend: trendSummary.divergenceTrend,
+    supportDecayScore: trendSummary.supportDecayScore,
+    contradictionAcceleration: trendSummary.contradictionAcceleration,
+    reviewState: input.baseCluster?.reviewState ?? 'watch',
+    recentExecutionBlockedCount: recentBlockedEvents.length,
+  };
+  return {
+    clusterKey: input.baseCluster?.clusterKey ?? buildNarrativeClusterKey(input.defaultEvent),
+    title: input.baseCluster?.title ?? input.defaultEvent.title,
+    eventFamily: input.baseCluster?.eventFamily ?? input.defaultEvent.eventFamily,
+    topDomainId,
+    anchorEntities,
+    state,
+    eventCount,
+    recurringEventCount,
+    divergingEventCount,
+    supportiveHistoryCount,
+    hotspotEventCount,
+    latestRecurringScore: clampScore(
+      Math.max(input.latestRecurringScore, ...input.memberEvents.map((row) => row.recurringNarrativeScore ?? 0)),
+    ),
+    driftScore,
+    supportScore,
+    contradictionScore,
+    timeCoherenceScore,
+    recurringStrengthTrend: trendSummary.recurringStrengthTrend,
+    divergenceTrend: trendSummary.divergenceTrend,
+    supportDecayScore: trendSummary.supportDecayScore,
+    contradictionAcceleration: trendSummary.contradictionAcceleration,
+    clusterPriorityScore: computeNarrativeClusterPriorityScore({
+      cluster: partialCluster,
+      recentEvents,
+    }),
+    recentExecutionBlockedCount: recentBlockedEvents.length,
+    lastLedgerAt: input.lastLedgerAt,
+    lastEventAt,
+    lastRecurringAt: trendSummary.lastRecurringAt,
+    lastDivergingAt: trendSummary.lastDivergingAt,
+  };
+}
+
+function buildNarrativeClusterTimelineEntries(input: {
+  workspaceId: string;
+  clusterId: string;
+  memberEvents: IntelligenceEventClusterRecord[];
+}): CreateIntelligenceNarrativeClusterTimelineInput[] {
+  const buckets = new Map<string, IntelligenceEventClusterRecord[]>();
+  for (const event of input.memberEvents) {
+    const bucketStart = bucketStartIso(eventAnchorIso(event));
+    if (!bucketStart) continue;
+    const current = buckets.get(bucketStart) ?? [];
+    current.push(event);
+    buckets.set(bucketStart, current);
+  }
+  return [...buckets.entries()]
+    .map(([bucketStart, events]) => {
+      const eventCount = events.length;
+      const contradictionScore = clampScore(average(events.map((row) => row.graphContradictionScore)));
+      const supportScore = clampScore(average(events.map((row) => row.graphSupportScore)));
+      const timeCoherenceScore = clampScore(average(events.map((row) => row.timeCoherenceScore)));
+      const hotspotEventCount = events.filter((row) => row.graphHotspotCount > 0).length;
+      const recurringScore = clampScore(average(events.map((row) => row.recurringNarrativeScore ?? 0)));
+      const driftScore = clampScore(
+        0.42 * average(events.map((row) => (row.temporalNarrativeState === 'diverging' ? 1 : 0))) +
+          0.34 * contradictionScore +
+          0.16 * (hotspotEventCount / Math.max(1, eventCount)) +
+          0.08 * (1 - timeCoherenceScore),
+      );
+      return {
+        id: randomUUID(),
+        workspaceId: input.workspaceId,
+        clusterId: input.clusterId,
+        bucketStart,
+        eventCount,
+        recurringScore,
+        driftScore,
+        supportScore,
+        contradictionScore,
+        timeCoherenceScore,
+        hotspotEventCount,
+      };
+    })
+    .sort((left, right) => right.bucketStart.localeCompare(left.bucketStart));
+}
+
+async function upsertNarrativeClusterSnapshot(input: {
+  store: WorkspaceScopedStore;
+  workspaceId: string;
+  baseCluster: IntelligenceNarrativeClusterRecord | null;
+  memberships: IntelligenceNarrativeClusterMembershipRecord[];
+  memberEvents: IntelligenceEventClusterRecord[];
+  defaultEvent: IntelligenceEventClusterRecord;
+  latestRecurringScore: number;
+  lastLedgerAt?: string | null;
+}): Promise<IntelligenceNarrativeClusterRecord> {
+  const aggregate = computeNarrativeClusterAggregate({
+    baseCluster: input.baseCluster,
+    memberships: input.memberships,
+    memberEvents: input.memberEvents,
+    defaultEvent: input.defaultEvent,
+    latestRecurringScore: input.latestRecurringScore,
+    lastLedgerAt: input.lastLedgerAt ?? input.baseCluster?.lastLedgerAt ?? null,
+  });
+  return input.store.upsertIntelligenceNarrativeCluster({
+    id: input.baseCluster?.id,
+    workspaceId: input.workspaceId,
+    clusterKey: aggregate.clusterKey,
+    title: aggregate.title,
+    eventFamily: aggregate.eventFamily,
+    topDomainId: aggregate.topDomainId,
+    anchorEntities: aggregate.anchorEntities,
+    state: aggregate.state,
+    eventCount: aggregate.eventCount,
+    recurringEventCount: aggregate.recurringEventCount,
+    divergingEventCount: aggregate.divergingEventCount,
+    supportiveHistoryCount: aggregate.supportiveHistoryCount,
+    hotspotEventCount: aggregate.hotspotEventCount,
+    latestRecurringScore: aggregate.latestRecurringScore,
+    driftScore: aggregate.driftScore,
+    supportScore: aggregate.supportScore,
+    contradictionScore: aggregate.contradictionScore,
+    timeCoherenceScore: aggregate.timeCoherenceScore,
+    recurringStrengthTrend: aggregate.recurringStrengthTrend,
+    divergenceTrend: aggregate.divergenceTrend,
+    supportDecayScore: aggregate.supportDecayScore,
+    contradictionAcceleration: aggregate.contradictionAcceleration,
+    clusterPriorityScore: aggregate.clusterPriorityScore,
+    recentExecutionBlockedCount: aggregate.recentExecutionBlockedCount,
+    reviewState: input.baseCluster?.reviewState ?? 'watch',
+    reviewReason: input.baseCluster?.reviewReason ?? null,
+    reviewOwner: input.baseCluster?.reviewOwner ?? null,
+    reviewUpdatedAt: input.baseCluster?.reviewUpdatedAt ?? null,
+    reviewUpdatedBy: input.baseCluster?.reviewUpdatedBy ?? null,
+    reviewResolvedAt: input.baseCluster?.reviewResolvedAt ?? null,
+    lastLedgerAt: aggregate.lastLedgerAt,
+    lastEventAt: aggregate.lastEventAt,
+    lastRecurringAt: aggregate.lastRecurringAt,
+    lastDivergingAt: aggregate.lastDivergingAt,
+  });
+}
+
+async function createNarrativeClusterLedgerEntry(input: {
+  store: WorkspaceScopedStore;
+  workspaceId: string;
+  clusterId: string;
+  entryType: IntelligenceNarrativeClusterLedgerEntryRecord['entryType'];
+  summary: string;
+  scoreDelta: number;
+  sourceEventIds: string[];
+}): Promise<IntelligenceNarrativeClusterLedgerEntryRecord> {
+  return input.store.createIntelligenceNarrativeClusterLedgerEntry({
+    id: randomUUID(),
+    workspaceId: input.workspaceId,
+    clusterId: input.clusterId,
+    entryType: input.entryType,
+    summary: input.summary,
+    scoreDelta: Number(input.scoreDelta.toFixed(3)),
+    sourceEventIds: mergeUniqueStrings(input.sourceEventIds),
+  });
+}
+
+async function syncNarrativeClusterTimeline(input: {
+  store: WorkspaceScopedStore;
+  workspaceId: string;
+  clusterId: string;
+  memberEvents: IntelligenceEventClusterRecord[];
+}) {
+  await input.store.replaceIntelligenceNarrativeClusterTimelineEntries({
+    workspaceId: input.workspaceId,
+    clusterId: input.clusterId,
+    entries: buildNarrativeClusterTimelineEntries({
+      workspaceId: input.workspaceId,
+      clusterId: input.clusterId,
+      memberEvents: input.memberEvents,
+    }),
+  });
+}
+
+async function maybeRecordNarrativeClusterStateShift(input: {
+  store: WorkspaceScopedStore;
+  workspaceId: string;
+  previousCluster: IntelligenceNarrativeClusterRecord | null;
+  nextCluster: IntelligenceNarrativeClusterRecord;
+  sourceEventIds: string[];
+}): Promise<string | null> {
+  if (!input.previousCluster) return null;
+  let latestLedgerAt: string | null = null;
+  const maybeCreate = async (
+    shouldCreate: boolean,
+    entryType: IntelligenceNarrativeClusterLedgerEntryRecord['entryType'],
+    summary: string,
+    scoreDelta: number,
+  ) => {
+    if (!shouldCreate) return;
+    const entry = await createNarrativeClusterLedgerEntry({
+      store: input.store,
+      workspaceId: input.workspaceId,
+      clusterId: input.nextCluster.id,
+      entryType,
+      summary,
+      scoreDelta,
+      sourceEventIds: input.sourceEventIds,
+    });
+    latestLedgerAt = entry.createdAt;
+  };
+
+  await maybeCreate(
+    input.nextCluster.state === 'recurring' &&
+      input.nextCluster.latestRecurringScore >= input.previousCluster.latestRecurringScore + 0.1,
+    'recurring_strengthened',
+    `Recurring narrative strengthened for cluster "${input.nextCluster.title}".`,
+    input.nextCluster.latestRecurringScore - input.previousCluster.latestRecurringScore,
+  );
+  await maybeCreate(
+    input.nextCluster.state === 'diverging' &&
+      (input.previousCluster.state !== 'diverging' || input.nextCluster.driftScore >= input.previousCluster.driftScore + 0.08),
+    'diverging_strengthened',
+    `Diverging pressure increased for cluster "${input.nextCluster.title}".`,
+    input.nextCluster.driftScore - input.previousCluster.driftScore,
+  );
+  await maybeCreate(
+    input.nextCluster.supportiveHistoryCount > input.previousCluster.supportiveHistoryCount,
+    'supportive_history_added',
+    `Supportive history expanded for cluster "${input.nextCluster.title}".`,
+    input.nextCluster.supportiveHistoryCount - input.previousCluster.supportiveHistoryCount,
+  );
+  await maybeCreate(
+    input.nextCluster.timeCoherenceScore <= input.previousCluster.timeCoherenceScore - 0.12,
+    'stability_drop',
+    `Stability dropped for cluster "${input.nextCluster.title}".`,
+    input.nextCluster.timeCoherenceScore - input.previousCluster.timeCoherenceScore,
+  );
+  return latestLedgerAt;
+}
+
+async function loadClusterMemberships(input: {
+  store: WorkspaceScopedStore;
+  workspaceId: string;
+  clusterId: string;
+}): Promise<IntelligenceNarrativeClusterMembershipRecord[]> {
+  return input.store.listIntelligenceNarrativeClusterMemberships({
+    workspaceId: input.workspaceId,
+    clusterId: input.clusterId,
+    limit: 500,
+  });
+}
+
+function clusterHasRecentEvent(cluster: Pick<IntelligenceNarrativeClusterRecord, 'lastEventAt'>): boolean {
+  const lastMs = publishedMs(cluster.lastEventAt);
+  return lastMs !== null && Date.now() - lastMs <= 30 * DAY_MS;
+}
+
+function chooseCanonicalCluster(
+  left: IntelligenceNarrativeClusterRecord,
+  right: IntelligenceNarrativeClusterRecord,
+): { canonical: IntelligenceNarrativeClusterRecord; absorbed: IntelligenceNarrativeClusterRecord } {
+  return Date.parse(left.createdAt) <= Date.parse(right.createdAt)
+    ? { canonical: left, absorbed: right }
+    : { canonical: right, absorbed: left };
+}
+
+async function tryMergeNarrativeCluster(input: {
+  store: WorkspaceScopedStore;
+  workspaceId: string;
+  currentCluster: IntelligenceNarrativeClusterRecord;
+  currentMemberships: IntelligenceNarrativeClusterMembershipRecord[];
+  currentMemberEvents: IntelligenceEventClusterRecord[];
+  currentEvent: IntelligenceEventClusterRecord;
+  temporal: ReturnType<typeof computeIntelligenceTemporalNarrativeProfile>;
+  candidateEventsById: Map<string, IntelligenceEventClusterRecord>;
+}): Promise<{
+  cluster: IntelligenceNarrativeClusterRecord;
+  memberships: IntelligenceNarrativeClusterMembershipRecord[];
+  memberEvents: IntelligenceEventClusterRecord[];
+} | null> {
+  const clusters = await input.store.listIntelligenceNarrativeClusters({
+    workspaceId: input.workspaceId,
+    limit: 200,
+  });
+  const scoresByClusterId = new Map<string, number[]>();
+  for (const related of input.temporal.relatedHistoricalEvents) {
+    if (!(related.relation === 'recurring' || related.relation === 'supportive_history')) continue;
+    const membership = (
+      await input.store.listIntelligenceNarrativeClusterMemberships({
+        workspaceId: input.workspaceId,
+        eventId: related.eventId,
+        limit: 1,
+      })
+    )[0];
+    if (!membership || membership.clusterId === input.currentCluster.id) continue;
+    const current = scoresByClusterId.get(membership.clusterId) ?? [];
+    current.push(related.score);
+    scoresByClusterId.set(membership.clusterId, current);
+  }
+
+  let best:
+    | {
+        cluster: IntelligenceNarrativeClusterRecord;
+        averageScore: number;
+      }
+    | null = null;
+  for (const cluster of clusters) {
+    if (cluster.id === input.currentCluster.id) continue;
+    if (cluster.eventFamily !== input.currentCluster.eventFamily) continue;
+    if (!domainsCompatible(cluster.topDomainId, input.currentCluster.topDomainId)) continue;
+    if (!clusterHasRecentEvent(cluster) || !clusterHasRecentEvent(input.currentCluster)) continue;
+    const overlap = anchorOverlap(cluster.anchorEntities, input.currentCluster.anchorEntities);
+    if (overlap.count < 2 && overlap.ratio < 0.5) continue;
+    const averageScore = average(scoresByClusterId.get(cluster.id) ?? []);
+    if (averageScore < 0.72) continue;
+    if (Math.abs(cluster.contradictionScore - input.currentCluster.contradictionScore) > 0.22) continue;
+    if (!best || averageScore > best.averageScore) {
+      best = { cluster, averageScore };
+    }
+  }
+  if (!best) return null;
+
+  const { canonical, absorbed } = chooseCanonicalCluster(input.currentCluster, best.cluster);
+  const [canonicalMemberships, absorbedMemberships] = await Promise.all([
+    loadClusterMemberships({
+      store: input.store,
+      workspaceId: input.workspaceId,
+      clusterId: canonical.id,
+    }),
+    loadClusterMemberships({
+      store: input.store,
+      workspaceId: input.workspaceId,
+      clusterId: absorbed.id,
+    }),
+  ]);
+  const membershipsByEventId = new Map<string, IntelligenceNarrativeClusterMembershipRecord>();
+  for (const membership of [...canonicalMemberships, ...absorbedMemberships]) {
+    const existing = membershipsByEventId.get(membership.eventId);
+    if (!existing || membership.score > existing.score) {
+      membershipsByEventId.set(membership.eventId, {
+        ...membership,
+        clusterId: canonical.id,
+      });
+    }
+  }
+  const mergedMemberships = [...membershipsByEventId.values()];
+  const mergedMemberEvents = await hydrateNarrativeClusterMemberEvents({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    memberships: mergedMemberships,
+    candidateEventsById: input.candidateEventsById,
+  });
+  const mergedCluster = await upsertNarrativeClusterSnapshot({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    baseCluster: canonical,
+    memberships: mergedMemberships,
+    memberEvents: mergedMemberEvents,
+    defaultEvent: input.currentEvent,
+    latestRecurringScore: Math.max(
+      canonical.latestRecurringScore,
+      absorbed.latestRecurringScore,
+      input.temporal.recurringNarrativeScore,
+    ),
+    lastLedgerAt: canonical.lastLedgerAt,
+  });
+  const persistedMemberships: IntelligenceNarrativeClusterMembershipRecord[] = [];
+  for (const membership of mergedMemberships) {
+    persistedMemberships.push(
+      await input.store.upsertIntelligenceNarrativeClusterMembership({
+        id: membership.id,
+        workspaceId: input.workspaceId,
+        clusterId: mergedCluster.id,
+        eventId: membership.eventId,
+        relation: membership.relation,
+        score: membership.score,
+        daysDelta: membership.daysDelta,
+        isLatest: membership.eventId === input.currentEvent.id,
+      }),
+    );
+  }
+  await input.store.deleteIntelligenceNarrativeCluster({
+    workspaceId: input.workspaceId,
+    clusterId: absorbed.id,
+  });
+  const ledgerEntry = await createNarrativeClusterLedgerEntry({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    clusterId: mergedCluster.id,
+    entryType: 'merge',
+    summary: `Merged narrative cluster "${absorbed.title}" into "${canonical.title}".`,
+    scoreDelta: best.averageScore,
+    sourceEventIds: mergedMemberships.map((row) => row.eventId),
+  });
+  const finalCluster = await upsertNarrativeClusterSnapshot({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    baseCluster: mergedCluster,
+    memberships: persistedMemberships,
+    memberEvents: mergedMemberEvents,
+    defaultEvent: input.currentEvent,
+    latestRecurringScore: mergedCluster.latestRecurringScore,
+    lastLedgerAt: ledgerEntry.createdAt,
+  });
+  await syncNarrativeClusterTimeline({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    clusterId: finalCluster.id,
+    memberEvents: mergedMemberEvents,
+  });
+  return {
+    cluster: finalCluster,
+    memberships: persistedMemberships,
+    memberEvents: mergedMemberEvents,
+  };
+}
+
+function pickSplitEventIds(input: {
+  cluster: IntelligenceNarrativeClusterRecord;
+  memberships: IntelligenceNarrativeClusterMembershipRecord[];
+  memberEvents: IntelligenceEventClusterRecord[];
+}): string[] {
+  if (input.memberEvents.length < 2) return [];
+  const referenceMs = clusterRecentReferenceMs(input.cluster, input.memberEvents);
+  const recentEvents = input.memberEvents.filter((row) => {
+    const anchorMs = publishedMs(eventAnchorIso(row));
+    return anchorMs !== null && referenceMs - anchorMs <= 14 * DAY_MS;
+  });
+  if (recentEvents.length < 2) return [];
+  const membershipByEventId = new Map(input.memberships.map((row) => [row.eventId, row] as const));
+  const subgroup = recentEvents.filter((row) => {
+    const membership = membershipByEventId.get(row.id);
+    return (
+      membership?.relation === 'diverging' ||
+      row.temporalNarrativeState === 'diverging' ||
+      row.graphHotspotCount > 0 ||
+      row.graphContradictionScore >= row.graphSupportScore + 0.08
+    );
+  });
+  if (subgroup.length === 0 || subgroup.length >= input.memberEvents.length) return [];
+  const divergingRatio =
+    recentEvents.filter((row) => {
+      const membership = membershipByEventId.get(row.id);
+      return membership?.relation === 'diverging' || row.temporalNarrativeState === 'diverging';
+    }).length / recentEvents.length;
+  const hotspotRatio = recentEvents.filter((row) => row.graphHotspotCount > 0).length / recentEvents.length;
+  const supportGap = input.cluster.supportScore - input.cluster.contradictionScore;
+  const rest = input.memberEvents.filter((row) => !subgroup.some((candidate) => candidate.id === row.id));
+  if (rest.length === 0) return [];
+  const subgroupSupportDensity = average(subgroup.map((row) => row.graphSupportScore));
+  const restSupportDensity = average(rest.map((row) => row.graphSupportScore));
+  const supportDensityDiff = Math.abs(subgroupSupportDensity - restSupportDensity);
+  const shouldSplit =
+    divergingRatio >= 0.45 ||
+    hotspotRatio >= 0.4 ||
+    (supportGap <= 0.08 && input.cluster.driftScore >= 0.58) ||
+    supportDensityDiff >= 0.28;
+  return shouldSplit ? subgroup.map((row) => row.id) : [];
+}
+
+async function trySplitNarrativeCluster(input: {
+  store: WorkspaceScopedStore;
+  workspaceId: string;
+  currentCluster: IntelligenceNarrativeClusterRecord;
+  currentMemberships: IntelligenceNarrativeClusterMembershipRecord[];
+  currentMemberEvents: IntelligenceEventClusterRecord[];
+  currentEvent: IntelligenceEventClusterRecord;
+}): Promise<{
+  cluster: IntelligenceNarrativeClusterRecord;
+  memberships: IntelligenceNarrativeClusterMembershipRecord[];
+  memberEvents: IntelligenceEventClusterRecord[];
+} | null> {
+  const splitEventIds = new Set(
+    pickSplitEventIds({
+      cluster: input.currentCluster,
+      memberships: input.currentMemberships,
+      memberEvents: input.currentMemberEvents,
+    }),
+  );
+  if (splitEventIds.size === 0) return null;
+  const subgroupMemberships = input.currentMemberships.filter((row) => splitEventIds.has(row.eventId));
+  const subgroupEvents = input.currentMemberEvents.filter((row) => splitEventIds.has(row.id));
+  const retainedMemberships = input.currentMemberships.filter((row) => !splitEventIds.has(row.eventId));
+  const retainedEvents = input.currentMemberEvents.filter((row) => !splitEventIds.has(row.id));
+  if (subgroupMemberships.length === 0 || retainedMemberships.length === 0) return null;
+
+  const subgroupAnchorEvent =
+    subgroupEvents
+      .slice()
+      .sort((left, right) => Date.parse(eventAnchorIso(right) ?? '') - Date.parse(eventAnchorIso(left) ?? ''))[0] ??
+    input.currentEvent;
+  const newCluster = await upsertNarrativeClusterSnapshot({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    baseCluster: {
+      ...input.currentCluster,
+      id: randomUUID(),
+      clusterKey: `${buildNarrativeClusterKey(subgroupAnchorEvent)}::split::${subgroupAnchorEvent.id.slice(0, 8)}`,
+      title: subgroupAnchorEvent.title,
+      state: 'diverging',
+      reviewState: 'watch',
+      reviewReason: null,
+      reviewOwner: null,
+      reviewUpdatedAt: null,
+      reviewUpdatedBy: null,
+      reviewResolvedAt: null,
+      clusterPriorityScore: 0,
+      recentExecutionBlockedCount: 0,
+      lastLedgerAt: null,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      lastEventAt: subgroupAnchorEvent.timeWindowEnd ?? subgroupAnchorEvent.updatedAt,
+    },
+    memberships: subgroupMemberships,
+    memberEvents: subgroupEvents,
+    defaultEvent: subgroupAnchorEvent,
+    latestRecurringScore: Math.max(...subgroupEvents.map((row) => row.recurringNarrativeScore ?? 0), 0.55),
+    lastLedgerAt: null,
+  });
+  const persistedSubgroupMemberships: IntelligenceNarrativeClusterMembershipRecord[] = [];
+  for (const membership of subgroupMemberships) {
+    persistedSubgroupMemberships.push(
+      await input.store.upsertIntelligenceNarrativeClusterMembership({
+        id: membership.id,
+        workspaceId: input.workspaceId,
+        clusterId: newCluster.id,
+        eventId: membership.eventId,
+        relation: membership.relation === 'origin' ? 'diverging' : membership.relation,
+        score: membership.score,
+        daysDelta: membership.daysDelta,
+        isLatest: membership.eventId === input.currentEvent.id,
+      }),
+    );
+  }
+  let retainedCluster = await upsertNarrativeClusterSnapshot({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    baseCluster: input.currentCluster,
+    memberships: retainedMemberships,
+    memberEvents: retainedEvents,
+    defaultEvent: retainedEvents[0] ?? input.currentEvent,
+    latestRecurringScore: Math.max(...retainedEvents.map((row) => row.recurringNarrativeScore ?? 0), 0.4),
+    lastLedgerAt: input.currentCluster.lastLedgerAt,
+  });
+  const retainedPersistedMemberships: IntelligenceNarrativeClusterMembershipRecord[] = [];
+  for (const membership of retainedMemberships) {
+    retainedPersistedMemberships.push(
+      await input.store.upsertIntelligenceNarrativeClusterMembership({
+        id: membership.id,
+        workspaceId: input.workspaceId,
+        clusterId: retainedCluster.id,
+        eventId: membership.eventId,
+        relation: membership.relation,
+        score: membership.score,
+        daysDelta: membership.daysDelta,
+        isLatest: membership.eventId === input.currentEvent.id,
+      }),
+    );
+  }
+  const retainedLedger = await createNarrativeClusterLedgerEntry({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    clusterId: retainedCluster.id,
+    entryType: 'split',
+    summary: `Split contradiction-heavy subgroup from cluster "${input.currentCluster.title}".`,
+    scoreDelta: -input.currentCluster.driftScore,
+    sourceEventIds: subgroupMemberships.map((row) => row.eventId),
+  });
+  retainedCluster = await upsertNarrativeClusterSnapshot({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    baseCluster: retainedCluster,
+    memberships: retainedPersistedMemberships,
+    memberEvents: retainedEvents,
+    defaultEvent: retainedEvents[0] ?? input.currentEvent,
+    latestRecurringScore: retainedCluster.latestRecurringScore,
+    lastLedgerAt: retainedLedger.createdAt,
+  });
+  const newLedger = await createNarrativeClusterLedgerEntry({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    clusterId: newCluster.id,
+    entryType: 'split',
+    summary: `Created diverging narrative cluster from "${input.currentCluster.title}".`,
+    scoreDelta: input.currentCluster.driftScore,
+    sourceEventIds: subgroupMemberships.map((row) => row.eventId),
+  });
+  const finalNewCluster = await upsertNarrativeClusterSnapshot({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    baseCluster: newCluster,
+    memberships: persistedSubgroupMemberships,
+    memberEvents: subgroupEvents,
+    defaultEvent: subgroupAnchorEvent,
+    latestRecurringScore: newCluster.latestRecurringScore,
+    lastLedgerAt: newLedger.createdAt,
+  });
+  await Promise.all([
+    syncNarrativeClusterTimeline({
+      store: input.store,
+      workspaceId: input.workspaceId,
+      clusterId: retainedCluster.id,
+      memberEvents: retainedEvents,
+    }),
+    syncNarrativeClusterTimeline({
+      store: input.store,
+      workspaceId: input.workspaceId,
+      clusterId: finalNewCluster.id,
+      memberEvents: subgroupEvents,
+    }),
+  ]);
+  if (splitEventIds.has(input.currentEvent.id)) {
+    return {
+      cluster: finalNewCluster,
+      memberships: persistedSubgroupMemberships,
+      memberEvents: subgroupEvents,
+    };
+  }
+  return {
+    cluster: retainedCluster,
+    memberships: retainedPersistedMemberships,
+    memberEvents: retainedEvents,
+  };
 }
 
 async function syncNarrativeClusterForEvent(input: {
@@ -669,10 +1603,10 @@ async function syncNarrativeClusterForEvent(input: {
 
   const membersByEventId = new Map<string, IntelligenceNarrativeClusterMembershipRecord>();
   if (cluster) {
-    for (const membership of await input.store.listIntelligenceNarrativeClusterMemberships({
+    for (const membership of await loadClusterMemberships({
+      store: input.store,
       workspaceId: input.workspaceId,
       clusterId: cluster.id,
-      limit: 200,
     })) {
       membersByEventId.set(membership.eventId, membership);
     }
@@ -680,9 +1614,6 @@ async function syncNarrativeClusterForEvent(input: {
 
   const candidateEventsById = new Map(input.candidateEvents.map((row) => [row.id, row] as const));
   candidateEventsById.set(input.event.id, input.event);
-  const clusterKey = cluster?.clusterKey ?? buildNarrativeClusterKey(input.event);
-  const anchorEntities = [...input.event.entities].slice(0, 6);
-
   const clusterMembersToUpsert: Array<{
     eventId: string;
     relation: IntelligenceNarrativeClusterMembershipRecord['relation'];
@@ -725,76 +1656,31 @@ async function syncNarrativeClusterForEvent(input: {
     });
   }
 
-  const memberEvents = [...membersByEventId.values()]
-    .map((membership) => candidateEventsById.get(membership.eventId) ?? null)
-    .filter((row): row is IntelligenceEventClusterRecord => row !== null);
-
-  const recurringEventCount = [...membersByEventId.values()].filter((row) => row.relation === 'recurring').length;
-  const divergingEventCount = [...membersByEventId.values()].filter((row) => row.relation === 'diverging').length;
-  const supportiveHistoryCount = [...membersByEventId.values()].filter((row) => row.relation === 'supportive_history').length;
-  const hotspotEventCount = memberEvents.filter((row) => row.graphHotspotCount > 0).length;
-  const memberEventCount = Math.max(1, memberEvents.length);
-  const supportScore = clampScore(
-    memberEvents.reduce((total, row) => total + row.graphSupportScore, 0) / memberEventCount,
-  );
-  const contradictionScore = clampScore(
-    memberEvents.reduce((total, row) => total + row.graphContradictionScore, 0) / memberEventCount,
-  );
-  const timeCoherenceScore = clampScore(
-    memberEvents.reduce((total, row) => total + row.timeCoherenceScore, 0) / memberEventCount,
-  );
-  const driftScore = clampScore(
-    0.42 * (divergingEventCount / memberEventCount) +
-      0.34 * contradictionScore +
-      0.16 * (hotspotEventCount / memberEventCount) +
-      0.08 * (1 - timeCoherenceScore),
-  );
-  const clusterState: IntelligenceNarrativeClusterRecord['state'] =
-    divergingEventCount > 0
-      ? 'diverging'
-      : recurringEventCount > 0 || supportiveHistoryCount > 0
-        ? 'recurring'
-        : 'forming';
-  const lastEventAt = memberEvents
-    .map((row) => row.timeWindowEnd ?? row.updatedAt)
-    .filter((row): row is string => Boolean(row))
-    .sort((left, right) => Date.parse(right) - Date.parse(left))[0] ?? null;
-
-  cluster = await input.store.upsertIntelligenceNarrativeCluster({
-    id: cluster?.id,
+  let memberships = [...membersByEventId.values()];
+  let memberEvents = await hydrateNarrativeClusterMemberEvents({
+    store: input.store,
     workspaceId: input.workspaceId,
-    clusterKey,
-    title: cluster?.title ?? input.event.title,
-    eventFamily: input.event.eventFamily,
-    topDomainId: input.event.topDomainId ?? null,
-    anchorEntities,
-    state: clusterState,
-    eventCount: membersByEventId.size,
-    recurringEventCount,
-    divergingEventCount,
-    supportiveHistoryCount,
-    hotspotEventCount,
-    latestRecurringScore: input.temporal.recurringNarrativeScore,
-    driftScore,
-    supportScore,
-    contradictionScore,
-    timeCoherenceScore,
-    reviewState: cluster?.reviewState ?? 'watch',
-    reviewReason: cluster?.reviewReason ?? null,
-    reviewOwner: cluster?.reviewOwner ?? null,
-    reviewUpdatedAt: cluster?.reviewUpdatedAt ?? null,
-    reviewUpdatedBy: cluster?.reviewUpdatedBy ?? null,
-    reviewResolvedAt: cluster?.reviewResolvedAt ?? null,
-    lastEventAt,
+    memberships,
+    candidateEventsById,
   });
-
+  const previousCluster = cluster;
+  let persistedCluster = await upsertNarrativeClusterSnapshot({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    baseCluster: cluster,
+    memberships,
+    memberEvents,
+    defaultEvent: input.event,
+    latestRecurringScore: input.temporal.recurringNarrativeScore,
+    lastLedgerAt: cluster?.lastLedgerAt,
+  });
   const persistedMemberships: IntelligenceNarrativeClusterMembershipRecord[] = [];
-  for (const membership of membersByEventId.values()) {
+  for (const membership of memberships) {
     persistedMemberships.push(
       await input.store.upsertIntelligenceNarrativeClusterMembership({
         id: membership.id,
         workspaceId: input.workspaceId,
-        clusterId: cluster.id,
+        clusterId: persistedCluster.id,
         eventId: membership.eventId,
         relation: membership.relation,
         score: membership.score,
@@ -803,8 +1689,66 @@ async function syncNarrativeClusterForEvent(input: {
       }),
     );
   }
+  memberships = persistedMemberships;
 
-  return { cluster, memberships: persistedMemberships };
+  const shiftedLedgerAt = await maybeRecordNarrativeClusterStateShift({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    previousCluster,
+    nextCluster: persistedCluster,
+    sourceEventIds: memberships.map((row) => row.eventId),
+  });
+  if (shiftedLedgerAt) {
+    persistedCluster = await upsertNarrativeClusterSnapshot({
+      store: input.store,
+      workspaceId: input.workspaceId,
+      baseCluster: persistedCluster,
+      memberships,
+      memberEvents,
+      defaultEvent: input.event,
+      latestRecurringScore: persistedCluster.latestRecurringScore,
+      lastLedgerAt: shiftedLedgerAt,
+    });
+  }
+
+  const merged = await tryMergeNarrativeCluster({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    currentCluster: persistedCluster,
+    currentMemberships: memberships,
+    currentMemberEvents: memberEvents,
+    currentEvent: input.event,
+    temporal: input.temporal,
+    candidateEventsById,
+  });
+  if (merged) {
+    persistedCluster = merged.cluster;
+    memberships = merged.memberships;
+    memberEvents = merged.memberEvents;
+  }
+
+  const split = await trySplitNarrativeCluster({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    currentCluster: persistedCluster,
+    currentMemberships: memberships,
+    currentMemberEvents: memberEvents,
+    currentEvent: input.event,
+  });
+  if (split) {
+    persistedCluster = split.cluster;
+    memberships = split.memberships;
+    memberEvents = split.memberEvents;
+  }
+
+  await syncNarrativeClusterTimeline({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    clusterId: persistedCluster.id,
+    memberEvents,
+  });
+
+  return { cluster: persistedCluster, memberships };
 }
 
 export function buildIntelligenceHotspotClusters(input: {
@@ -1186,6 +2130,10 @@ function scoreEvent(input: {
 
 function buildExecutionCandidate(input: {
   event: IntelligenceEventClusterRecord;
+  cluster?: Pick<
+    IntelligenceNarrativeClusterRecord,
+    'state' | 'driftScore' | 'contradictionScore' | 'recentExecutionBlockedCount'
+  > | null;
 }): ExecutionCandidateRecord[] {
   const topDomainScore = input.event.domainPosteriors[0]?.score ?? 0;
   const nonSocialSourceCount = Math.max(
@@ -1211,9 +2159,19 @@ function buildExecutionCandidate(input: {
     input.event.timeCoherenceScore < 0.4 ||
     input.event.graphContradictionScore > 0.42 ||
     input.event.graphHotspotCount > 0;
+  const clusterBlockedReason =
+    input.cluster?.state === 'diverging'
+      ? 'cluster_diverging'
+      : (input.cluster?.driftScore ?? 0) >= 0.58
+        ? 'cluster_drift_too_high'
+        : (input.cluster?.contradictionScore ?? 0) >= 0.32
+          ? 'cluster_contradiction_too_high'
+          : (input.cluster?.recentExecutionBlockedCount ?? 0) >= 2
+            ? 'cluster_recent_blocked_executions'
+            : null;
   if (input.event.actionabilityScore < 0.68) return [];
 
-  if (evidenceWeak) {
+  if (evidenceWeak || clusterBlockedReason) {
     return [
       {
         id: randomUUID(),
@@ -1240,12 +2198,15 @@ function buildExecutionCandidate(input: {
         },
         policyJson: {
           auto_execute_allowed: false,
-          reasons: ['linked-claim corroboration threshold not met'],
+          reasons: clusterBlockedReason
+            ? ['cluster-level execution guard triggered']
+            : ['linked-claim corroboration threshold not met'],
         },
         status: 'blocked',
         resultJson: {
           blocked_reason:
-            socialOnly
+            clusterBlockedReason ??
+            (socialOnly
               ? 'social_only'
               : nonSocialSourceCount < 1
                 ? 'non_social_corroboration_required'
@@ -1259,7 +2220,7 @@ function buildExecutionCandidate(input: {
                         ? 'graph_hotspot_present'
                         : input.event.graphContradictionScore > 0.42
                           ? 'graph_contradiction_too_high'
-                          : 'insufficient_claim_evidence',
+                          : 'insufficient_claim_evidence'),
         },
         createdAt: nowIso(),
         updatedAt: nowIso(),
@@ -2684,22 +3645,34 @@ export async function runIntelligenceSemanticPass(input: {
         event: enrichedEvent,
         candidateEvents: existingEvents,
       });
-      await syncNarrativeClusterForEvent({
+      const narrativeClusterSync = await syncNarrativeClusterForEvent({
         store: input.store,
         workspaceId: input.workspaceId,
         event: enrichedEvent,
         temporal,
         candidateEvents: existingEvents,
       });
+      let latestEvent = await input.store.upsertIntelligenceEvent({
+        ...enrichedEvent,
+        narrativeClusterId: narrativeClusterSync.cluster.id,
+        narrativeClusterState: narrativeClusterSync.cluster.state,
+        executionCandidates: buildExecutionCandidate({
+          event: {
+            ...enrichedEvent,
+            narrativeClusterId: narrativeClusterSync.cluster.id,
+            narrativeClusterState: narrativeClusterSync.cluster.state,
+          },
+          cluster: narrativeClusterSync.cluster,
+        }),
+      });
       const existingIndex = existingEvents.findIndex((event) => event.id === persisted.id);
       if (existingIndex >= 0) {
-        existingEvents.splice(existingIndex, 1, enrichedEvent);
+        existingEvents.splice(existingIndex, 1, latestEvent);
       } else {
-        existingEvents.unshift(enrichedEvent);
+        existingEvents.unshift(latestEvent);
         clusteredEventCount += 1;
       }
-      touchedEventIds.add(enrichedEvent.id);
-      let latestEvent = enrichedEvent;
+      touchedEventIds.add(latestEvent.id);
       await input.store.updateIntelligenceSignalProcessing({
         workspaceId: input.workspaceId,
         signalId: signal.id,
@@ -2770,15 +3743,28 @@ export async function runIntelligenceSemanticPass(input: {
         event: nextEvent,
         candidateEvents: existingEvents,
       });
-      await syncNarrativeClusterForEvent({
+      const narrativeClusterSync = await syncNarrativeClusterForEvent({
         store: input.store,
         workspaceId: input.workspaceId,
         event: nextEvent,
         temporal,
         candidateEvents: existingEvents,
       });
-      existingEvents.splice(index, 1, nextEvent);
-      touchedEventIds.add(nextEvent.id);
+      const guardedEvent = await input.store.upsertIntelligenceEvent({
+        ...nextEvent,
+        narrativeClusterId: narrativeClusterSync.cluster.id,
+        narrativeClusterState: narrativeClusterSync.cluster.state,
+        executionCandidates: buildExecutionCandidate({
+          event: {
+            ...nextEvent,
+            narrativeClusterId: narrativeClusterSync.cluster.id,
+            narrativeClusterState: narrativeClusterSync.cluster.state,
+          },
+          cluster: narrativeClusterSync.cluster,
+        }),
+      });
+      existingEvents.splice(index, 1, guardedEvent);
+      touchedEventIds.add(guardedEvent.id);
     }
 
   return {

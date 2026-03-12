@@ -100,6 +100,11 @@ const EventsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 
+const NarrativeClustersQuerySchema = z.object({
+  workspace_id: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+});
+
 const DeliberateSchema = z.object({
   workspace_id: z.string().uuid().optional(),
 });
@@ -146,6 +151,7 @@ const AliasListQuerySchema = z.object({
 
 const AliasBindingUpdateSchema = z.object({
   workspace_id: z.string().uuid().optional(),
+  scope: z.enum(['workspace', 'global']).default('workspace'),
   bindings: z.array(
     z.object({
       provider: z.enum(['openai', 'gemini', 'anthropic', 'local']),
@@ -216,6 +222,24 @@ async function loadEventOr404(
     return null;
   }
   return event;
+}
+
+async function loadNarrativeClusterOr404(
+  ctx: RouteContext,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  workspaceId: string,
+  clusterId: string,
+) {
+  const cluster = await ctx.store.getIntelligenceNarrativeClusterById({
+    workspaceId,
+    clusterId,
+  });
+  if (!cluster) {
+    sendError(reply, request, 404, 'NOT_FOUND', 'intelligence narrative cluster not found');
+    return null;
+  }
+  return cluster;
 }
 
 export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext): Promise<void> {
@@ -450,21 +474,37 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       workspaceId: parsed.data.workspace_id,
     });
     if (!access) return reply;
-    const events = await ctx.store.listIntelligenceEvents({
-      workspaceId: access.workspaceId,
-      limit: parsed.data.limit,
-      domainId: parsed.data.domain_id,
-    });
+    const [events, clusterMemberships, clusters] = await Promise.all([
+      ctx.store.listIntelligenceEvents({
+        workspaceId: access.workspaceId,
+        limit: parsed.data.limit,
+        domainId: parsed.data.domain_id,
+      }),
+      ctx.store.listIntelligenceNarrativeClusterMemberships({
+        workspaceId: access.workspaceId,
+        limit: 1000,
+      }),
+      ctx.store.listIntelligenceNarrativeClusters({
+        workspaceId: access.workspaceId,
+        limit: 200,
+      }),
+    ]);
+    const clusterById = new Map(clusters.map((row) => [row.id, row] as const));
+    const clusterMembershipByEventId = new Map(clusterMemberships.map((row) => [row.eventId, row] as const));
     const enrichedEvents = events.map((event) => {
       const temporal = computeIntelligenceTemporalNarrativeProfile({
         event,
         candidateEvents: events,
       });
+      const clusterMembership = clusterMembershipByEventId.get(event.id) ?? null;
+      const cluster = clusterMembership ? clusterById.get(clusterMembership.clusterId) ?? null : null;
       return {
         ...event,
         recurringNarrativeScore: temporal.recurringNarrativeScore,
         relatedHistoricalEventCount: temporal.relatedHistoricalEventCount,
         temporalNarrativeState: temporal.temporalNarrativeState,
+        narrativeClusterId: cluster?.id ?? null,
+        narrativeClusterState: cluster?.state ?? null,
       };
     });
     return sendSuccess(reply, request, 200, {
@@ -787,6 +827,243 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
     });
   });
 
+  app.get('/api/v1/intelligence/narrative-clusters', async (request, reply) => {
+    const parsed = NarrativeClustersQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid intelligence narrative cluster query', parsed.error.flatten());
+    }
+    const access = await resolveWorkspaceAccess(ctx, request, reply, {
+      workspaceId: parsed.data.workspace_id,
+    });
+    if (!access) return reply;
+    const clusters = await ctx.store.listIntelligenceNarrativeClusters({
+      workspaceId: access.workspaceId,
+      limit: parsed.data.limit,
+    });
+    const sorted = [...clusters].sort(
+      (left, right) =>
+        right.clusterPriorityScore - left.clusterPriorityScore ||
+        Date.parse(right.updatedAt) - Date.parse(left.updatedAt),
+    );
+    return sendSuccess(reply, request, 200, {
+      workspace_id: access.workspaceId,
+      narrative_clusters: sorted,
+    });
+  });
+
+  app.get('/api/v1/intelligence/narrative-clusters/:clusterId', async (request, reply) => {
+    const parsed = WorkspaceScopedQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid intelligence narrative cluster detail query', parsed.error.flatten());
+    }
+    const access = await resolveWorkspaceAccess(ctx, request, reply, {
+      workspaceId: parsed.data.workspace_id,
+    });
+    if (!access) return reply;
+    const cluster = await loadNarrativeClusterOr404(
+      ctx,
+      request,
+      reply,
+      access.workspaceId,
+      (request.params as { clusterId: string }).clusterId,
+    );
+    if (!cluster) return reply;
+    const [memberships, events, ledgerEntries, operatorNotes] = await Promise.all([
+      ctx.store.listIntelligenceNarrativeClusterMemberships({
+        workspaceId: access.workspaceId,
+        clusterId: cluster.id,
+        limit: 500,
+      }),
+      ctx.store.listIntelligenceEvents({
+        workspaceId: access.workspaceId,
+        limit: 500,
+      }),
+      ctx.store.listIntelligenceNarrativeClusterLedgerEntries({
+        workspaceId: access.workspaceId,
+        clusterId: cluster.id,
+        limit: 100,
+      }),
+      ctx.store.listIntelligenceOperatorNotes({
+        workspaceId: access.workspaceId,
+        limit: 200,
+      }),
+    ]);
+    const eventById = new Map(events.map((row) => [row.id, row] as const));
+    const memberSummaries = memberships
+      .map((membership) => {
+        const event = eventById.get(membership.eventId);
+        if (!event) return null;
+        return {
+          membershipId: membership.id,
+          eventId: event.id,
+          title: event.title,
+          relation: membership.relation,
+          score: membership.score,
+          daysDelta: membership.daysDelta,
+          isLatest: membership.isLatest,
+          temporalNarrativeState: event.temporalNarrativeState,
+          graphSupportScore: event.graphSupportScore,
+          graphContradictionScore: event.graphContradictionScore,
+          graphHotspotCount: event.graphHotspotCount,
+          timeCoherenceScore: event.timeCoherenceScore,
+          lastEventAt: event.timeWindowEnd ?? event.updatedAt,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null)
+      .sort((left, right) => {
+        if (left.isLatest !== right.isLatest) return left.isLatest ? -1 : 1;
+        return Date.parse(right.lastEventAt ?? '') - Date.parse(left.lastEventAt ?? '');
+      });
+    const clusterNotes = operatorNotes.filter(
+      (note) => note.scope === 'narrative_cluster' && note.scopeId === cluster.id,
+    );
+    const recentEvents = memberSummaries
+      .map((summary) => eventById.get(summary.eventId) ?? null)
+      .filter((row): row is NonNullable<typeof row> => row !== null)
+      .sort((left, right) => Date.parse(right.timeWindowEnd ?? right.updatedAt) - Date.parse(left.timeWindowEnd ?? left.updatedAt))
+      .slice(0, 25);
+    return sendSuccess(reply, request, 200, {
+      workspace_id: access.workspaceId,
+      narrative_cluster: cluster,
+      memberships: memberSummaries,
+      recent_events: recentEvents,
+      ledger_entries: ledgerEntries,
+      operator_notes: clusterNotes,
+    });
+  });
+
+  app.get('/api/v1/intelligence/narrative-clusters/:clusterId/timeline', async (request, reply) => {
+    const parsed = WorkspaceScopedQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid intelligence narrative cluster timeline query', parsed.error.flatten());
+    }
+    const access = await resolveWorkspaceAccess(ctx, request, reply, {
+      workspaceId: parsed.data.workspace_id,
+    });
+    if (!access) return reply;
+    const cluster = await loadNarrativeClusterOr404(
+      ctx,
+      request,
+      reply,
+      access.workspaceId,
+      (request.params as { clusterId: string }).clusterId,
+    );
+    if (!cluster) return reply;
+    const timeline = await ctx.store.listIntelligenceNarrativeClusterTimelineEntries({
+      workspaceId: access.workspaceId,
+      clusterId: cluster.id,
+    });
+    return sendSuccess(reply, request, 200, {
+      workspace_id: access.workspaceId,
+      cluster_id: cluster.id,
+      trend_summary: {
+        recurring_strength_trend: cluster.recurringStrengthTrend,
+        divergence_trend: cluster.divergenceTrend,
+        support_decay_score: cluster.supportDecayScore,
+        contradiction_acceleration: cluster.contradictionAcceleration,
+        last_recurring_at: cluster.lastRecurringAt,
+        last_diverging_at: cluster.lastDivergingAt,
+      },
+      timeline,
+    });
+  });
+
+  app.get('/api/v1/intelligence/narrative-clusters/:clusterId/graph', async (request, reply) => {
+    const parsed = WorkspaceScopedQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid intelligence narrative cluster graph query', parsed.error.flatten());
+    }
+    const access = await resolveWorkspaceAccess(ctx, request, reply, {
+      workspaceId: parsed.data.workspace_id,
+    });
+    if (!access) return reply;
+    const cluster = await loadNarrativeClusterOr404(
+      ctx,
+      request,
+      reply,
+      access.workspaceId,
+      (request.params as { clusterId: string }).clusterId,
+    );
+    if (!cluster) return reply;
+    const memberships = await ctx.store.listIntelligenceNarrativeClusterMemberships({
+      workspaceId: access.workspaceId,
+      clusterId: cluster.id,
+      limit: 500,
+    });
+    const eventIds = memberships.map((membership) => membership.eventId);
+    const [events, linkedClaimsByEvent, linkedEdgesByEvent] = await Promise.all([
+      ctx.store.listIntelligenceEvents({
+        workspaceId: access.workspaceId,
+        limit: 500,
+      }),
+      Promise.all(
+        eventIds.map((eventId) =>
+          ctx.store.listIntelligenceLinkedClaims({
+            workspaceId: access.workspaceId,
+            eventId,
+            limit: 200,
+          }),
+        ),
+      ),
+      Promise.all(
+        eventIds.map((eventId) =>
+          ctx.store.listIntelligenceLinkedClaimEdges({
+            workspaceId: access.workspaceId,
+            eventId,
+            limit: 400,
+          }),
+        ),
+      ),
+    ]);
+    const memberEvents = events.filter((event) => eventIds.includes(event.id));
+    const linkedClaims = [...new Map(linkedClaimsByEvent.flat().map((row) => [row.id, row] as const)).values()];
+    const edges = [...new Map(linkedEdgesByEvent.flat().map((row) => [row.id, row] as const)).values()];
+    const hotspots = new Set<string>();
+    for (const claim of linkedClaims) {
+      if (claim.contradictionCount > 0) hotspots.add(claim.id);
+    }
+    for (const edge of edges) {
+      if (edge.relation === 'contradicts') {
+        hotspots.add(edge.leftLinkedClaimId);
+        hotspots.add(edge.rightLinkedClaimId);
+      }
+    }
+    return sendSuccess(reply, request, 200, {
+      workspace_id: access.workspaceId,
+      cluster_id: cluster.id,
+      summary: {
+        clusterId: cluster.id,
+        eventCount: cluster.eventCount,
+        linkedClaimCount: linkedClaims.length,
+        edgeCount: edges.length,
+        graphSupportScore: cluster.supportScore,
+        graphContradictionScore: cluster.contradictionScore,
+        graphHotspotCount: cluster.hotspotEventCount,
+        hotspotClusterCount: buildIntelligenceHotspotClusters({
+          linkedClaims,
+          edges,
+        }).length,
+      },
+      nodes: linkedClaims,
+      edges: edges.map((edge) => ({
+        ...edge,
+        evidence_signal_count: edge.evidenceSignalIds.length,
+      })),
+      hotspots: [...hotspots],
+      neighborhoods: buildIntelligenceGraphNeighborhoods({
+        linkedClaims,
+        edges,
+      }),
+      hotspot_clusters: buildIntelligenceHotspotClusters({
+        linkedClaims,
+        edges,
+      }),
+      recent_events: memberEvents
+        .sort((left, right) => Date.parse(right.timeWindowEnd ?? right.updatedAt) - Date.parse(left.timeWindowEnd ?? left.updatedAt))
+        .slice(0, 25),
+    });
+  });
+
   app.post('/api/v1/intelligence/signals/:signalId/retry', async (request, reply) => {
     const parsed = WorkspaceScopedQuerySchema.safeParse(request.body ?? {});
     if (!parsed.success) {
@@ -1095,9 +1372,10 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       requiredRole: 'admin',
     });
     if (!access) return reply;
+    const targetWorkspaceId = parsed.data.scope === 'global' ? null : access.workspaceId;
     const bindings = await ctx.store.replaceIntelligenceAliasBindings({
       alias,
-      workspaceId: access.workspaceId,
+      workspaceId: targetWorkspaceId,
       updatedBy: access.userId,
       bindings: parsed.data.bindings.map((row) => ({
         alias,
@@ -1114,14 +1392,15 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       })),
     });
     const rollout = await ctx.store.createIntelligenceAliasRollout({
-      workspaceId: access.workspaceId,
+      workspaceId: targetWorkspaceId,
       alias,
       bindingIds: bindings.map((row) => row.id),
       createdBy: access.userId,
-      note: 'runtime binding update',
+      note: `${parsed.data.scope} runtime binding update`,
     });
     return sendSuccess(reply, request, 200, {
       workspace_id: access.workspaceId,
+      binding_scope: parsed.data.scope,
       alias,
       bindings,
       rollout,

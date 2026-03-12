@@ -1850,13 +1850,22 @@ export async function initializePostgresStore({
       support_score NUMERIC(5,3) NOT NULL DEFAULT 0,
       contradiction_score NUMERIC(5,3) NOT NULL DEFAULT 0,
       time_coherence_score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      recurring_strength_trend NUMERIC(5,3) NOT NULL DEFAULT 0,
+      divergence_trend NUMERIC(5,3) NOT NULL DEFAULT 0,
+      support_decay_score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      contradiction_acceleration NUMERIC(5,3) NOT NULL DEFAULT 0,
+      cluster_priority_score INTEGER NOT NULL DEFAULT 0,
+      recent_execution_blocked_count INTEGER NOT NULL DEFAULT 0,
       review_state TEXT NOT NULL DEFAULT 'watch',
       review_reason TEXT,
       review_owner TEXT,
       review_updated_at TIMESTAMPTZ,
       review_updated_by TEXT,
       review_resolved_at TIMESTAMPTZ,
+      last_ledger_at TIMESTAMPTZ,
       last_event_at TIMESTAMPTZ,
+      last_recurring_at TIMESTAMPTZ,
+      last_diverging_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE (workspace_id, cluster_key)
@@ -1877,6 +1886,22 @@ export async function initializePostgresStore({
   await pool.query(`
     ALTER TABLE intelligence_narrative_clusters
     ADD COLUMN IF NOT EXISTS time_coherence_score NUMERIC(5,3) NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_narrative_clusters
+    ADD COLUMN IF NOT EXISTS recurring_strength_trend NUMERIC(5,3) NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_narrative_clusters
+    ADD COLUMN IF NOT EXISTS divergence_trend NUMERIC(5,3) NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_narrative_clusters
+    ADD COLUMN IF NOT EXISTS support_decay_score NUMERIC(5,3) NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_narrative_clusters
+    ADD COLUMN IF NOT EXISTS contradiction_acceleration NUMERIC(5,3) NOT NULL DEFAULT 0
   `);
   await pool.query(`
     ALTER TABLE intelligence_narrative_clusters
@@ -1901,6 +1926,26 @@ export async function initializePostgresStore({
   await pool.query(`
     ALTER TABLE intelligence_narrative_clusters
     ADD COLUMN IF NOT EXISTS review_resolved_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_narrative_clusters
+    ADD COLUMN IF NOT EXISTS cluster_priority_score INTEGER NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_narrative_clusters
+    ADD COLUMN IF NOT EXISTS recent_execution_blocked_count INTEGER NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_narrative_clusters
+    ADD COLUMN IF NOT EXISTS last_ledger_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_narrative_clusters
+    ADD COLUMN IF NOT EXISTS last_recurring_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_narrative_clusters
+    ADD COLUMN IF NOT EXISTS last_diverging_at TIMESTAMPTZ
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS intelligence_narrative_cluster_memberships (
@@ -1934,6 +1979,36 @@ export async function initializePostgresStore({
       time_coherence_score NUMERIC(5,3) NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_narrative_cluster_ledger (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      cluster_id UUID NOT NULL REFERENCES intelligence_narrative_clusters(id) ON DELETE CASCADE,
+      entry_type TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      score_delta NUMERIC(5,3) NOT NULL DEFAULT 0,
+      source_event_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_narrative_cluster_timeline (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      cluster_id UUID NOT NULL REFERENCES intelligence_narrative_clusters(id) ON DELETE CASCADE,
+      bucket_start TIMESTAMPTZ NOT NULL,
+      event_count INTEGER NOT NULL DEFAULT 0,
+      recurring_score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      drift_score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      support_score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      contradiction_score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      time_coherence_score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      hotspot_event_count INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (workspace_id, cluster_id, bucket_start)
     )
   `);
   await pool.query(`
@@ -2119,6 +2194,14 @@ export async function initializePostgresStore({
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_intelligence_temporal_narrative_ledger_event_updated
     ON intelligence_temporal_narrative_ledger(workspace_id, event_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_narrative_cluster_ledger_cluster_created
+    ON intelligence_narrative_cluster_ledger(workspace_id, cluster_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_narrative_cluster_timeline_cluster_bucket
+    ON intelligence_narrative_cluster_timeline(workspace_id, cluster_id, bucket_start DESC)
   `);
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_intelligence_execution_audits_event_created

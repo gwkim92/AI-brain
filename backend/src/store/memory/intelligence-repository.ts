@@ -14,8 +14,10 @@ import type {
   IntelligenceExpectedSignalEntryRecord,
   IntelligenceEventClusterRecord,
   IntelligenceInvalidationEntryRecord,
+  IntelligenceNarrativeClusterLedgerEntryRecord,
   IntelligenceNarrativeClusterMembershipRecord,
   IntelligenceNarrativeClusterRecord,
+  IntelligenceNarrativeClusterTimelineRecord,
   IntelligenceOutcomeEntryRecord,
   IntelligenceTemporalNarrativeLedgerEntryRecord,
   IntelligenceSourceHealth,
@@ -922,13 +924,22 @@ export function createMemoryIntelligenceRepository({
         supportScore: input.supportScore,
         contradictionScore: input.contradictionScore,
         timeCoherenceScore: input.timeCoherenceScore,
+        recurringStrengthTrend: input.recurringStrengthTrend,
+        divergenceTrend: input.divergenceTrend,
+        supportDecayScore: input.supportDecayScore,
+        contradictionAcceleration: input.contradictionAcceleration,
+        clusterPriorityScore: input.clusterPriorityScore,
+        recentExecutionBlockedCount: input.recentExecutionBlockedCount,
         reviewState: input.reviewState ?? existing?.reviewState ?? 'watch',
         reviewReason: input.reviewReason ?? existing?.reviewReason ?? null,
         reviewOwner: input.reviewOwner ?? existing?.reviewOwner ?? null,
         reviewUpdatedAt: input.reviewUpdatedAt ?? existing?.reviewUpdatedAt ?? null,
         reviewUpdatedBy: input.reviewUpdatedBy ?? existing?.reviewUpdatedBy ?? null,
         reviewResolvedAt: input.reviewResolvedAt ?? existing?.reviewResolvedAt ?? null,
+        lastLedgerAt: input.lastLedgerAt ?? existing?.lastLedgerAt ?? null,
         lastEventAt: input.lastEventAt ?? null,
+        lastRecurringAt: input.lastRecurringAt ?? existing?.lastRecurringAt ?? null,
+        lastDivergingAt: input.lastDivergingAt ?? existing?.lastDivergingAt ?? null,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       };
@@ -947,6 +958,28 @@ export function createMemoryIntelligenceRepository({
     async getIntelligenceNarrativeClusterById(input) {
       const row = state.intelligenceNarrativeClusters.get(input.clusterId);
       return row && row.workspaceId === input.workspaceId ? row : null;
+    },
+
+    async deleteIntelligenceNarrativeCluster(input) {
+      const current = state.intelligenceNarrativeClusters.get(input.clusterId);
+      if (!current || current.workspaceId !== input.workspaceId) return false;
+      state.intelligenceNarrativeClusters.delete(input.clusterId);
+      for (const [id, membership] of state.intelligenceNarrativeClusterMemberships.entries()) {
+        if (membership.workspaceId === input.workspaceId && membership.clusterId === input.clusterId) {
+          state.intelligenceNarrativeClusterMemberships.delete(id);
+        }
+      }
+      for (const [id, entry] of state.intelligenceNarrativeClusterLedger.entries()) {
+        if (entry.workspaceId === input.workspaceId && entry.clusterId === input.clusterId) {
+          state.intelligenceNarrativeClusterLedger.delete(id);
+        }
+      }
+      for (const [id, entry] of state.intelligenceNarrativeClusterTimeline.entries()) {
+        if (entry.workspaceId === input.workspaceId && entry.clusterId === input.clusterId) {
+          state.intelligenceNarrativeClusterTimeline.delete(id);
+        }
+      }
+      return true;
     },
 
     async updateIntelligenceNarrativeClusterReviewState(input) {
@@ -1033,6 +1066,67 @@ export function createMemoryIntelligenceRepository({
       return sortByUpdated(
         [...state.intelligenceTemporalNarrativeLedger.values()].filter(
           (row) => row.workspaceId === input.workspaceId && row.eventId === input.eventId,
+        ),
+      );
+    },
+
+    async createIntelligenceNarrativeClusterLedgerEntry(input) {
+      const row: IntelligenceNarrativeClusterLedgerEntryRecord = {
+        id: input.id ?? randomUUID(),
+        workspaceId: input.workspaceId,
+        clusterId: input.clusterId,
+        entryType: input.entryType,
+        summary: input.summary,
+        scoreDelta: input.scoreDelta,
+        sourceEventIds: [...input.sourceEventIds],
+        createdAt: input.createdAt ?? nowIso(),
+      };
+      state.intelligenceNarrativeClusterLedger.set(row.id, row);
+      return row;
+    },
+
+    async listIntelligenceNarrativeClusterLedgerEntries(input) {
+      const rows = sortByUpdated(
+        [...state.intelligenceNarrativeClusterLedger.values()].filter(
+          (row) => row.workspaceId === input.workspaceId && row.clusterId === input.clusterId,
+        ),
+      );
+      return typeof input.limit === 'number' ? rows.slice(0, input.limit) : rows;
+    },
+
+    async replaceIntelligenceNarrativeClusterTimelineEntries(input) {
+      for (const [id, row] of state.intelligenceNarrativeClusterTimeline.entries()) {
+        if (row.workspaceId === input.workspaceId && row.clusterId === input.clusterId) {
+          state.intelligenceNarrativeClusterTimeline.delete(id);
+        }
+      }
+      const now = nowIso();
+      const rows = input.entries.map((entry) => {
+        const row: IntelligenceNarrativeClusterTimelineRecord = {
+          id: entry.id ?? randomUUID(),
+          workspaceId: input.workspaceId,
+          clusterId: input.clusterId,
+          bucketStart: entry.bucketStart,
+          eventCount: entry.eventCount,
+          recurringScore: entry.recurringScore,
+          driftScore: entry.driftScore,
+          supportScore: entry.supportScore,
+          contradictionScore: entry.contradictionScore,
+          timeCoherenceScore: entry.timeCoherenceScore,
+          hotspotEventCount: entry.hotspotEventCount,
+          createdAt: entry.createdAt ?? now,
+          updatedAt: entry.updatedAt ?? now,
+        };
+        state.intelligenceNarrativeClusterTimeline.set(row.id, row);
+        return row;
+      });
+      return rows.sort((left, right) => right.bucketStart.localeCompare(left.bucketStart));
+    },
+
+    async listIntelligenceNarrativeClusterTimelineEntries(input) {
+      return sortByUpdated(
+        [...state.intelligenceNarrativeClusterTimeline.values()].filter(
+          (row) => row.workspaceId === input.workspaceId && row.clusterId === input.clusterId,
         ),
       );
     },

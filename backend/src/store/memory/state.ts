@@ -30,6 +30,8 @@ import type {
   IntelligenceOutcomeEntryRecord,
   IntelligenceNarrativeClusterMembershipRecord,
   IntelligenceNarrativeClusterRecord,
+  IntelligenceNarrativeClusterLedgerEntryRecord,
+  IntelligenceNarrativeClusterTimelineRecord,
   IntelligenceTemporalNarrativeLedgerEntryRecord,
   LinkedClaimEdgeRecord,
   OperatorNoteRecord,
@@ -161,6 +163,8 @@ export type MemoryOutcomeEntryRow = IntelligenceOutcomeEntryRecord;
 export type MemoryNarrativeClusterRow = IntelligenceNarrativeClusterRecord;
 export type MemoryNarrativeClusterMembershipRow = IntelligenceNarrativeClusterMembershipRecord;
 export type MemoryTemporalNarrativeLedgerEntryRow = IntelligenceTemporalNarrativeLedgerEntryRecord;
+export type MemoryNarrativeClusterLedgerEntryRow = IntelligenceNarrativeClusterLedgerEntryRecord;
+export type MemoryNarrativeClusterTimelineRow = IntelligenceNarrativeClusterTimelineRecord;
 export type MemoryExecutionAuditRow = ExecutionAuditRecord;
 export type MemoryOperatorNoteRow = OperatorNoteRecord;
 export type MemoryIntelligenceEventRow = IntelligenceEventClusterRecord;
@@ -241,6 +245,8 @@ export type MemoryStoreState = {
   intelligenceNarrativeClusters: Map<string, MemoryNarrativeClusterRow>;
   intelligenceNarrativeClusterMemberships: Map<string, MemoryNarrativeClusterMembershipRow>;
   intelligenceTemporalNarrativeLedger: Map<string, MemoryTemporalNarrativeLedgerEntryRow>;
+  intelligenceNarrativeClusterLedger: Map<string, MemoryNarrativeClusterLedgerEntryRow>;
+  intelligenceNarrativeClusterTimeline: Map<string, MemoryNarrativeClusterTimelineRow>;
   intelligenceExecutionAudits: Map<string, MemoryExecutionAuditRow>;
   intelligenceOperatorNotes: Map<string, MemoryOperatorNoteRow>;
   intelligenceEvents: Map<string, MemoryIntelligenceEventRow>;
@@ -333,6 +339,8 @@ export function createMemoryStoreState(): MemoryStoreState {
     intelligenceNarrativeClusters: new Map<string, MemoryNarrativeClusterRow>(),
     intelligenceNarrativeClusterMemberships: new Map<string, MemoryNarrativeClusterMembershipRow>(),
     intelligenceTemporalNarrativeLedger: new Map<string, MemoryTemporalNarrativeLedgerEntryRow>(),
+    intelligenceNarrativeClusterLedger: new Map<string, MemoryNarrativeClusterLedgerEntryRow>(),
+    intelligenceNarrativeClusterTimeline: new Map<string, MemoryNarrativeClusterTimelineRow>(),
     intelligenceExecutionAudits: new Map<string, MemoryExecutionAuditRow>(),
     intelligenceOperatorNotes: new Map<string, MemoryOperatorNoteRow>(),
     intelligenceEvents: new Map<string, MemoryIntelligenceEventRow>(),
