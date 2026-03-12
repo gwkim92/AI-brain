@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "description": "Representative Jarvis prompt pack for service-readiness regression checks.",
+  "cases": [
+    {
+      "id": "broad_news",
+      "prompt": "오늘 주요 뉴스를 정리해줘",
+      "expected_profile": "broad_news",
+      "expected_capabilities": ["research", "brief"],
+      "allowed_quality_modes": ["pass", "warn"]
+    },
+    {
+      "id": "topic_news",
+      "prompt": "우크라이나 전쟁 최신 동향을 정리해줘",
+      "expected_profile": "topic_news",
+      "expected_capabilities": ["research", "brief"],
+      "allowed_quality_modes": ["pass", "warn"]
+    },
+    {
+      "id": "entity_brief",
+      "prompt": "NVIDIA를 요약해줘",
+      "expected_profile": "entity_brief",
+      "expected_capabilities": ["research", "brief"],
+      "allowed_quality_modes": ["pass", "warn"]
+    },
+    {
+      "id": "comparison_research",
+      "prompt": "Gemini와 OpenAI 비교해줘",
+      "expected_profile": "comparison_research",
+      "expected_capabilities": ["research", "brief"],
+      "allowed_quality_modes": ["pass", "warn"]
+    },
+    {
+      "id": "repo_research",
+      "prompt": "openai codex repo 조사해줘",
+      "expected_profile": "repo_research",
+      "expected_capabilities": ["research", "brief"],
+      "allowed_quality_modes": ["pass", "warn"]
+    },
+    {
+      "id": "market_research",
+      "prompt": "AI 인프라 시장 동향을 알려줘",
+      "expected_profile": "market_research",
+      "expected_capabilities": ["research", "brief"],
+      "allowed_quality_modes": ["pass", "warn"]
+    },
+    {
+      "id": "policy_regulation",
+      "prompt": "EU AI Act 최근 변화를 정리해줘",
+      "expected_profile": "policy_regulation",
+      "expected_capabilities": ["research", "brief"],
+      "allowed_quality_modes": ["pass", "warn"]
+    },
+    {
+      "id": "research_plan_execute",
+      "prompt": "이 레포를 조사하고 작업 계획을 세운 뒤 승인 후 실행 준비까지 정리해줘",
+      "expected_profile": "repo_research",
+      "expected_capabilities": ["research", "brief", "plan", "approve", "execute"],
+      "allowed_quality_modes": ["pass", "warn"]
+    },
+    {
+      "id": "monitor_followup",
+      "prompt": "AI 인프라 시장 동향을 알려주고 앞으로도 계속 추적하면서 변화가 있으면 알려줘",
+      "expected_profile": "market_research",
+      "expected_capabilities": ["research", "brief", "monitor", "notify"],
+      "allowed_quality_modes": ["pass", "warn"]
+    }
+  ]
+}
