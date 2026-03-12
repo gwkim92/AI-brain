@@ -18,3 +18,11 @@ core-only-lab/.env.*
 
 # macOS
 .DS_Store
+
+# generated local artifacts
+.playwright-cli/
+.worktrees/
+output/
+web/.tmp/
+web/e2e/tmp-*.spec.ts
+web/tmp_*.js

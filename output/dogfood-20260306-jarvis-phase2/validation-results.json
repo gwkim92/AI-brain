@@ -1,8 +1,0 @@
-{
-  "watcher_create_and_run": true,
-  "dossier_created_after_watcher_run": true,
-  "dossier_refresh": true,
-  "action_center_approve": true,
-  "assistant_stage_panel_sync_before_fix": false,
-  "assistant_stage_panel_sync_after_fix": true
-}
