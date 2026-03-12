@@ -53,6 +53,7 @@ import { reportRoutes } from './reports';
 import { radarRoutes } from './radar';
 import { upgradeRoutes } from './upgrades';
 import { integrationRoutes } from './integrations';
+import { intelligenceRoutes } from './intelligence';
 
 export async function registerRoutes(
   app: FastifyInstance,
@@ -420,4 +421,5 @@ export async function registerRoutes(
   await radarRoutes(app, ctx);
   await upgradeRoutes(app, ctx);
   await integrationRoutes(app, ctx);
+  await intelligenceRoutes(app, ctx);
 }

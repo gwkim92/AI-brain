@@ -28,6 +28,13 @@ export type RuntimeSelectedCredential = {
   credential_priority: ProviderCredentialPriority;
   auth_access_token_expires_at: string | null;
 };
+export type RuntimeResolvedRoute = {
+  provider: ProviderName | "auto";
+  model: string | null;
+  strict_provider: boolean;
+  source: "request_override" | "feature_preference" | "global_default" | "auto" | "runtime_result";
+  used_fallback: boolean;
+};
 export type ProviderAttempt = ApiSchemas["ProviderAttempt"] & {
   credential?: {
     source: UserProviderCredentialSource;
@@ -164,6 +171,24 @@ export type JarvisSessionIntent = "general" | "code" | "research" | "finance" | 
 export type JarvisSessionStatus = "queued" | "running" | "blocked" | "needs_approval" | "completed" | "failed" | "stale";
 export type JarvisWorkspacePreset = "jarvis" | "research" | "execution" | "control";
 export type JarvisSessionPrimaryTarget = "assistant" | "mission" | "council" | "execution" | "briefing" | "dossier";
+export type JarvisCapability =
+  | "answer"
+  | "research"
+  | "brief"
+  | "debate"
+  | "plan"
+  | "approve"
+  | "execute"
+  | "monitor"
+  | "notify";
+export type JarvisSessionStageStatus =
+  | "queued"
+  | "running"
+  | "blocked"
+  | "needs_approval"
+  | "completed"
+  | "failed"
+  | "skipped";
 export type JarvisSessionRecord = {
   id: string;
   userId: string;
@@ -195,6 +220,28 @@ export type JarvisSessionEventRecord = {
   data: Record<string, unknown>;
   createdAt: string;
 };
+export type JarvisSessionStageRecord = {
+  id: string;
+  sessionId: string;
+  stageKey: string;
+  capability: JarvisCapability;
+  title: string;
+  status: JarvisSessionStageStatus;
+  orderIndex: number;
+  dependsOnJson: string[];
+  artifactRefsJson: Record<string, unknown>;
+  summary: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+export type JarvisNextAction = {
+  kind: "open_action_center" | "open_brief" | "open_workbench" | "create_monitor";
+  label: string;
+} | null;
 export type ActionProposalKind = "mission_execute" | "council_run" | "execution_run" | "workspace_prepare" | "notify" | "custom";
 export type ActionProposalStatus = "pending" | "approved" | "rejected";
 export type ActionProposalRecord = {
@@ -222,10 +269,37 @@ export type JarvisRequest = {
 };
 export type JarvisRequestResult = {
   session: JarvisSessionRecord;
+  requested_capabilities: JarvisCapability[];
+  active_capabilities: JarvisCapability[];
+  completed_capabilities: JarvisCapability[];
+  stages: JarvisSessionStageRecord[];
+  next_action: JarvisNextAction;
+  research_profile: string | null;
+  research_profile_reasons: string[];
+  quality_mode: "pass" | "warn" | "block" | null;
+  warning_codes: string[];
+  format_hint: string | null;
+  quality_dimensions: Record<string, unknown> | null;
+  memory_context: JarvisMemoryContext | null;
+  memory_plan_signals: JarvisMemoryPlanSignal[];
+  memory_plan_summary: string[];
+  memory_preference_summary: string[];
+  memory_preference_applied: string[];
+  memory_influences: string[];
+  execution_option: string | null;
+  preferred_provider_applied: string | null;
+  preferred_model_applied: string | null;
+  project_context_refs: {
+    repo_slug: string | null;
+    project_name: string | null;
+    pinned_refs: string[];
+  } | null;
+  monitoring_preference_applied: string | null;
   delegation: {
     intent: JarvisSessionIntent;
     complexity: "simple" | "moderate" | "complex";
     primary_target: JarvisSessionPrimaryTarget;
+    capabilities: JarvisCapability[];
     task_id?: string;
     mission_id?: string;
     assistant_context_id?: string;
@@ -239,6 +313,32 @@ export type JarvisRequestResult = {
 };
 export type JarvisSessionDetail = {
   session: JarvisSessionRecord;
+  requested_capabilities: JarvisCapability[];
+  active_capabilities: JarvisCapability[];
+  completed_capabilities: JarvisCapability[];
+  stages: JarvisSessionStageRecord[];
+  next_action: JarvisNextAction;
+  research_profile: string | null;
+  research_profile_reasons: string[];
+  quality_mode: "pass" | "warn" | "block" | null;
+  warning_codes: string[];
+  format_hint: string | null;
+  quality_dimensions: Record<string, unknown> | null;
+  memory_context: JarvisMemoryContext | null;
+  memory_plan_signals: JarvisMemoryPlanSignal[];
+  memory_plan_summary: string[];
+  memory_preference_summary: string[];
+  memory_preference_applied: string[];
+  memory_influences: string[];
+  execution_option: string | null;
+  preferred_provider_applied: string | null;
+  preferred_model_applied: string | null;
+  project_context_refs: {
+    repo_slug: string | null;
+    project_name: string | null;
+    pinned_refs: string[];
+  } | null;
+  monitoring_preference_applied: string | null;
   events: JarvisSessionEventRecord[];
   actions: ActionProposalRecord[];
   briefing: BriefingRecord | null;
@@ -279,6 +379,35 @@ export type WatcherRunRecord = {
   error: string | null;
   createdAt: string;
   updatedAt: string;
+};
+export type WatcherWorldModelDelta = {
+  hasMeaningfulShift: boolean;
+  reasons: string[];
+  primaryHypothesisShift: number;
+  counterHypothesisShift: number;
+  invalidationHitCount: number;
+  bottleneckShiftCount: number;
+  topStateShift: {
+    key: string;
+    delta: number;
+  } | null;
+};
+export type WatcherFollowUpRecord = {
+  session: JarvisSessionRecord;
+  actionProposal: ActionProposalRecord | null;
+  changeClass:
+    | "new_high_significance_item"
+    | "official_update"
+    | "policy_change"
+    | "market_shift"
+    | "repo_release"
+    | "health_regression"
+    | "routine_refresh";
+  severity: "info" | "warning" | "critical";
+  summary: string;
+  score: number;
+  reasons: string[];
+  worldModelDelta: WatcherWorldModelDelta | null;
 };
 export type BriefingType = "daily" | "on_change" | "on_demand";
 export type BriefingStatus = "draft" | "completed" | "failed";
@@ -333,10 +462,82 @@ export type DossierClaimRecord = {
   sourceUrls: string[];
   createdAt: string;
 };
+export type WorldModelStateVariable = {
+  score: number;
+  direction: "up" | "flat";
+  drivers: string[];
+};
+export type DossierWorldModelHypothesisEvidence = {
+  claim_text: string;
+  relation: "supports" | "contradicts" | "context";
+  source_urls: string[];
+  weight: number;
+};
+export type DossierWorldModelHypothesis = {
+  thesis: string;
+  stance: "primary" | "counter";
+  confidence: number;
+  status: "active" | "weakened" | "invalidated";
+  summary: string;
+  watch_state_keys: string[];
+  evidence: DossierWorldModelHypothesisEvidence[];
+};
+export type DossierWorldModelInvalidationCondition = {
+  hypothesis_thesis: string;
+  stance: "primary" | "counter";
+  description: string;
+  expected_by: string | null;
+  observed_status: "pending" | "hit" | "missed";
+  severity: "low" | "medium" | "high";
+  matched_evidence: string[];
+};
+export type DossierWorldModelNextWatchSignal = {
+  description: string;
+  expected_by: string | null;
+  severity: "low" | "medium" | "high";
+  stance: "primary" | "counter";
+};
+export type DossierWorldModel = {
+  state_snapshot: {
+    generated_at: string;
+    dominant_signals: string[];
+    variables: Record<string, WorldModelStateVariable>;
+    notes: string[];
+  };
+  bottlenecks: Array<{
+    key: string;
+    score: number;
+    drivers: string[];
+  }>;
+  hypotheses: DossierWorldModelHypothesis[];
+  invalidation_conditions: DossierWorldModelInvalidationCondition[];
+  next_watch_signals: DossierWorldModelNextWatchSignal[];
+};
 export type DossierDetail = {
   dossier: DossierRecord;
   sources: DossierSourceRecord[];
   claims: DossierClaimRecord[];
+  world_model?: DossierWorldModel;
+};
+export type DossierRefreshResult = DossierRecord & {
+  world_model?: DossierWorldModel;
+};
+export type BriefingGenerateResult = BriefingRecord & {
+  world_model?: {
+    state_snapshot: {
+      generated_at: string;
+      dominant_signals: string[];
+      variables: Record<string, WorldModelStateVariable>;
+      notes: string[];
+    };
+    hypotheses: Array<{
+      thesis: string;
+      stance: "primary" | "counter";
+      confidence: number;
+      status: "active" | "weakened" | "invalidated";
+      summary: string;
+    }>;
+  };
 };
 export type SkillId =
   | "deep_research"
@@ -507,11 +708,358 @@ export type TaskEventRecord = ApiSchemas["TaskEventRecord"];
 export type MemoryCategory = ApiSchemas["MemorySnapshotEntry"]["category"];
 export type MemorySnapshotEntry = ApiSchemas["MemorySnapshotEntry"];
 export type MemorySnapshotData = ApiSchemas["MemorySnapshot"];
+export type MemoryNoteKind = "user_preference" | "project_context" | "decision_memory" | "research_memory";
+export type MemoryNoteSource = "manual" | "session" | "system";
+export type MemoryNoteRecord = {
+  id: string;
+  userId: string;
+  kind: MemoryNoteKind;
+  key?: string | null;
+  value?: string | null;
+  attributes?: Record<string, unknown>;
+  title: string;
+  content: string;
+  tags: string[];
+  pinned: boolean;
+  source: MemoryNoteSource;
+  relatedSessionId: string | null;
+  relatedTaskId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+export type MemorySummaryData = {
+  counts: {
+    total: number;
+    pinned: number;
+    user_preference: number;
+    project_context: number;
+    decision_memory: number;
+    research_memory: number;
+  };
+  pinned_notes: MemoryNoteRecord[];
+  recent_notes: MemoryNoteRecord[];
+};
+export type MemoryContextData = {
+  query: string;
+  notes: MemoryNoteRecord[];
+  structured_notes: MemoryNoteRecord[];
+  preferences: {
+    responseStyle: "concise" | "balanced" | "detailed" | null;
+    preferredProvider: ProviderName | "local" | null;
+    preferredModel: string | null;
+    riskTolerance: "cautious" | "balanced" | "aggressive" | null;
+    approvalStyle: "read_only_review" | "approval_required_write" | "safe_auto_run_preferred" | null;
+    monitoringPreference: "manual" | "important_changes" | "all_changes" | null;
+    summary: string[];
+  } | null;
+  project_context: {
+    repo_slug: string | null;
+    project_name: string | null;
+    goal_summary: string | null;
+    pinned_refs: string[];
+    note_ids: string[];
+    summary: string[];
+  } | null;
+  recent_decision_signals: {
+    recent_approval_history: boolean;
+    recent_rejection_history: boolean;
+    approval_sensitive_preference: boolean;
+    safe_auto_run_acceptance: boolean;
+    summary: string[];
+  } | null;
+  total: number;
+};
+export type JarvisMemoryContext = {
+  notes: Array<{
+    id: string;
+    kind: MemoryNoteKind;
+    key?: string | null;
+    value?: string | null;
+    attributes?: Record<string, unknown>;
+    title: string;
+    content: string;
+    tags: string[];
+    pinned: boolean;
+    source: MemoryNoteSource;
+    relatedSessionId: string | null;
+    relatedTaskId: string | null;
+    updatedAt: string;
+  }>;
+  structuredNotes: Array<{
+    id: string;
+    kind: MemoryNoteKind;
+    key?: string | null;
+    value?: string | null;
+    attributes?: Record<string, unknown>;
+    title: string;
+    content: string;
+    tags: string[];
+    pinned: boolean;
+    source: MemoryNoteSource;
+    relatedSessionId: string | null;
+    relatedTaskId: string | null;
+    updatedAt: string;
+  }>;
+  summary: string[];
+  appliedHints: string[];
+  preferences: {
+    responseStyle: "concise" | "balanced" | "detailed" | null;
+    preferredProvider: ProviderName | "local" | null;
+    preferredModel: string | null;
+    riskTolerance: "cautious" | "balanced" | "aggressive" | null;
+    approvalStyle: "read_only_review" | "approval_required_write" | "safe_auto_run_preferred" | null;
+    monitoringPreference: "manual" | "important_changes" | "all_changes" | null;
+    summary: string[];
+  } | null;
+  projectContext: {
+    repoSlug: string | null;
+    projectName: string | null;
+    goalSummary: string | null;
+    pinnedRefs: string[];
+    noteIds: string[];
+    summary: string[];
+  } | null;
+  recentDecisionSignals: {
+    recentApprovalHistory: boolean;
+    recentRejectionHistory: boolean;
+    approvalSensitivePreference: boolean;
+    safeAutoRunAcceptance: boolean;
+    summary: string[];
+  } | null;
+};
+export type JarvisMemoryPlanSignal =
+  | "pinned_context"
+  | "project_context_available"
+  | "research_history_available"
+  | "recent_approval_history"
+  | "recent_rejection_history"
+  | "risk_first_preference"
+  | "approval_sensitive_preference"
+  | "monitor_followup_preference"
+  | "notify_followup_preference"
+  | "concise_response_preference"
+  | "balanced_response_preference"
+  | "detailed_response_preference"
+  | "cautious_risk_preference"
+  | "aggressive_risk_preference"
+  | "read_only_review_preference"
+  | "manual_monitoring_preference"
+  | "all_changes_monitoring_preference"
+  | "safe_auto_run_preference"
+  | "preferred_provider_available"
+  | "preferred_model_available";
 
 export type RadarItemStatus = ApiSchemas["RadarItem"]["status"];
 export type RadarDecision = ApiSchemas["RadarRecommendation"]["decision"];
-export type RadarItemRecord = ApiSchemas["RadarItem"];
-export type RadarRecommendationRecord = ApiSchemas["RadarRecommendation"];
+export type RadarSourceType =
+  | "news"
+  | "filing"
+  | "policy"
+  | "market_tick"
+  | "freight"
+  | "inventory"
+  | "blog"
+  | "forum"
+  | "social"
+  | "ops_policy"
+  | "manual";
+export type RadarSourceTier = "tier_0" | "tier_1" | "tier_2" | "tier_3";
+export type RadarPromotionDecision = "ignore" | "watch" | "dossier" | "action" | "execute_auto_candidate";
+export type RadarExecutionMode = "watch_only" | "dossier_only" | "proposal_auto" | "execute_auto" | "approval_required";
+export type RadarRiskBand = "low" | "medium" | "high" | "critical";
+export type RadarDomainId =
+  | "geopolitics_energy_lng"
+  | "macro_rates_inflation_fx"
+  | "shipping_supply_chain"
+  | "policy_regulation_platform_ai"
+  | "company_earnings_guidance"
+  | "commodities_raw_materials";
+export type RadarItemRecord = ApiSchemas["RadarItem"] & {
+  observedAt?: string | null;
+  sourceType?: RadarSourceType;
+  sourceTier?: RadarSourceTier;
+  rawMetrics?: Record<string, unknown>;
+  entityHints?: string[];
+  trustHint?: string | null;
+  payload?: Record<string, unknown>;
+};
+export type RadarRecommendationRecord = ApiSchemas["RadarRecommendation"] & {
+  eventId?: string;
+  structuralityScore?: number;
+  actionabilityScore?: number;
+  promotionDecision?: RadarPromotionDecision;
+  domainIds?: RadarDomainId[];
+  autonomyExecutionMode?: RadarExecutionMode;
+  autonomyRiskBand?: RadarRiskBand;
+};
+export type RadarMetricShock = {
+  metricKey: string;
+  value: string | number | null;
+  unit: string | null;
+  direction: "up" | "down" | "flat" | "unknown";
+  observedAt: string | null;
+};
+export type RadarSourceMix = {
+  sourceTiers: RadarSourceTier[];
+  sourceTypes: RadarSourceType[];
+};
+export type RadarEventRecord = {
+  id: string;
+  title: string;
+  summary: string;
+  eventType: string;
+  geoScope: string | null;
+  timeScope: string | null;
+  dedupeClusterId: string;
+  itemIds: string[];
+  entities: string[];
+  claims: string[];
+  metricShocks: RadarMetricShock[];
+  sourceMix: RadarSourceMix;
+  noveltyScore: number;
+  corroborationScore: number;
+  metricAlignmentScore: number;
+  bottleneckProximityScore: number;
+  persistenceScore: number;
+  structuralityScore: number;
+  actionabilityScore: number;
+  decision: RadarPromotionDecision;
+  overrideDecision: RadarPromotionDecision | null;
+  expectedNextSignals: string[];
+  acknowledgedAt: string | null;
+  acknowledgedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+export type RadarDomainPosteriorRecord = {
+  id: string;
+  eventId: string;
+  domainId: RadarDomainId;
+  score: number;
+  evidenceFeatures: string[];
+  counterFeatures: string[];
+  recommendedPackId: RadarDomainId;
+  createdAt: string;
+};
+export type RadarAutonomyDecisionRecord = {
+  id: string;
+  eventId: string;
+  riskBand: RadarRiskBand;
+  executionMode: RadarExecutionMode;
+  policyReasons: string[];
+  requiresHuman: boolean;
+  killSwitchScope: "none" | "global" | "domain_pack" | "source_tier";
+  createdAt: string;
+  updatedAt: string;
+};
+export type RadarOperatorFeedbackRecord = {
+  id: string;
+  eventId: string;
+  userId: string;
+  kind: "ack" | "override";
+  note: string | null;
+  overrideDecision: RadarPromotionDecision | null;
+  createdAt: string;
+};
+export type RadarDomainPackMetricRecord = {
+  domainId: RadarDomainId;
+  calibrationScore: number;
+  evaluationCount: number;
+  promotionCount: number;
+  dossierCount: number;
+  actionCount: number;
+  autoExecuteCount: number;
+  overrideCount: number;
+  ackCount: number;
+  confirmedCount: number;
+  invalidatedCount: number;
+  mixedCount: number;
+  unresolvedCount: number;
+  lastEventAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+export type RadarControlSettingsRecord = {
+  globalKillSwitch: boolean;
+  autoExecutionEnabled: boolean;
+  dossierPromotionEnabled: boolean;
+  tier3EscalationEnabled: boolean;
+  disabledDomainIds: RadarDomainId[];
+  disabledSourceTiers: RadarSourceTier[];
+  updatedBy: string | null;
+  updatedAt: string;
+};
+export type RadarFeedKind = "rss" | "atom" | "json" | "mcp_connector" | "synthetic";
+export type RadarIngestRunStatus = "running" | "ok" | "error";
+export type RadarFeedSourceRecord = {
+  id: string;
+  name: string;
+  kind: RadarFeedKind;
+  url: string;
+  sourceType: RadarSourceType;
+  sourceTier: RadarSourceTier;
+  pollMinutes: number;
+  enabled: boolean;
+  parserHints: Record<string, unknown>;
+  entityHints: string[];
+  metricHints: string[];
+  lastFetchedAt: string | null;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+export type RadarIngestRunRecord = {
+  id: string;
+  sourceId: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  status: RadarIngestRunStatus;
+  fetchedCount: number;
+  ingestedCount: number;
+  evaluatedCount: number;
+  promotedCount: number;
+  autoExecutedCount: number;
+  failedCount: number;
+  error: string | null;
+  detailJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+export type RadarDomainPackDefinition = {
+  id: RadarDomainId;
+  displayName: string;
+  ontology: string[];
+  mechanismTemplates: string[];
+  stateVariables: string[];
+  invalidationTemplates: string[];
+  watchMetrics: string[];
+  keywordLexicon: string[];
+  actionMapping: {
+    watcherKind: WatcherKind;
+    sessionIntent: JarvisSessionIntent;
+    defaultActionKind: ActionProposalKind;
+    executionMode: RadarExecutionMode;
+  };
+};
+export type RadarPromotionResult = {
+  event_id: string;
+  decision: RadarPromotionDecision;
+  watcher_id: string | null;
+  briefing_id: string | null;
+  dossier_id: string | null;
+  session_id: string | null;
+  action_proposal_id: string | null;
+  auto_executed: boolean;
+};
+export type RadarControlUpdateRequest = {
+  global_kill_switch?: boolean;
+  auto_execution_enabled?: boolean;
+  dossier_promotion_enabled?: boolean;
+  tier3_escalation_enabled?: boolean;
+  disabled_domain_ids?: RadarDomainId[];
+  disabled_source_tiers?: RadarSourceTier[];
+};
 
 export type UpgradeStatus = ApiSchemas["UpgradeProposal"]["status"];
 export type UpgradeProposalRecord = ApiSchemas["UpgradeProposal"];
@@ -613,6 +1161,7 @@ export type CouncilParticipantRecord = ApiSchemas["CouncilParticipant"];
 
 export type CouncilRunRecord = ApiSchemas["CouncilRun"] & {
   selected_credential?: RuntimeSelectedCredential | null;
+  resolved_route?: RuntimeResolvedRoute | null;
   attempts: ProviderAttempt[];
   idempotent_replay?: boolean;
   session?: JarvisSessionRecord | null;
@@ -631,6 +1180,7 @@ export type ExecutionRunMode = ApiSchemas["ExecutionRun"]["mode"];
 
 export type ExecutionRunRecord = ApiSchemas["ExecutionRun"] & {
   selected_credential?: RuntimeSelectedCredential | null;
+  resolved_route?: RuntimeResolvedRoute | null;
   attempts: ProviderAttempt[];
   idempotent_replay?: boolean;
   session?: JarvisSessionRecord | null;
@@ -816,6 +1366,12 @@ export type SettingsOverviewData = {
     history: Array<Record<string, unknown>>;
     lastRun?: Record<string, unknown> | null;
   };
+  radar_scanner_worker?: {
+    enabled: boolean;
+    inflight: boolean;
+    history: Array<Record<string, unknown>>;
+    lastRun?: Record<string, unknown> | null;
+  };
   workspace_runtime?: {
     total: number;
     running: number;
@@ -855,6 +1411,12 @@ export type SettingsOverviewData = {
       min_severity: SystemNotification["severity"];
       event_types: string[];
     };
+  };
+  radar_policy?: {
+    control: RadarControlSettingsRecord;
+    domain_pack_metrics: RadarDomainPackMetricRecord[];
+    sources?: RadarFeedSourceRecord[];
+    scanner_worker?: SettingsOverviewData["radar_scanner_worker"];
   };
 };
 
@@ -1260,4 +1822,700 @@ export type ApprovalRecord = {
   expiresAt?: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type IntelligenceWorkspaceRole = "owner" | "admin" | "member";
+export type IntelligenceSourceKind = "rss" | "atom" | "json" | "api" | "search" | "headless" | "mcp_connector" | "synthetic";
+export type IntelligenceSourceType =
+  | "news"
+  | "filing"
+  | "policy"
+  | "market_tick"
+  | "freight"
+  | "inventory"
+  | "blog"
+  | "forum"
+  | "social"
+  | "search_result"
+  | "web_page"
+  | "manual";
+export type IntelligenceSourceTier = "tier_0" | "tier_1" | "tier_2" | "tier_3";
+export type IntelligenceEventFamily =
+  | "geopolitical_flashpoint"
+  | "policy_change"
+  | "earnings_guidance"
+  | "supply_chain_shift"
+  | "rate_repricing"
+  | "commodity_move"
+  | "platform_ai_shift"
+  | "general_signal";
+export type IntelligenceDomainId =
+  | "geopolitics_energy_lng"
+  | "macro_rates_inflation_fx"
+  | "shipping_supply_chain"
+  | "policy_regulation_platform_ai"
+  | "company_earnings_guidance"
+  | "commodities_raw_materials";
+export type IntelligenceCapabilityAlias =
+  | "fast_triage"
+  | "structured_extraction"
+  | "cross_doc_linking"
+  | "skeptical_critique"
+  | "deep_synthesis"
+  | "policy_judgment"
+  | "deep_research"
+  | "execution_planning";
+export type IntelligenceScanRunStatus = "running" | "ok" | "error" | "timeout";
+export type IntelligenceExecutionStatus = "pending" | "approved" | "executed" | "blocked" | "failed";
+export type IntelligenceSignalProcessingStatus = "pending" | "processing" | "processed" | "failed";
+
+export type IntelligenceSourceHealth = {
+  lastStatus: "idle" | "ok" | "error" | "blocked";
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  consecutiveFailures: number;
+  recentLatencyMs: number | null;
+  status403Count: number;
+  status429Count: number;
+  robotsBlocked: boolean;
+  lastFailureReason: string | null;
+  updatedAt: string | null;
+};
+
+export type IntelligenceCrawlPolicy = {
+  allowDomains: string[];
+  denyDomains: string[];
+  respectRobots: boolean;
+  maxDepth: number;
+  maxPagesPerRun: number;
+  revisitCooldownMinutes: number;
+  perDomainRateLimitPerMinute: number;
+};
+
+export type ConnectorCapabilityRecord = {
+  connectorId: string;
+  writeAllowed: boolean;
+  destructive: boolean;
+  requiresHuman: boolean;
+  schemaId: string | null;
+  allowedActions: string[];
+};
+
+export type IntelligenceFetchFailureRecord = {
+  id: string;
+  workspaceId: string;
+  sourceId: string | null;
+  url: string;
+  reason: string;
+  statusCode: number | null;
+  retryable: boolean;
+  blockedByRobots: boolean;
+  createdAt: string;
+};
+
+export type ProviderHealthRecord = {
+  provider: ProviderName;
+  available: boolean;
+  cooldownUntil: string | null;
+  reasonCode: string | null;
+  failureCount: number;
+  updatedAt: string | null;
+};
+
+export type AliasRolloutRecord = {
+  id: string;
+  workspaceId: string | null;
+  alias: IntelligenceCapabilityAlias;
+  bindingIds: string[];
+  createdBy: string | null;
+  note: string | null;
+  createdAt: string;
+};
+
+export type IntelligenceWorkspaceRecord = {
+  id: string;
+  ownerUserId: string;
+  name: string;
+  slug: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type IntelligenceSourceRecord = {
+  id: string;
+  workspaceId: string;
+  name: string;
+  kind: IntelligenceSourceKind;
+  url: string;
+  sourceType: IntelligenceSourceType;
+  sourceTier: IntelligenceSourceTier;
+  pollMinutes: number;
+  enabled: boolean;
+  parserConfigJson: Record<string, unknown>;
+  crawlConfigJson: Record<string, unknown>;
+  crawlPolicy: IntelligenceCrawlPolicy;
+  health: IntelligenceSourceHealth;
+  connectorCapability: ConnectorCapabilityRecord | null;
+  entityHints: string[];
+  metricHints: string[];
+  lastFetchedAt: string | null;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type IntelligenceScanRunRecord = {
+  id: string;
+  workspaceId: string;
+  sourceId: string | null;
+  status: IntelligenceScanRunStatus;
+  fetchedCount: number;
+  storedDocumentCount: number;
+  signalCount: number;
+  clusteredEventCount: number;
+  executionCount: number;
+  failedCount: number;
+  error: string | null;
+  detailJson: Record<string, unknown>;
+  startedAt: string;
+  finishedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type IntelligenceSemanticClaim = {
+  claimId: string;
+  subjectEntity: string;
+  predicate: string;
+  object: string;
+  evidenceSpan: string | null;
+  timeScope: string | null;
+  uncertainty: "low" | "medium" | "high";
+  stance: "supporting" | "neutral" | "contradicting";
+  claimType: "fact" | "prediction" | "opinion" | "signal";
+};
+
+export type LinkedClaimRecord = {
+  id: string;
+  workspaceId: string;
+  claimFingerprint: string;
+  canonicalSubject: string;
+  canonicalPredicate: string;
+  canonicalObject: string;
+  predicateFamily: string;
+  timeScope: string | null;
+  timeBucketStart: string | null;
+  timeBucketEnd: string | null;
+  stanceDistribution: {
+    supporting: number;
+    neutral: number;
+    contradicting: number;
+  };
+  sourceCount: number;
+  contradictionCount: number;
+  nonSocialSourceCount: number;
+  supportingSignalIds: string[];
+  lastSupportedAt: string | null;
+  lastContradictedAt: string | null;
+  reviewState: EventReviewState;
+  reviewReason: string | null;
+  reviewOwner: string | null;
+  reviewUpdatedAt: string | null;
+  reviewUpdatedBy: string | null;
+  reviewResolvedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type LinkedClaimEdgeRecord = {
+  id: string;
+  workspaceId: string;
+  leftLinkedClaimId: string;
+  rightLinkedClaimId: string;
+  relation: "supports" | "contradicts" | "related";
+  edgeStrength: number;
+  evidenceSignalIds: string[];
+  lastObservedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ClaimLinkRecord = {
+  id: string;
+  workspaceId: string;
+  eventId: string;
+  linkedClaimId: string;
+  signalId: string;
+  semanticClaimId: string;
+  relation: "supporting" | "contradicting" | "related";
+  confidence: number;
+  linkStrength: number;
+  createdAt: string;
+};
+
+export type IntelligenceMetricShock = {
+  metricKey: string;
+  value: number | string | null;
+  unit: string | null;
+  direction: "up" | "down" | "flat" | "unknown";
+  observedAt: string | null;
+};
+
+export type IntelligenceDomainPosterior = {
+  id: string;
+  domainId: IntelligenceDomainId;
+  score: number;
+  evidenceFeatures: string[];
+  counterFeatures: string[];
+};
+
+export type IntelligenceWorldState = {
+  id: string;
+  key: string;
+  valueJson: Record<string, unknown>;
+};
+
+export type IntelligenceHypothesisRecord = {
+  id: string;
+  title: string;
+  summary: string;
+  confidence: number;
+  rationale: string;
+};
+
+export type IntelligenceCounterHypothesisRecord = IntelligenceHypothesisRecord;
+
+export type IntelligenceInvalidationConditionRecord = {
+  id: string;
+  title: string;
+  description: string;
+  matcherJson: Record<string, unknown>;
+  status: "pending" | "hit" | "missed";
+};
+
+export type IntelligenceInvalidationEntryRecord = {
+  id: string;
+  workspaceId: string;
+  eventId: string;
+  title: string;
+  description: string;
+  matcherJson: Record<string, unknown>;
+  status: "pending" | "hit" | "missed";
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type IntelligenceExpectedSignalRecord = {
+  id: string;
+  signalKey: string;
+  description: string;
+  dueAt: string | null;
+  status: "pending" | "observed" | "absent";
+};
+
+export type IntelligenceExpectedSignalEntryRecord = {
+  id: string;
+  workspaceId: string;
+  eventId: string;
+  signalKey: string;
+  description: string;
+  dueAt: string | null;
+  status: "pending" | "observed" | "absent";
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type IntelligenceDeliberationResult = {
+  id: string;
+  source: "bridge_council" | "local";
+  status: "pending" | "completed" | "failed";
+  proposedPrimary: string;
+  proposedCounter: string;
+  weakestLink: string;
+  requiredNextSignals: string[];
+  executionStance: "proceed" | "hold" | "reject";
+  rawJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type HypothesisLedgerEntry = {
+  id: string;
+  workspaceId: string;
+  eventId: string;
+  hypothesisId: string;
+  kind: "primary" | "counter";
+  title: string;
+  summary: string;
+  confidence: number;
+  rationale: string;
+  status: "active" | "superseded";
+  reviewState: EventReviewState;
+  reviewReason: string | null;
+  reviewOwner: string | null;
+  reviewUpdatedAt: string | null;
+  reviewUpdatedBy: string | null;
+  reviewResolvedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type HypothesisEvidenceLink = {
+  id: string;
+  workspaceId: string;
+  eventId: string;
+  hypothesisId: string;
+  linkedClaimId: string | null;
+  signalId: string | null;
+  relation: "supports" | "contradicts" | "monitors";
+  evidenceStrength: number | null;
+  createdAt: string;
+};
+
+export type IntelligenceHypothesisEvidenceSummary = {
+  hypothesis_id: string;
+  support_count: number;
+  contradict_count: number;
+  monitor_count: number;
+  support_strength: number;
+  contradict_strength: number;
+  monitor_strength: number;
+  linked_claim_ids: string[];
+  support_edge_count: number;
+  contradict_edge_count: number;
+  edge_linked_claim_ids: string[];
+  graph_support_strength: number;
+  graph_contradict_strength: number;
+};
+
+export type IntelligenceExecutionCandidateRecord = {
+  id: string;
+  title: string;
+  summary: string;
+  riskBand: RadarRiskBand;
+  executionMode: "proposal" | "execute_auto" | "approval_required";
+  payload: Record<string, unknown>;
+  policyJson: Record<string, unknown>;
+  status: IntelligenceExecutionStatus;
+  resultJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  executedAt: string | null;
+};
+
+export type IntelligenceOutcomeRecord = {
+  id: string;
+  status: "confirmed" | "invalidated" | "mixed" | "unresolved";
+  summary: string;
+  createdAt: string;
+};
+
+export type IntelligenceOutcomeEntryRecord = {
+  id: string;
+  workspaceId: string;
+  eventId: string;
+  status: "confirmed" | "invalidated" | "mixed" | "unresolved";
+  summary: string;
+  createdAt: string;
+};
+
+export type EventReviewState = "watch" | "review" | "ignore";
+
+export type ExecutionAuditRecord = {
+  id: string;
+  workspaceId: string;
+  eventId: string;
+  candidateId: string;
+  connectorId: string | null;
+  actionName: string | null;
+  status: IntelligenceExecutionStatus;
+  summary: string;
+  resultJson: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type OperatorNoteRecord = {
+  id: string;
+  workspaceId: string;
+  eventId: string;
+  userId: string;
+  scope: "event" | "hypothesis" | "linked_claim" | "narrative_cluster";
+  scopeId: string | null;
+  note: string;
+  createdAt: string;
+};
+
+export type SemanticBacklogStatus = {
+  pendingCount: number;
+  processingCount: number;
+  failedCount: number;
+  latestFailedSignalIds: string[];
+};
+
+export type IntelligenceSourceRetryResult = {
+  sourceId: string;
+  workspaceId: string;
+  queuedAt: string;
+  sourceEnabled: boolean;
+};
+
+export type IntelligenceSignalRetryResult = {
+  signalId: string;
+  workspaceId: string;
+  queuedAt: string;
+  processingStatus: IntelligenceSignalProcessingStatus;
+};
+
+export type IntelligenceEventClusterRecord = {
+  id: string;
+  workspaceId: string;
+  title: string;
+  summary: string;
+  eventFamily: IntelligenceEventFamily;
+  signalIds: string[];
+  documentIds: string[];
+  entities: string[];
+  linkedClaimCount: number;
+  contradictionCount: number;
+  nonSocialCorroborationCount: number;
+  linkedClaimHealthScore: number;
+  timeCoherenceScore: number;
+  graphSupportScore: number;
+  graphContradictionScore: number;
+  graphHotspotCount: number;
+  semanticClaims: IntelligenceSemanticClaim[];
+  metricShocks: IntelligenceMetricShock[];
+  sourceMix: Record<string, unknown>;
+  corroborationScore: number;
+  noveltyScore: number;
+  structuralityScore: number;
+  actionabilityScore: number;
+  riskBand: RadarRiskBand;
+  topDomainId: IntelligenceDomainId | null;
+  timeWindowStart: string | null;
+  timeWindowEnd: string | null;
+  domainPosteriors: IntelligenceDomainPosterior[];
+  worldStates: IntelligenceWorldState[];
+  primaryHypotheses: IntelligenceHypothesisRecord[];
+  counterHypotheses: IntelligenceCounterHypothesisRecord[];
+  invalidationConditions: IntelligenceInvalidationConditionRecord[];
+  expectedSignals: IntelligenceExpectedSignalRecord[];
+  deliberationStatus: "idle" | "completed" | "failed";
+  reviewState: EventReviewState;
+  reviewReason: string | null;
+  reviewOwner: string | null;
+  reviewUpdatedAt: string | null;
+  reviewUpdatedBy: string | null;
+  reviewResolvedAt: string | null;
+  deliberations: IntelligenceDeliberationResult[];
+  executionCandidates: IntelligenceExecutionCandidateRecord[];
+  outcomes: IntelligenceOutcomeRecord[];
+  operatorNoteCount: number;
+  operatorPriorityScore?: number;
+  recurringNarrativeScore?: number;
+  relatedHistoricalEventCount?: number;
+  temporalNarrativeState?: IntelligenceTemporalNarrativeState;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type IntelligenceTemporalNarrativeState = "new" | "recurring" | "diverging";
+
+export type IntelligenceRelatedHistoricalEventSummary = {
+  eventId: string;
+  title: string;
+  relation: "recurring" | "diverging" | "supportive_history";
+  score: number;
+  daysDelta: number | null;
+  topDomainId: IntelligenceDomainId | null;
+  graphSupportScore: number;
+  graphContradictionScore: number;
+  graphHotspotCount: number;
+  timeCoherenceScore: number;
+};
+
+export type IntelligenceTemporalNarrativeLedgerEntryRecord = {
+  id: string;
+  workspaceId: string;
+  eventId: string;
+  relatedEventId: string;
+  relatedEventTitle: string;
+  relation: "recurring" | "diverging" | "supportive_history";
+  score: number;
+  daysDelta: number | null;
+  topDomainId: IntelligenceDomainId | null;
+  graphSupportScore: number;
+  graphContradictionScore: number;
+  graphHotspotCount: number;
+  timeCoherenceScore: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type IntelligenceNarrativeClusterState = "forming" | "recurring" | "diverging";
+
+export type IntelligenceNarrativeClusterRecord = {
+  id: string;
+  workspaceId: string;
+  clusterKey: string;
+  title: string;
+  eventFamily: IntelligenceEventFamily;
+  topDomainId: IntelligenceDomainId | null;
+  anchorEntities: string[];
+  state: IntelligenceNarrativeClusterState;
+  eventCount: number;
+  recurringEventCount: number;
+  divergingEventCount: number;
+  supportiveHistoryCount: number;
+  hotspotEventCount: number;
+  latestRecurringScore: number;
+  driftScore: number;
+  supportScore: number;
+  contradictionScore: number;
+  timeCoherenceScore: number;
+  reviewState: EventReviewState;
+  reviewReason: string | null;
+  reviewOwner: string | null;
+  reviewUpdatedAt: string | null;
+  reviewUpdatedBy: string | null;
+  reviewResolvedAt: string | null;
+  lastEventAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type IntelligenceNarrativeClusterMemberSummary = {
+  membershipId: string;
+  eventId: string;
+  title: string;
+  relation: "origin" | "recurring" | "diverging" | "supportive_history";
+  score: number;
+  daysDelta: number | null;
+  isLatest: boolean;
+  temporalNarrativeState?: IntelligenceTemporalNarrativeState;
+  graphSupportScore: number;
+  graphContradictionScore: number;
+  graphHotspotCount: number;
+  timeCoherenceScore: number;
+  lastEventAt: string | null;
+};
+
+export type IntelligenceEventGraphSummary = {
+  eventId: string;
+  linkedClaimCount: number;
+  edgeCount: number;
+  graphSupportScore: number;
+  graphContradictionScore: number;
+  graphHotspotCount: number;
+  recurringNarrativeScore?: number;
+  relatedHistoricalEventCount?: number;
+  temporalNarrativeState?: IntelligenceTemporalNarrativeState;
+  hotspotClusterCount?: number;
+};
+
+export type IntelligenceEventGraphNeighborhood = {
+  centerLinkedClaimId: string;
+  directNeighborIds: string[];
+  twoHopNeighborIds: string[];
+};
+
+export type IntelligenceHotspotCluster = {
+  id: string;
+  centerLinkedClaimId: string;
+  label: string;
+  memberLinkedClaimIds: string[];
+  supportEdgeCount: number;
+  contradictionEdgeCount: number;
+  hotspotScore: number;
+};
+
+export type IntelligenceBridgeDispatchRecord = {
+  id: string;
+  workspaceId: string;
+  eventId: string;
+  kind: "council" | "brief" | "action";
+  status: "pending" | "dispatched" | "failed";
+  targetId: string | null;
+  requestJson: Record<string, unknown>;
+  responseJson: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type IntelligenceModelRegistryEntry = {
+  id: string;
+  provider: ProviderName;
+  modelId: string;
+  availability: "active" | "inactive";
+  contextWindow: number | null;
+  supportsStructuredOutput: boolean;
+  supportsToolUse: boolean;
+  supportsLongContext: boolean;
+  supportsReasoning: boolean;
+  costClass: "free" | "low" | "standard" | "premium";
+  latencyClass: "fast" | "balanced" | "slow";
+  lastSeenAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type IntelligenceCapabilityAliasBinding = {
+  id: string;
+  workspaceId: string | null;
+  alias: IntelligenceCapabilityAlias;
+  provider: ProviderName;
+  modelId: string;
+  weight: number;
+  fallbackRank: number;
+  canaryPercent: number;
+  isActive: boolean;
+  requiresStructuredOutput: boolean;
+  requiresToolUse: boolean;
+  requiresLongContext: boolean;
+  maxCostClass: "free" | "low" | "standard" | "premium" | null;
+  updatedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type IntelligenceWorkerRun = {
+  startedAt: string;
+  finishedAt: string;
+  status: "ok" | "error" | "timeout";
+  durationMs: number;
+  error?: string;
+};
+
+export type IntelligenceScannerWorkerRun = IntelligenceWorkerRun & {
+  workspaceId: string;
+  scannedSources: number;
+  fetchedCount: number;
+  storedDocumentCount: number;
+  signalCount: number;
+  clusteredEventCount: number;
+  executionCount: number;
+  failedCount: number;
+  failedSources: string[];
+};
+
+export type IntelligenceSemanticWorkerRun = IntelligenceWorkerRun & {
+  workspaceId: string;
+  processedSignalCount: number;
+  clusteredEventCount: number;
+  deliberationCount: number;
+  executionCount: number;
+  failedCount: number;
+  failedSignalIds: string[];
+};
+
+export type IntelligenceCatalogSyncRun = IntelligenceWorkerRun & {
+  syncedEntries: number;
+};
+
+export type IntelligenceWorkerStatus<T> = {
+  enabled: boolean;
+  inflight: boolean;
+  lastRun: T | null;
+  history: T[];
 };

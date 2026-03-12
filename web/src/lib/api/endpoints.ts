@@ -44,13 +44,19 @@ import type {
   WorkspaceRecord,
   WorkspaceSpawnResult,
   BriefingRecord,
+  BriefingGenerateResult,
   DossierDetail,
   DossierRecord,
+  DossierRefreshResult,
   SystemNotification,
   WatcherKind,
   WatcherRecord,
   WatcherRunRecord,
   MemorySnapshotData,
+  MemorySummaryData,
+  MemoryContextData,
+  MemoryNoteKind,
+  MemoryNoteRecord,
   MissionCreateRequest,
   MissionRecord,
   MissionStreamEnvelope,
@@ -73,9 +79,21 @@ import type {
   AiInvocationTraceRecord,
   AiInvocationMetrics,
   RadarDecision,
+  RadarAutonomyDecisionRecord,
+  RadarControlSettingsRecord,
+  RadarControlUpdateRequest,
+  RadarFeedSourceRecord,
+  RadarDomainPackMetricRecord,
+  RadarDomainPackDefinition,
+  RadarDomainPosteriorRecord,
+  RadarEventRecord,
+  RadarIngestRunRecord,
   RadarIngestRequest,
   RadarItemRecord,
   RadarItemStatus,
+  RadarOperatorFeedbackRecord,
+  RadarPromotionDecision,
+  RadarPromotionResult,
   RadarRecommendationRecord,
   ReportsOverviewData,
   SettingsOverviewData,
@@ -93,6 +111,44 @@ import type {
   UpgradeStatus,
   GeneratePlanRequest,
   GeneratePlanResponse,
+  IntelligenceBridgeDispatchRecord,
+  AliasRolloutRecord,
+  ClaimLinkRecord,
+  EventReviewState,
+  ExecutionAuditRecord,
+  HypothesisEvidenceLink,
+  IntelligenceHypothesisEvidenceSummary,
+  HypothesisLedgerEntry,
+  IntelligenceCapabilityAlias,
+  IntelligenceCapabilityAliasBinding,
+  IntelligenceDomainId,
+  IntelligenceEventClusterRecord,
+  IntelligenceEventGraphNeighborhood,
+  IntelligenceEventGraphSummary,
+  IntelligenceHotspotCluster,
+  IntelligenceExpectedSignalEntryRecord,
+  IntelligenceFetchFailureRecord,
+  IntelligenceInvalidationEntryRecord,
+  IntelligenceModelRegistryEntry,
+  IntelligenceOutcomeEntryRecord,
+  IntelligenceNarrativeClusterMemberSummary,
+  IntelligenceNarrativeClusterRecord,
+  IntelligenceRelatedHistoricalEventSummary,
+  IntelligenceTemporalNarrativeLedgerEntryRecord,
+  IntelligenceSignalRetryResult,
+  IntelligenceSourceRetryResult,
+  LinkedClaimEdgeRecord,
+  LinkedClaimRecord,
+  OperatorNoteRecord,
+  ProviderHealthRecord,
+  SemanticBacklogStatus,
+  IntelligenceScanRunRecord,
+  IntelligenceSourceRecord,
+  IntelligenceSemanticWorkerRun,
+  IntelligenceWorkspaceRecord,
+  IntelligenceScannerWorkerRun,
+  IntelligenceCatalogSyncRun,
+  IntelligenceWorkerStatus,
 } from "@/lib/api/types";
 
 export async function getHealth(): Promise<HealthPayload> {
@@ -130,6 +186,369 @@ export async function authConfig(): Promise<AuthConfigData> {
 
 export async function authLogout(): Promise<{ revoked: boolean }> {
   return apiRequest<{ revoked: boolean }>("/api/v1/auth/logout", { method: "POST" });
+}
+
+export async function listIntelligenceWorkspaces(): Promise<{ workspaces: IntelligenceWorkspaceRecord[] }> {
+  return apiRequest<{ workspaces: IntelligenceWorkspaceRecord[] }>("/api/v1/intelligence/workspaces", { method: "GET" });
+}
+
+export async function createIntelligenceWorkspace(payload: { name?: string }): Promise<{
+  workspace: IntelligenceWorkspaceRecord;
+}> {
+  return apiRequest("/api/v1/intelligence/workspaces", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listIntelligenceSources(query: { workspace_id?: string } = {}): Promise<{
+  workspace_id: string;
+  workspaces: IntelligenceWorkspaceRecord[];
+  sources: IntelligenceSourceRecord[];
+  scanner_worker: IntelligenceWorkerStatus<IntelligenceScannerWorkerRun>;
+  semantic_worker: IntelligenceWorkerStatus<IntelligenceSemanticWorkerRun>;
+}> {
+  return apiRequest("/api/v1/intelligence/sources", { method: "GET", query });
+}
+
+export async function createIntelligenceSource(payload: {
+  workspace_id?: string;
+  name: string;
+  kind: IntelligenceSourceRecord["kind"];
+  url: string;
+  source_type: IntelligenceSourceRecord["sourceType"];
+  source_tier: IntelligenceSourceRecord["sourceTier"];
+  poll_minutes?: number;
+  parser_config_json?: Record<string, unknown>;
+  crawl_config_json?: Record<string, unknown>;
+  crawl_policy?: {
+    allow_domains?: string[];
+    deny_domains?: string[];
+    respect_robots?: boolean;
+    max_depth?: number;
+    max_pages_per_run?: number;
+    revisit_cooldown_minutes?: number;
+    per_domain_rate_limit_per_minute?: number;
+  };
+  connector_capability?: {
+    connector_id: string;
+    write_allowed: boolean;
+    destructive: boolean;
+    requires_human: boolean;
+    schema_id?: string | null;
+    allowed_actions?: string[];
+  } | null;
+  entity_hints?: string[];
+  metric_hints?: string[];
+}): Promise<{ source: IntelligenceSourceRecord }> {
+  return apiRequest("/api/v1/intelligence/sources", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function toggleIntelligenceSource(sourceId: string, payload: {
+  workspace_id?: string;
+  enabled: boolean;
+}): Promise<{ source: IntelligenceSourceRecord }> {
+  return apiRequest(`/api/v1/intelligence/sources/${sourceId}/toggle`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function retryIntelligenceSource(sourceId: string, payload: {
+  workspace_id?: string;
+}): Promise<{ workspace_id: string; result: IntelligenceSourceRetryResult }> {
+  return apiRequest(`/api/v1/intelligence/sources/${sourceId}/retry`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listIntelligenceRuns(query: {
+  workspace_id?: string;
+  source_id?: string;
+  limit?: number;
+} = {}): Promise<{
+  workspace_id: string;
+  runs: IntelligenceScanRunRecord[];
+  scanner_worker: IntelligenceWorkerStatus<IntelligenceScannerWorkerRun>;
+  semantic_worker: IntelligenceWorkerStatus<IntelligenceSemanticWorkerRun>;
+  model_sync_worker: IntelligenceWorkerStatus<IntelligenceCatalogSyncRun>;
+  semantic_backlog: SemanticBacklogStatus;
+}> {
+  return apiRequest("/api/v1/intelligence/runs", { method: "GET", query });
+}
+
+export async function listIntelligenceEvents(query: {
+  workspace_id?: string;
+  domain_id?: IntelligenceDomainId;
+  limit?: number;
+} = {}): Promise<{
+  workspace_id: string;
+  events: IntelligenceEventClusterRecord[];
+}> {
+  return apiRequest("/api/v1/intelligence/events", { method: "GET", query });
+}
+
+export async function getIntelligenceEvent(eventId: string, query: { workspace_id?: string } = {}): Promise<{
+  workspace_id: string;
+  event: IntelligenceEventClusterRecord;
+  linked_claims: LinkedClaimRecord[];
+  claim_links: ClaimLinkRecord[];
+  review_state: EventReviewState;
+  bridge_dispatches: IntelligenceBridgeDispatchRecord[];
+  execution_audit: ExecutionAuditRecord[];
+  operator_notes: OperatorNoteRecord[];
+  invalidation_entries: IntelligenceInvalidationEntryRecord[];
+  expected_signal_entries: IntelligenceExpectedSignalEntryRecord[];
+  outcome_entries: IntelligenceOutcomeEntryRecord[];
+  narrative_cluster: IntelligenceNarrativeClusterRecord | null;
+  narrative_cluster_members: IntelligenceNarrativeClusterMemberSummary[];
+  temporal_narrative_ledger: IntelligenceTemporalNarrativeLedgerEntryRecord[];
+  related_historical_events: IntelligenceRelatedHistoricalEventSummary[];
+}> {
+  return apiRequest(`/api/v1/intelligence/events/${eventId}`, { method: "GET", query });
+}
+
+export async function getIntelligenceEventGraph(eventId: string, query: { workspace_id?: string } = {}): Promise<{
+  workspace_id: string;
+  event_id: string;
+  summary: IntelligenceEventGraphSummary;
+  nodes: LinkedClaimRecord[];
+  edges: Array<LinkedClaimEdgeRecord & { evidence_signal_count: number }>;
+  hotspots: string[];
+  neighborhoods: IntelligenceEventGraphNeighborhood[];
+  hotspot_clusters: IntelligenceHotspotCluster[];
+  related_historical_events: IntelligenceRelatedHistoricalEventSummary[];
+}> {
+  return apiRequest(`/api/v1/intelligence/events/${eventId}/graph`, { method: "GET", query });
+}
+
+export async function getIntelligenceHypotheses(eventId: string, query: { workspace_id?: string } = {}): Promise<{
+  workspace_id: string;
+  event_id: string;
+  primary_hypotheses: IntelligenceEventClusterRecord["primaryHypotheses"];
+  counter_hypotheses: IntelligenceEventClusterRecord["counterHypotheses"];
+  invalidation_conditions: IntelligenceEventClusterRecord["invalidationConditions"];
+  expected_signals: IntelligenceEventClusterRecord["expectedSignals"];
+  world_states: IntelligenceEventClusterRecord["worldStates"];
+  deliberations: IntelligenceEventClusterRecord["deliberations"];
+  outcomes: IntelligenceEventClusterRecord["outcomes"];
+  ledger_entries: HypothesisLedgerEntry[];
+  evidence_links: HypothesisEvidenceLink[];
+  evidence_summary: IntelligenceHypothesisEvidenceSummary[];
+  invalidation_entries: IntelligenceInvalidationEntryRecord[];
+  expected_signal_entries: IntelligenceExpectedSignalEntryRecord[];
+  outcome_entries: IntelligenceOutcomeEntryRecord[];
+}> {
+  return apiRequest(`/api/v1/intelligence/hypotheses/${eventId}`, { method: "GET", query });
+}
+
+export async function listIntelligenceFetchFailures(query: {
+  workspace_id?: string;
+  source_id?: string;
+  limit?: number;
+} = {}): Promise<{
+  workspace_id: string;
+  fetch_failures: IntelligenceFetchFailureRecord[];
+}> {
+  return apiRequest("/api/v1/intelligence/fetch-failures", { method: "GET", query });
+}
+
+export async function retryIntelligenceSignal(signalId: string, payload: {
+  workspace_id?: string;
+}): Promise<{ workspace_id: string; result: IntelligenceSignalRetryResult }> {
+  return apiRequest(`/api/v1/intelligence/signals/${signalId}/retry`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateIntelligenceEventReviewState(eventId: string, payload: {
+  workspace_id?: string;
+  review_state: EventReviewState;
+  review_reason?: string | null;
+  review_owner?: string | null;
+  review_resolved_at?: string | null;
+}): Promise<{ workspace_id: string; event: IntelligenceEventClusterRecord }> {
+  return apiRequest(`/api/v1/intelligence/events/${eventId}/review-state`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateIntelligenceLinkedClaimReviewState(linkedClaimId: string, payload: {
+  workspace_id?: string;
+  review_state: EventReviewState;
+  review_reason?: string | null;
+  review_owner?: string | null;
+  review_resolved_at?: string | null;
+}): Promise<{ workspace_id: string; linked_claim: LinkedClaimRecord }> {
+  return apiRequest(`/api/v1/intelligence/linked-claims/${linkedClaimId}/review-state`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateIntelligenceHypothesisReviewState(entryId: string, payload: {
+  workspace_id?: string;
+  review_state: EventReviewState;
+  review_reason?: string | null;
+  review_owner?: string | null;
+  review_resolved_at?: string | null;
+}): Promise<{ workspace_id: string; hypothesis: HypothesisLedgerEntry }> {
+  return apiRequest(`/api/v1/intelligence/hypotheses/entries/${entryId}/review-state`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateIntelligenceNarrativeClusterReviewState(clusterId: string, payload: {
+  workspace_id?: string;
+  review_state: EventReviewState;
+  review_reason?: string | null;
+  review_owner?: string | null;
+  review_resolved_at?: string | null;
+}): Promise<{ workspace_id: string; narrative_cluster: IntelligenceNarrativeClusterRecord }> {
+  return apiRequest(`/api/v1/intelligence/narrative-clusters/${clusterId}/review-state`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function createIntelligenceOperatorNote(eventId: string, payload: {
+  workspace_id?: string;
+  scope?: OperatorNoteRecord["scope"];
+  scope_id?: string | null;
+  note: string;
+}): Promise<{ workspace_id: string; note: OperatorNoteRecord }> {
+  return apiRequest(`/api/v1/intelligence/events/${eventId}/operator-note`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deliberateIntelligenceEvent(eventId: string, payload: { workspace_id?: string } = {}): Promise<{
+  workspace_id: string;
+  dispatch: IntelligenceBridgeDispatchRecord;
+  deliberation: IntelligenceEventClusterRecord["deliberations"][number] | null;
+}> {
+  return apiRequest(`/api/v1/intelligence/events/${eventId}/deliberate`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function executeIntelligenceEvent(eventId: string, payload: {
+  workspace_id?: string;
+  candidate_id: string;
+}): Promise<{
+  workspace_id: string;
+  candidate: IntelligenceEventClusterRecord["executionCandidates"][number];
+  event: IntelligenceEventClusterRecord;
+}> {
+  return apiRequest(`/api/v1/intelligence/events/${eventId}/execute`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function bridgeIntelligenceEventToCouncil(payload: {
+  workspace_id?: string;
+  event_id: string;
+}): Promise<{
+  workspace_id: string;
+  dispatch: IntelligenceBridgeDispatchRecord;
+  deliberation: IntelligenceEventClusterRecord["deliberations"][number] | null;
+}> {
+  return apiRequest("/api/v1/intelligence/bridges/council", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function bridgeIntelligenceEventToBrief(payload: {
+  workspace_id?: string;
+  event_id: string;
+}): Promise<{
+  workspace_id: string;
+  dispatch: IntelligenceBridgeDispatchRecord;
+}> {
+  return apiRequest("/api/v1/intelligence/bridges/brief", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function bridgeIntelligenceEventToAction(payload: {
+  workspace_id?: string;
+  event_id: string;
+}): Promise<{
+  workspace_id: string;
+  dispatch: IntelligenceBridgeDispatchRecord;
+}> {
+  return apiRequest("/api/v1/intelligence/bridges/action", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listIntelligenceRuntimeModels(query: { workspace_id?: string } = {}): Promise<{
+  workspace_id: string;
+  models: IntelligenceModelRegistryEntry[];
+  provider_health: ProviderHealthRecord[];
+  sync_worker: IntelligenceWorkerStatus<IntelligenceCatalogSyncRun>;
+}> {
+  return apiRequest("/api/v1/intelligence/runtime/models", { method: "GET", query });
+}
+
+export async function listIntelligenceRuntimeAliases(query: {
+  workspace_id?: string;
+  alias?: IntelligenceCapabilityAlias;
+} = {}): Promise<{
+  workspace_id: string;
+  alias: IntelligenceCapabilityAlias | null;
+  bindings: {
+    workspace: IntelligenceCapabilityAliasBinding[];
+    global: IntelligenceCapabilityAliasBinding[];
+  };
+  rollouts: {
+    workspace: AliasRolloutRecord[];
+    global: AliasRolloutRecord[];
+  };
+}> {
+  return apiRequest("/api/v1/intelligence/runtime/aliases", { method: "GET", query });
+}
+
+export async function updateIntelligenceAliasBindings(
+  alias: IntelligenceCapabilityAlias,
+  payload: {
+    workspace_id?: string;
+    bindings: Array<{
+      provider: ProviderName;
+      model_id: string;
+      weight?: number;
+      fallback_rank?: number;
+      canary_percent?: number;
+      is_active?: boolean;
+      requires_structured_output?: boolean;
+      requires_tool_use?: boolean;
+      requires_long_context?: boolean;
+      max_cost_class?: "free" | "low" | "standard" | "premium" | null;
+    }>;
+  }
+): Promise<{
+  workspace_id: string;
+  alias: IntelligenceCapabilityAlias;
+  bindings: IntelligenceCapabilityAliasBinding[];
+  rollout: AliasRolloutRecord;
+}> {
+  return apiRequest(`/api/v1/intelligence/runtime/aliases/${alias}/bindings`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function listProviders(): Promise<{ providers: ProviderAvailability[] }> {
@@ -476,12 +895,14 @@ export async function runWatcher(watcherId: string): Promise<{
   run: WatcherRunRecord | null;
   briefing: BriefingRecord;
   dossier: DossierRecord;
+  follow_up: import("./types").WatcherFollowUpRecord | null;
 }> {
   return apiRequest<{
     watcher: WatcherRecord;
     run: WatcherRunRecord | null;
     briefing: BriefingRecord;
     dossier: DossierRecord;
+    follow_up: import("./types").WatcherFollowUpRecord | null;
   }>(`/api/v1/watchers/${watcherId}/run`, {
     method: "POST",
   });
@@ -494,8 +915,8 @@ export async function listBriefings(query: { type?: BriefingRecord["type"]; stat
   });
 }
 
-export async function generateBriefing(payload: { query: string; title?: string; type?: BriefingRecord["type"] }): Promise<BriefingRecord> {
-  return apiRequest<BriefingRecord>("/api/v1/briefings/generate", {
+export async function generateBriefing(payload: { query: string; title?: string; type?: BriefingRecord["type"] }): Promise<BriefingGenerateResult> {
+  return apiRequest<BriefingGenerateResult>("/api/v1/briefings/generate", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -512,8 +933,8 @@ export async function getDossier(dossierId: string): Promise<DossierDetail> {
   return apiRequest<DossierDetail>(`/api/v1/dossiers/${dossierId}`, { method: "GET" });
 }
 
-export async function refreshDossier(dossierId: string, payload: { query?: string; title?: string } = {}): Promise<DossierRecord> {
-  return apiRequest<DossierRecord>(`/api/v1/dossiers/${dossierId}/refresh`, {
+export async function refreshDossier(dossierId: string, payload: { query?: string; title?: string } = {}): Promise<DossierRefreshResult> {
+  return apiRequest<DossierRefreshResult>(`/api/v1/dossiers/${dossierId}/refresh`, {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -1066,6 +1487,70 @@ export async function getMemorySnapshot(query: { limit?: number } = {}): Promise
   });
 }
 
+export async function getMemorySummary(query: { limit?: number } = {}): Promise<MemorySummaryData> {
+  return apiRequest<MemorySummaryData>("/api/v1/memory/summary", {
+    method: "GET",
+    query,
+  });
+}
+
+export async function getMemoryContext(query: { q?: string; limit?: number; kind?: MemoryNoteKind } = {}): Promise<MemoryContextData> {
+  return apiRequest<MemoryContextData>("/api/v1/memory/context", {
+    method: "GET",
+    query,
+  });
+}
+
+export async function createMemoryNote(payload: {
+  kind: MemoryNoteKind;
+  key?: string;
+  value?: string;
+  attributes?: Record<string, unknown>;
+  title: string;
+  content: string;
+  tags?: string[];
+  pinned?: boolean;
+  source?: "manual" | "session" | "system";
+  related_session_id?: string;
+  related_task_id?: string;
+}): Promise<MemoryNoteRecord> {
+  return apiRequest<MemoryNoteRecord>("/api/v1/memory/notes", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateMemoryNote(
+  noteId: string,
+  payload: Partial<{
+    key: string;
+    value: string;
+    attributes: Record<string, unknown>;
+    title: string;
+    content: string;
+    tags: string[];
+    pinned: boolean;
+  }>
+): Promise<MemoryNoteRecord> {
+  return apiRequest<MemoryNoteRecord>(`/api/v1/memory/notes/${noteId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteMemoryNote(noteId: string): Promise<{ deleted: boolean }> {
+  return apiRequest<{ deleted: boolean }>(`/api/v1/memory/notes/${noteId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function getRecentDecisionMemory(query: { limit?: number } = {}): Promise<{ notes: MemoryNoteRecord[]; total: number }> {
+  return apiRequest<{ notes: MemoryNoteRecord[]; total: number }>("/api/v1/memory/recent-decisions", {
+    method: "GET",
+    query,
+  });
+}
+
 export async function getReportsOverview(
   query: {
     task_limit?: number;
@@ -1183,7 +1668,13 @@ export async function listRadarItems(query: { status?: RadarItemStatus; limit?: 
 }
 
 export async function evaluateRadar(payload: { item_ids: string[] }): Promise<{ evaluation_job_id: string; status: string; recommendation_count: number }> {
-  return apiRequest<{ evaluation_job_id: string; status: string; recommendation_count: number }>("/api/v1/radar/evaluate", {
+  return apiRequest<{
+    evaluation_job_id: string;
+    status: string;
+    recommendation_count: number;
+    promoted_count: number;
+    promotions: RadarPromotionResult[];
+  }>("/api/v1/radar/evaluate", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -1193,6 +1684,120 @@ export async function listRadarRecommendations(query: { decision?: RadarDecision
   return apiRequest<{ recommendations: RadarRecommendationRecord[] }>("/api/v1/radar/recommendations", {
     method: "GET",
     query,
+  });
+}
+
+export async function listRadarEvents(
+  query: { decision?: RadarPromotionDecision; limit?: number } = {}
+): Promise<{ events: RadarEventRecord[] }> {
+  return apiRequest<{ events: RadarEventRecord[] }>("/api/v1/radar/events", {
+    method: "GET",
+    query,
+  });
+}
+
+export async function getRadarEvent(eventId: string): Promise<{
+  event: RadarEventRecord;
+  domain_posteriors: RadarDomainPosteriorRecord[];
+  autonomy_decision: RadarAutonomyDecisionRecord | null;
+  feedback: RadarOperatorFeedbackRecord[];
+}> {
+  return apiRequest<{
+    event: RadarEventRecord;
+    domain_posteriors: RadarDomainPosteriorRecord[];
+    autonomy_decision: RadarAutonomyDecisionRecord | null;
+    feedback: RadarOperatorFeedbackRecord[];
+  }>(`/api/v1/radar/events/${eventId}`, {
+    method: "GET",
+  });
+}
+
+export async function listRadarDomainPacks(): Promise<{ domain_packs: RadarDomainPackDefinition[] }> {
+  return apiRequest<{ domain_packs: RadarDomainPackDefinition[] }>("/api/v1/radar/domain-packs", {
+    method: "GET",
+  });
+}
+
+export async function getRadarControl(): Promise<{
+  control: RadarControlSettingsRecord;
+  domain_pack_metrics: RadarDomainPackMetricRecord[];
+  sources: RadarFeedSourceRecord[];
+  scanner_worker: SettingsOverviewData["radar_scanner_worker"];
+}> {
+  return apiRequest<{
+    control: RadarControlSettingsRecord;
+    domain_pack_metrics: RadarDomainPackMetricRecord[];
+    sources: RadarFeedSourceRecord[];
+    scanner_worker: SettingsOverviewData["radar_scanner_worker"];
+  }>("/api/v1/radar/control", {
+    method: "GET",
+  });
+}
+
+export async function listRadarSources(query: { enabled?: boolean; limit?: number } = {}): Promise<{
+  sources: RadarFeedSourceRecord[];
+}> {
+  return apiRequest<{ sources: RadarFeedSourceRecord[] }>("/api/v1/radar/sources", {
+    method: "GET",
+    query,
+  });
+}
+
+export async function toggleRadarSource(sourceId: string, payload: { enabled: boolean }): Promise<{
+  source: RadarFeedSourceRecord;
+}> {
+  return apiRequest<{ source: RadarFeedSourceRecord }>(`/api/v1/radar/sources/${sourceId}/toggle`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listRadarRuns(query: { source_id?: string; limit?: number } = {}): Promise<{
+  runs: RadarIngestRunRecord[];
+}> {
+  return apiRequest<{ runs: RadarIngestRunRecord[] }>("/api/v1/radar/runs", {
+    method: "GET",
+    query,
+  });
+}
+
+export async function updateRadarControl(payload: RadarControlUpdateRequest): Promise<{
+  control: RadarControlSettingsRecord;
+}> {
+  return apiRequest<{
+    control: RadarControlSettingsRecord;
+  }>("/api/v1/radar/control", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function ackRadarEvent(eventId: string, payload: { note?: string } = {}): Promise<{
+  event: RadarEventRecord | null;
+  feedback: RadarOperatorFeedbackRecord;
+}> {
+  return apiRequest<{
+    event: RadarEventRecord | null;
+    feedback: RadarOperatorFeedbackRecord;
+  }>(`/api/v1/radar/events/${eventId}/ack`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function overrideRadarEvent(
+  eventId: string,
+  payload: { decision: RadarPromotionDecision; note?: string }
+): Promise<{
+  event: RadarEventRecord | null;
+  feedback: RadarOperatorFeedbackRecord;
+}> {
+  return apiRequest<{
+    event: RadarEventRecord | null;
+    feedback: RadarOperatorFeedbackRecord;
+  }>(`/api/v1/radar/events/${eventId}/override`, {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }
 

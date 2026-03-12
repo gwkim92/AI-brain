@@ -1,5 +1,6 @@
 import type { JarvisStore } from '../store/types';
 import type { ProviderRouter } from '../providers/router';
+import type { NotificationService } from '../notifications/proactive';
 
 export type McpStreamRequest = {
   origin?: string;
@@ -43,6 +44,7 @@ export type McpContext = {
   store: JarvisStore;
   providerRouter: ProviderRouter;
   userId: string;
+  notificationService?: NotificationService;
 };
 
 function createMcpTools(context: McpContext): Map<string, { definition: McpToolDefinition; handler: McpToolHandler }> {
@@ -102,6 +104,53 @@ function createMcpTools(context: McpContext): Map<string, { definition: McpToolD
         idempotencyKey: `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       });
       return { id: task.id, status: task.status, title: task.title };
+    }
+  });
+
+  tools.set('notification_emit', {
+    definition: {
+      name: 'notification_emit',
+      description: 'Emit a low-risk internal notification through the notification service.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Notification title' },
+          message: { type: 'string', description: 'Notification message' },
+          severity: { type: 'string', enum: ['info', 'warning', 'critical'], default: 'info' },
+          entity_type: { type: 'string', description: 'Optional entity type' },
+          entity_id: { type: 'string', description: 'Optional entity id' },
+          action_url: { type: 'string', description: 'Optional action URL' }
+        },
+        required: ['title', 'message']
+      }
+    },
+    handler: async (params) => {
+      if (!context.notificationService) {
+        throw new Error('notification service unavailable');
+      }
+      const title = String(params.title ?? '').trim();
+      const message = String(params.message ?? '').trim();
+      if (!title || !message) {
+        throw new Error('title and message are required');
+      }
+      const severityValue = String(params.severity ?? 'info').trim();
+      const severity =
+        severityValue === 'warning' || severityValue === 'critical' || severityValue === 'info'
+          ? severityValue
+          : 'info';
+      const id = `notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      context.notificationService.emit({
+        id,
+        type: 'intelligence_event',
+        title,
+        message,
+        severity,
+        entityType: typeof params.entity_type === 'string' ? params.entity_type : undefined,
+        entityId: typeof params.entity_id === 'string' ? params.entity_id : undefined,
+        actionUrl: typeof params.action_url === 'string' ? params.action_url : undefined,
+        createdAt: new Date().toISOString(),
+      });
+      return { id, accepted: true };
     }
   });
 

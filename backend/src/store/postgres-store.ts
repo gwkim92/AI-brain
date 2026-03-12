@@ -5,12 +5,14 @@ import { createAuthRepository } from './postgres/auth-repository';
 import { createCouncilExecutionApprovalRepository } from './postgres/council-execution-approval-repository';
 import { initializePostgresStore } from './postgres/initializer';
 import { createJarvisRepository } from './postgres/jarvis-repository';
+import { createPostgresIntelligenceRepository } from './postgres/intelligence-repository';
 import { createMemoryRepository } from './postgres/memory-repository';
 import { createMissionRepository } from './postgres/mission-repository';
 import { createRadarUpgradeRepository } from './postgres/radar-upgrade-repository';
 import { createTaskRepository } from './postgres/task-repository';
 import { createTelegramReportRepository } from './postgres/telegram-report-repository';
 import { createPostgresUpgradeExecutorGateway } from './postgres/upgrade-executor-gateway';
+import { createPostgresWorldModelRepository } from './postgres/world-model-repository';
 import { assertStoreContractInDev } from './contract-assertions';
 import type { PostgresStoreOptions } from './postgres/types';
 import type { JarvisStore } from './types';
@@ -85,6 +87,14 @@ export function createPostgresStore(options: PostgresStoreOptions): JarvisStore 
     }),
 
     ...createMemoryRepository({
+      pool
+    }),
+
+    ...createPostgresIntelligenceRepository({
+      pool
+    }),
+
+    ...createPostgresWorldModelRepository({
       pool
     }),
 

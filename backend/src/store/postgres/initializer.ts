@@ -11,6 +11,28 @@ export async function initializePostgresStore({
   defaultUserId,
   defaultUserEmail
 }: PostgresInitializerDeps): Promise<void> {
+  await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
+  await pool.query(`CREATE EXTENSION IF NOT EXISTS vector`);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'radar_item_status') THEN
+        CREATE TYPE radar_item_status AS ENUM ('new', 'scored', 'archived');
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'radar_decision') THEN
+        CREATE TYPE radar_decision AS ENUM ('adopt', 'hold', 'discard');
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'upgrade_status') THEN
+        CREATE TYPE upgrade_status AS ENUM (
+          'proposed', 'approved', 'planning', 'running', 'verifying', 'deployed', 'failed', 'rolled_back', 'rejected'
+        );
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'telegram_report_status') THEN
+        CREATE TYPE telegram_report_status AS ENUM ('queued', 'sent', 'failed');
+      END IF;
+    END
+    $$;
+  `);
   await pool.query(`
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'member'
@@ -199,6 +221,23 @@ export async function initializePostgresStore({
     ON ai_invocation_traces(user_id, feature_key, created_at DESC)
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS memory_segments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
+      segment_type TEXT NOT NULL,
+      content TEXT NOT NULL,
+      embedding vector(1536),
+      confidence DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+      expires_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_memory_segments_user_created_at
+    ON memory_segments(user_id, created_at DESC)
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS jarvis_sessions (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -250,6 +289,47 @@ export async function initializePostgresStore({
     CHECK (intent IN ('general', 'code', 'research', 'finance', 'news', 'council'))
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS memory_notes (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      memory_key TEXT,
+      memory_value TEXT,
+      attributes_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      tags_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      pinned BOOLEAN NOT NULL DEFAULT false,
+      source TEXT NOT NULL DEFAULT 'manual',
+      related_session_id UUID REFERENCES jarvis_sessions(id) ON DELETE SET NULL,
+      related_task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (kind IN ('user_preference', 'project_context', 'decision_memory', 'research_memory')),
+      CHECK (source IN ('manual', 'session', 'system'))
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE memory_notes
+    ADD COLUMN IF NOT EXISTS memory_key TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE memory_notes
+    ADD COLUMN IF NOT EXISTS memory_value TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE memory_notes
+    ADD COLUMN IF NOT EXISTS attributes_json JSONB NOT NULL DEFAULT '{}'::jsonb
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_memory_notes_user_kind_updated_at
+    ON memory_notes(user_id, kind, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_memory_notes_user_pinned_updated_at
+    ON memory_notes(user_id, pinned, updated_at DESC)
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS jarvis_session_events (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       session_id UUID NOT NULL REFERENCES jarvis_sessions(id) ON DELETE CASCADE,
@@ -265,6 +345,33 @@ export async function initializePostgresStore({
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_jarvis_session_events_session_sequence
     ON jarvis_session_events(session_id, sequence ASC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS jarvis_session_stages (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      session_id UUID NOT NULL REFERENCES jarvis_sessions(id) ON DELETE CASCADE,
+      stage_key TEXT NOT NULL,
+      capability TEXT NOT NULL,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      order_index INTEGER NOT NULL DEFAULT 0,
+      depends_on_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      artifact_refs_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      summary TEXT,
+      error_code TEXT,
+      error_message TEXT,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (session_id, stage_key),
+      CHECK (capability IN ('answer', 'research', 'brief', 'debate', 'plan', 'approve', 'execute', 'monitor', 'notify')),
+      CHECK (status IN ('queued', 'running', 'blocked', 'needs_approval', 'completed', 'failed', 'skipped'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_jarvis_session_stages_session_order
+    ON jarvis_session_stages(session_id, order_index ASC, created_at ASC)
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS action_proposals (
@@ -405,6 +512,236 @@ export async function initializePostgresStore({
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_dossier_claims_dossier_order
     ON dossier_claims(dossier_id, claim_order ASC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS world_model_entities (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      canonical_name TEXT NOT NULL,
+      aliases_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      attributes_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (kind IN ('actor', 'organization', 'country', 'asset', 'route', 'facility', 'commodity', 'policy', 'other')),
+      UNIQUE (user_id, kind, canonical_name)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_world_model_entities_user_kind_updated_at
+    ON world_model_entities(user_id, kind, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS world_model_projections (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      dossier_id UUID REFERENCES dossiers(id) ON DELETE CASCADE,
+      briefing_id UUID REFERENCES briefings(id) ON DELETE CASCADE,
+      watcher_id UUID REFERENCES watchers(id) ON DELETE CASCADE,
+      session_id UUID REFERENCES jarvis_sessions(id) ON DELETE CASCADE,
+      origin TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      superseded_at TIMESTAMPTZ,
+      superseded_by_projection_id UUID REFERENCES world_model_projections(id) ON DELETE SET NULL,
+      summary_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (origin IN ('briefing_generate', 'dossier_refresh', 'watcher_run', 'outcome_backfill')),
+      CHECK (status IN ('active', 'superseded'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_world_model_projections_user_generated_at
+    ON world_model_projections(user_id, generated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_world_model_projections_active_scope
+    ON world_model_projections(status, dossier_id, watcher_id, briefing_id, generated_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS world_model_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      dossier_id UUID REFERENCES dossiers(id) ON DELETE SET NULL,
+      kind TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      occurred_at TIMESTAMPTZ,
+      recorded_at TIMESTAMPTZ,
+      attributes_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (kind IN ('geopolitical', 'contract', 'policy', 'market', 'operational', 'financial', 'other'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_world_model_events_user_created_at
+    ON world_model_events(user_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_world_model_events_dossier_created_at
+    ON world_model_events(dossier_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS world_model_observations (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      dossier_id UUID REFERENCES dossiers(id) ON DELETE SET NULL,
+      metric_key TEXT NOT NULL,
+      value_text TEXT NOT NULL,
+      unit TEXT,
+      observed_at TIMESTAMPTZ,
+      recorded_at TIMESTAMPTZ,
+      attributes_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_world_model_observations_user_created_at
+    ON world_model_observations(user_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_world_model_observations_dossier_metric
+    ON world_model_observations(dossier_id, metric_key, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS world_model_constraints (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      dossier_id UUID REFERENCES dossiers(id) ON DELETE SET NULL,
+      kind TEXT NOT NULL,
+      description TEXT NOT NULL,
+      severity TEXT NOT NULL DEFAULT 'medium',
+      status TEXT NOT NULL DEFAULT 'active',
+      attributes_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (kind IN ('capacity', 'logistics', 'insurance', 'regulatory', 'settlement', 'financing', 'other')),
+      CHECK (severity IN ('low', 'medium', 'high')),
+      CHECK (status IN ('active', 'watching', 'relieved'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_world_model_constraints_user_updated_at
+    ON world_model_constraints(user_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_world_model_constraints_dossier_updated_at
+    ON world_model_constraints(dossier_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS world_model_hypotheses (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      projection_id UUID REFERENCES world_model_projections(id) ON DELETE SET NULL,
+      dossier_id UUID REFERENCES dossiers(id) ON DELETE SET NULL,
+      briefing_id UUID REFERENCES briefings(id) ON DELETE SET NULL,
+      thesis TEXT NOT NULL,
+      stance TEXT NOT NULL,
+      confidence DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+      status TEXT NOT NULL DEFAULT 'active',
+      summary TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (stance IN ('primary', 'counter')),
+      CHECK (status IN ('active', 'weakened', 'invalidated'))
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE world_model_hypotheses
+    ADD COLUMN IF NOT EXISTS projection_id UUID REFERENCES world_model_projections(id) ON DELETE SET NULL
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_world_model_hypotheses_user_updated_at
+    ON world_model_hypotheses(user_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_world_model_hypotheses_projection_updated_at
+    ON world_model_hypotheses(projection_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_world_model_hypotheses_dossier_updated_at
+    ON world_model_hypotheses(dossier_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS world_model_hypothesis_evidence (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      hypothesis_id UUID NOT NULL REFERENCES world_model_hypotheses(id) ON DELETE CASCADE,
+      dossier_id UUID REFERENCES dossiers(id) ON DELETE SET NULL,
+      claim_text TEXT NOT NULL,
+      relation TEXT NOT NULL DEFAULT 'supports',
+      source_urls TEXT[] NOT NULL DEFAULT '{}',
+      weight DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (relation IN ('supports', 'contradicts', 'context'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_world_model_hypothesis_evidence_hypothesis_created_at
+    ON world_model_hypothesis_evidence(hypothesis_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS world_model_invalidation_conditions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      hypothesis_id UUID NOT NULL REFERENCES world_model_hypotheses(id) ON DELETE CASCADE,
+      description TEXT NOT NULL,
+      expected_by TIMESTAMPTZ,
+      observed_status TEXT NOT NULL DEFAULT 'pending',
+      severity TEXT NOT NULL DEFAULT 'medium',
+      attributes_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (observed_status IN ('pending', 'hit', 'missed')),
+      CHECK (severity IN ('low', 'medium', 'high'))
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE world_model_invalidation_conditions
+    ADD COLUMN IF NOT EXISTS attributes_json JSONB NOT NULL DEFAULT '{}'::jsonb
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_world_model_invalidation_conditions_hypothesis_updated_at
+    ON world_model_invalidation_conditions(hypothesis_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS world_model_state_snapshots (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      target_type TEXT NOT NULL,
+      target_id UUID NOT NULL,
+      state_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (target_type IN ('dossier', 'watcher', 'session'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_world_model_state_snapshots_user_created_at
+    ON world_model_state_snapshots(user_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_world_model_state_snapshots_target_created_at
+    ON world_model_state_snapshots(target_type, target_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS world_model_outcomes (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      hypothesis_id UUID NOT NULL REFERENCES world_model_hypotheses(id) ON DELETE CASCADE,
+      evaluated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      result TEXT NOT NULL,
+      error_notes TEXT,
+      horizon_realized TEXT,
+      missed_invalidators_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (result IN ('confirmed', 'mixed', 'invalidated', 'unresolved'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_world_model_outcomes_user_created_at
+    ON world_model_outcomes(user_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_world_model_outcomes_hypothesis_created_at
+    ON world_model_outcomes(hypothesis_id, created_at DESC)
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS provider_stats (
@@ -650,6 +987,350 @@ export async function initializePostgresStore({
     ON assistant_context_grounding_claim_citations(claim_id, citation_order ASC)
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS radar_feed_sources (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      url TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      source_tier TEXT NOT NULL,
+      poll_minutes INTEGER NOT NULL DEFAULT 5,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      parser_hints_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      entity_hints_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      metric_hints_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      last_fetched_at TIMESTAMPTZ,
+      last_success_at TIMESTAMPTZ,
+      last_error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS radar_feed_cursors (
+      source_id TEXT PRIMARY KEY REFERENCES radar_feed_sources(id) ON DELETE CASCADE,
+      cursor_text TEXT,
+      etag TEXT,
+      last_modified TEXT,
+      last_seen_published_at TIMESTAMPTZ,
+      last_fetched_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS radar_ingest_runs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      source_id TEXT REFERENCES radar_feed_sources(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'running',
+      fetched_count INTEGER NOT NULL DEFAULT 0,
+      ingested_count INTEGER NOT NULL DEFAULT 0,
+      evaluated_count INTEGER NOT NULL DEFAULT 0,
+      promoted_count INTEGER NOT NULL DEFAULT 0,
+      auto_executed_count INTEGER NOT NULL DEFAULT 0,
+      failed_count INTEGER NOT NULL DEFAULT 0,
+      error_text TEXT,
+      detail_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      finished_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tech_radar_items (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      source_url TEXT NOT NULL,
+      source_name TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT,
+      published_at TIMESTAMPTZ,
+      observed_at TIMESTAMPTZ,
+      item_hash TEXT NOT NULL,
+      confidence_score NUMERIC(4,3) NOT NULL DEFAULT 0.500,
+      status radar_item_status NOT NULL DEFAULT 'new',
+      source_type TEXT,
+      source_tier TEXT,
+      raw_metrics_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      entity_hints_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      trust_hint TEXT,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (confidence_score >= 0 AND confidence_score <= 1),
+      UNIQUE (source_url, item_hash)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS radar_event_candidates (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      geo_scope TEXT,
+      time_scope TEXT,
+      dedupe_cluster_id TEXT NOT NULL,
+      primary_item_id UUID REFERENCES tech_radar_items(id) ON DELETE SET NULL,
+      cluster_size INTEGER NOT NULL DEFAULT 1,
+      item_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      entities_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      claims_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      metric_shocks_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      source_mix_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      source_diversity_score NUMERIC(4,3) NOT NULL DEFAULT 0,
+      corroboration_detail_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      novelty_score NUMERIC(4,3) NOT NULL DEFAULT 0,
+      corroboration_score NUMERIC(4,3) NOT NULL DEFAULT 0,
+      metric_alignment_score NUMERIC(4,3) NOT NULL DEFAULT 0,
+      bottleneck_proximity_score NUMERIC(4,3) NOT NULL DEFAULT 0,
+      persistence_score NUMERIC(4,3) NOT NULL DEFAULT 0,
+      structurality_score NUMERIC(4,3) NOT NULL DEFAULT 0,
+      actionability_score NUMERIC(4,3) NOT NULL DEFAULT 0,
+      decision TEXT NOT NULL,
+      override_decision TEXT,
+      expected_next_signals_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      acknowledged_at TIMESTAMPTZ,
+      acknowledged_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE radar_event_candidates
+    ADD COLUMN IF NOT EXISTS primary_item_id UUID REFERENCES tech_radar_items(id) ON DELETE SET NULL
+  `);
+  await pool.query(`
+    ALTER TABLE radar_event_candidates
+    ADD COLUMN IF NOT EXISTS cluster_size INTEGER NOT NULL DEFAULT 1
+  `);
+  await pool.query(`
+    ALTER TABLE radar_event_candidates
+    ADD COLUMN IF NOT EXISTS source_diversity_score NUMERIC(4,3) NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE radar_event_candidates
+    ADD COLUMN IF NOT EXISTS corroboration_detail_json JSONB NOT NULL DEFAULT '{}'::jsonb
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS radar_domain_posteriors (
+      id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL REFERENCES radar_event_candidates(id) ON DELETE CASCADE,
+      domain_id TEXT NOT NULL,
+      score NUMERIC(4,3) NOT NULL DEFAULT 0,
+      evidence_features_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      counter_features_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      recommended_pack_id TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS radar_autonomy_decisions (
+      id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL UNIQUE REFERENCES radar_event_candidates(id) ON DELETE CASCADE,
+      risk_band TEXT NOT NULL,
+      execution_mode TEXT NOT NULL,
+      policy_reasons_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      requires_human BOOLEAN NOT NULL DEFAULT true,
+      kill_switch_scope TEXT NOT NULL DEFAULT 'none',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS radar_operator_feedback (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      event_id TEXT NOT NULL REFERENCES radar_event_candidates(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      note TEXT,
+      override_decision TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS radar_domain_pack_metrics (
+      domain_id TEXT PRIMARY KEY,
+      calibration_score NUMERIC(4,3) NOT NULL DEFAULT 0.75,
+      evaluation_count INTEGER NOT NULL DEFAULT 0,
+      promotion_count INTEGER NOT NULL DEFAULT 0,
+      dossier_count INTEGER NOT NULL DEFAULT 0,
+      action_count INTEGER NOT NULL DEFAULT 0,
+      auto_execute_count INTEGER NOT NULL DEFAULT 0,
+      override_count INTEGER NOT NULL DEFAULT 0,
+      ack_count INTEGER NOT NULL DEFAULT 0,
+      confirmed_count INTEGER NOT NULL DEFAULT 0,
+      invalidated_count INTEGER NOT NULL DEFAULT 0,
+      mixed_count INTEGER NOT NULL DEFAULT 0,
+      unresolved_count INTEGER NOT NULL DEFAULT 0,
+      last_event_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE radar_domain_pack_metrics
+    ADD COLUMN IF NOT EXISTS confirmed_count INTEGER NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE radar_domain_pack_metrics
+    ADD COLUMN IF NOT EXISTS invalidated_count INTEGER NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE radar_domain_pack_metrics
+    ADD COLUMN IF NOT EXISTS mixed_count INTEGER NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE radar_domain_pack_metrics
+    ADD COLUMN IF NOT EXISTS unresolved_count INTEGER NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS radar_control_settings (
+      singleton BOOLEAN PRIMARY KEY DEFAULT true CHECK (singleton),
+      global_kill_switch BOOLEAN NOT NULL DEFAULT false,
+      auto_execution_enabled BOOLEAN NOT NULL DEFAULT true,
+      dossier_promotion_enabled BOOLEAN NOT NULL DEFAULT true,
+      tier3_escalation_enabled BOOLEAN NOT NULL DEFAULT false,
+      disabled_domain_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      disabled_source_tiers_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    INSERT INTO radar_control_settings (
+      singleton,
+      global_kill_switch,
+      auto_execution_enabled,
+      dossier_promotion_enabled,
+      tier3_escalation_enabled
+    )
+    VALUES (true, false, true, true, false)
+    ON CONFLICT (singleton) DO NOTHING
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tech_radar_scores (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      radar_item_id UUID NOT NULL REFERENCES tech_radar_items(id) ON DELETE CASCADE,
+      event_id TEXT REFERENCES radar_event_candidates(id) ON DELETE SET NULL,
+      performance_gain NUMERIC(5,2) NOT NULL,
+      reliability_gain NUMERIC(5,2) NOT NULL,
+      adoption_difficulty NUMERIC(5,2) NOT NULL,
+      rollback_difficulty NUMERIC(5,2) NOT NULL,
+      security_risk NUMERIC(5,2) NOT NULL,
+      total_score NUMERIC(5,2) NOT NULL,
+      decision radar_decision NOT NULL,
+      rationale JSONB NOT NULL DEFAULT '{}'::jsonb,
+      evaluated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS upgrade_proposals (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      radar_score_id UUID NOT NULL REFERENCES tech_radar_scores(id) ON DELETE RESTRICT,
+      proposal_title TEXT NOT NULL,
+      change_plan JSONB NOT NULL DEFAULT '{}'::jsonb,
+      risk_plan JSONB NOT NULL DEFAULT '{}'::jsonb,
+      status upgrade_status NOT NULL DEFAULT 'proposed',
+      approved_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      approved_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS upgrade_runs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      proposal_id UUID NOT NULL REFERENCES upgrade_proposals(id) ON DELETE RESTRICT,
+      triggered_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      start_command TEXT NOT NULL,
+      status upgrade_status NOT NULL DEFAULT 'planning',
+      baseline_metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+      post_metrics JSONB,
+      rollback_ref TEXT,
+      trace_id TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS telegram_reports (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      run_id UUID REFERENCES upgrade_runs(id) ON DELETE SET NULL,
+      chat_id TEXT NOT NULL,
+      topic TEXT NOT NULL,
+      body_markdown TEXT NOT NULL,
+      status telegram_report_status NOT NULL DEFAULT 'queued',
+      telegram_message_id TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      sent_at TIMESTAMPTZ
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      action TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id UUID,
+      trace_id TEXT,
+      reason TEXT,
+      before_data JSONB,
+      after_data JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_radar_feed_sources_enabled_updated_at
+    ON radar_feed_sources(enabled, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_radar_feed_cursors_last_fetched_at
+    ON radar_feed_cursors(last_fetched_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_radar_ingest_runs_source_started_at
+    ON radar_ingest_runs(source_id, started_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_radar_ingest_runs_started_at
+    ON radar_ingest_runs(started_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_radar_items_status_published_at
+    ON tech_radar_items(status, published_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_radar_scores_item_id_evaluated_at
+    ON tech_radar_scores(radar_item_id, evaluated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_radar_event_candidates_decision_updated_at
+    ON radar_event_candidates(decision, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_radar_domain_posteriors_event_score
+    ON radar_domain_posteriors(event_id, score DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_radar_operator_feedback_event_created_at
+    ON radar_operator_feedback(event_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_radar_domain_pack_metrics_calibration
+    ON radar_domain_pack_metrics(calibration_score ASC, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_upgrade_proposals_status_created_at
+    ON upgrade_proposals(status, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_upgrade_runs_status_created_at
+    ON upgrade_runs(status, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_entity_created_at
+    ON audit_logs(entity_type, entity_id, created_at DESC)
+  `);
+  await pool.query(`
     ALTER TABLE IF EXISTS telegram_reports
     ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0
   `);
@@ -668,6 +1349,796 @@ export async function initializePostgresStore({
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_telegram_reports_status_next_attempt_at
     ON telegram_reports(status, next_attempt_at ASC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_workspaces (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_workspace_members (
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL DEFAULT 'member',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (workspace_id, user_id),
+      CHECK (role IN ('owner', 'member', 'admin'))
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_workspace_members
+    DROP CONSTRAINT IF EXISTS intelligence_workspace_members_role_check
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_workspace_members
+    ADD CONSTRAINT intelligence_workspace_members_role_check
+    CHECK (role IN ('owner', 'member', 'admin'))
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_sources (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      url TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      source_tier TEXT NOT NULL,
+      poll_minutes INTEGER NOT NULL DEFAULT 5,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      parser_config_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      crawl_config_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      health_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      connector_capability_json JSONB,
+      entity_hints_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      metric_hints_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      last_fetched_at TIMESTAMPTZ,
+      last_success_at TIMESTAMPTZ,
+      last_error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_sources
+    ADD COLUMN IF NOT EXISTS health_json JSONB NOT NULL DEFAULT '{}'::jsonb
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_sources
+    ADD COLUMN IF NOT EXISTS connector_capability_json JSONB
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_source_cursors (
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      source_id UUID NOT NULL REFERENCES intelligence_sources(id) ON DELETE CASCADE,
+      cursor_text TEXT,
+      etag TEXT,
+      last_modified TEXT,
+      last_seen_published_at TIMESTAMPTZ,
+      last_fetched_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (workspace_id, source_id)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_fetch_failures (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      source_id UUID REFERENCES intelligence_sources(id) ON DELETE SET NULL,
+      url TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      status_code INTEGER,
+      retryable BOOLEAN NOT NULL DEFAULT false,
+      blocked_by_robots BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_scan_runs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      source_id UUID REFERENCES intelligence_sources(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'running',
+      fetched_count INTEGER NOT NULL DEFAULT 0,
+      stored_document_count INTEGER NOT NULL DEFAULT 0,
+      signal_count INTEGER NOT NULL DEFAULT 0,
+      clustered_event_count INTEGER NOT NULL DEFAULT 0,
+      execution_count INTEGER NOT NULL DEFAULT 0,
+      failed_count INTEGER NOT NULL DEFAULT 0,
+      error_text TEXT,
+      detail_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      finished_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_raw_documents (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      source_id UUID REFERENCES intelligence_sources(id) ON DELETE SET NULL,
+      source_url TEXT NOT NULL,
+      canonical_url TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL DEFAULT '',
+      raw_text TEXT NOT NULL,
+      raw_html TEXT,
+      published_at TIMESTAMPTZ,
+      observed_at TIMESTAMPTZ,
+      language TEXT,
+      source_type TEXT NOT NULL,
+      source_tier TEXT NOT NULL,
+      document_fingerprint TEXT NOT NULL,
+      metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (workspace_id, document_fingerprint)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_signals (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      source_id UUID REFERENCES intelligence_sources(id) ON DELETE SET NULL,
+      document_id UUID NOT NULL REFERENCES intelligence_raw_documents(id) ON DELETE CASCADE,
+      linked_event_id UUID,
+      source_type TEXT NOT NULL,
+      source_tier TEXT NOT NULL,
+      url TEXT NOT NULL,
+      published_at TIMESTAMPTZ,
+      observed_at TIMESTAMPTZ,
+      language TEXT,
+      raw_text TEXT NOT NULL,
+      raw_metrics_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      entity_hints_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      trust_hint TEXT,
+      processing_status TEXT NOT NULL DEFAULT 'pending',
+      processing_error TEXT,
+      processed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_linked_claims (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      claim_fingerprint TEXT NOT NULL,
+      canonical_subject TEXT NOT NULL,
+      canonical_predicate TEXT NOT NULL,
+      canonical_object TEXT NOT NULL,
+      time_scope TEXT,
+      stance_distribution_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      source_count INTEGER NOT NULL DEFAULT 0,
+      contradiction_count INTEGER NOT NULL DEFAULT 0,
+      supporting_signal_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (workspace_id, claim_fingerprint)
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_linked_claims
+    ADD COLUMN IF NOT EXISTS review_state TEXT NOT NULL DEFAULT 'watch'
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_linked_claims
+    ADD COLUMN IF NOT EXISTS review_reason TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_linked_claims
+    ADD COLUMN IF NOT EXISTS review_owner UUID REFERENCES users(id) ON DELETE SET NULL
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_linked_claims
+    ADD COLUMN IF NOT EXISTS review_updated_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_linked_claims
+    ADD COLUMN IF NOT EXISTS review_updated_by UUID REFERENCES users(id) ON DELETE SET NULL
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_linked_claims
+    ADD COLUMN IF NOT EXISTS review_resolved_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_linked_claims
+    ADD COLUMN IF NOT EXISTS predicate_family TEXT NOT NULL DEFAULT 'general'
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_linked_claims
+    ADD COLUMN IF NOT EXISTS time_bucket_start TIMESTAMPTZ
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_linked_claims
+    ADD COLUMN IF NOT EXISTS time_bucket_end TIMESTAMPTZ
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_linked_claims
+    ADD COLUMN IF NOT EXISTS non_social_source_count INTEGER NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_linked_claims
+    ADD COLUMN IF NOT EXISTS last_supported_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_linked_claims
+    ADD COLUMN IF NOT EXISTS last_contradicted_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_signals
+    ADD COLUMN IF NOT EXISTS linked_event_id UUID
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_signals
+    ADD COLUMN IF NOT EXISTS processing_status TEXT NOT NULL DEFAULT 'pending'
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_signals
+    ADD COLUMN IF NOT EXISTS processing_error TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_signals
+    ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_events (
+      id UUID PRIMARY KEY,
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      event_family TEXT NOT NULL,
+      signal_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      document_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      entities_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      linked_claim_count INTEGER NOT NULL DEFAULT 0,
+      contradiction_count INTEGER NOT NULL DEFAULT 0,
+      semantic_claims_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      metric_shocks_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      source_mix_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      corroboration_score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      novelty_score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      structurality_score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      actionability_score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      risk_band TEXT NOT NULL DEFAULT 'low',
+      top_domain_id TEXT,
+      time_window_start TIMESTAMPTZ,
+      time_window_end TIMESTAMPTZ,
+      domain_posteriors_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      world_states_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      primary_hypotheses_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      counter_hypotheses_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      invalidation_conditions_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      expected_signals_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      deliberation_status TEXT NOT NULL DEFAULT 'idle',
+      review_state TEXT NOT NULL DEFAULT 'watch',
+      review_reason TEXT,
+      review_owner UUID REFERENCES users(id) ON DELETE SET NULL,
+      review_updated_at TIMESTAMPTZ,
+      review_updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      review_resolved_at TIMESTAMPTZ,
+      deliberations_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      execution_candidates_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      outcomes_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      operator_note_count INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_events
+    ADD COLUMN IF NOT EXISTS linked_claim_count INTEGER NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_events
+    ADD COLUMN IF NOT EXISTS contradiction_count INTEGER NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_events
+    ADD COLUMN IF NOT EXISTS deliberation_status TEXT NOT NULL DEFAULT 'idle'
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_events
+    ADD COLUMN IF NOT EXISTS review_state TEXT NOT NULL DEFAULT 'watch'
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_events
+    ADD COLUMN IF NOT EXISTS review_updated_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_events
+    ADD COLUMN IF NOT EXISTS review_reason TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_events
+    ADD COLUMN IF NOT EXISTS review_owner UUID REFERENCES users(id) ON DELETE SET NULL
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_events
+    ADD COLUMN IF NOT EXISTS review_updated_by UUID REFERENCES users(id) ON DELETE SET NULL
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_events
+    ADD COLUMN IF NOT EXISTS review_resolved_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_events
+    ADD COLUMN IF NOT EXISTS operator_note_count INTEGER NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_events
+    ADD COLUMN IF NOT EXISTS non_social_corroboration_count INTEGER NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_events
+    ADD COLUMN IF NOT EXISTS linked_claim_health_score NUMERIC(5,3) NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_events
+    ADD COLUMN IF NOT EXISTS time_coherence_score NUMERIC(5,3) NOT NULL DEFAULT 0.8
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_events
+    ADD COLUMN IF NOT EXISTS graph_support_score NUMERIC(5,3) NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_events
+    ADD COLUMN IF NOT EXISTS graph_contradiction_score NUMERIC(5,3) NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_events
+    ADD COLUMN IF NOT EXISTS graph_hotspot_count INTEGER NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_hypothesis_ledger (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      event_id UUID NOT NULL REFERENCES intelligence_events(id) ON DELETE CASCADE,
+      hypothesis_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      confidence NUMERIC(5,3) NOT NULL DEFAULT 0,
+      rationale TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_hypothesis_ledger
+    ADD COLUMN IF NOT EXISTS review_state TEXT NOT NULL DEFAULT 'watch'
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_hypothesis_ledger
+    ADD COLUMN IF NOT EXISTS review_reason TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_hypothesis_ledger
+    ADD COLUMN IF NOT EXISTS review_owner UUID REFERENCES users(id) ON DELETE SET NULL
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_hypothesis_ledger
+    ADD COLUMN IF NOT EXISTS review_updated_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_hypothesis_ledger
+    ADD COLUMN IF NOT EXISTS review_updated_by UUID REFERENCES users(id) ON DELETE SET NULL
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_hypothesis_ledger
+    ADD COLUMN IF NOT EXISTS review_resolved_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_claim_links (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      event_id UUID NOT NULL REFERENCES intelligence_events(id) ON DELETE CASCADE,
+      linked_claim_id UUID NOT NULL REFERENCES intelligence_linked_claims(id) ON DELETE CASCADE,
+      signal_id UUID NOT NULL REFERENCES intelligence_signals(id) ON DELETE CASCADE,
+      semantic_claim_id TEXT NOT NULL,
+      relation TEXT NOT NULL,
+      confidence NUMERIC(5,3) NOT NULL DEFAULT 0.5,
+      link_strength NUMERIC(5,3) NOT NULL DEFAULT 0.5,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_claim_links
+    ADD COLUMN IF NOT EXISTS link_strength NUMERIC(5,3) NOT NULL DEFAULT 0.5
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_linked_claim_edges (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      left_linked_claim_id UUID NOT NULL REFERENCES intelligence_linked_claims(id) ON DELETE CASCADE,
+      right_linked_claim_id UUID NOT NULL REFERENCES intelligence_linked_claims(id) ON DELETE CASCADE,
+      relation TEXT NOT NULL,
+      edge_strength NUMERIC(5,3) NOT NULL DEFAULT 0.5,
+      evidence_signal_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      last_observed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (workspace_id, left_linked_claim_id, right_linked_claim_id),
+      CHECK (left_linked_claim_id <> right_linked_claim_id)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_event_memberships (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      event_id UUID NOT NULL REFERENCES intelligence_events(id) ON DELETE CASCADE,
+      linked_claim_id UUID NOT NULL REFERENCES intelligence_linked_claims(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_hypothesis_evidence_links (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      event_id UUID NOT NULL REFERENCES intelligence_events(id) ON DELETE CASCADE,
+      hypothesis_id TEXT NOT NULL,
+      linked_claim_id UUID REFERENCES intelligence_linked_claims(id) ON DELETE SET NULL,
+      signal_id UUID REFERENCES intelligence_signals(id) ON DELETE SET NULL,
+      relation TEXT NOT NULL,
+      evidence_strength NUMERIC(5,3),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_hypothesis_evidence_links
+    ADD COLUMN IF NOT EXISTS evidence_strength NUMERIC(5,3)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_invalidation_entries (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      event_id UUID NOT NULL REFERENCES intelligence_events(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      matcher_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_expected_signal_entries (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      event_id UUID NOT NULL REFERENCES intelligence_events(id) ON DELETE CASCADE,
+      signal_key TEXT NOT NULL,
+      description TEXT NOT NULL,
+      due_at TIMESTAMPTZ,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_outcome_entries (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      event_id UUID NOT NULL REFERENCES intelligence_events(id) ON DELETE CASCADE,
+      status TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_narrative_clusters (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      cluster_key TEXT NOT NULL,
+      title TEXT NOT NULL,
+      event_family TEXT NOT NULL,
+      top_domain_id TEXT,
+      anchor_entities_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      state TEXT NOT NULL DEFAULT 'forming',
+      event_count INTEGER NOT NULL DEFAULT 0,
+      recurring_event_count INTEGER NOT NULL DEFAULT 0,
+      diverging_event_count INTEGER NOT NULL DEFAULT 0,
+      supportive_history_count INTEGER NOT NULL DEFAULT 0,
+      hotspot_event_count INTEGER NOT NULL DEFAULT 0,
+      latest_recurring_score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      drift_score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      support_score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      contradiction_score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      time_coherence_score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      review_state TEXT NOT NULL DEFAULT 'watch',
+      review_reason TEXT,
+      review_owner TEXT,
+      review_updated_at TIMESTAMPTZ,
+      review_updated_by TEXT,
+      review_resolved_at TIMESTAMPTZ,
+      last_event_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (workspace_id, cluster_key)
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_narrative_clusters
+    ADD COLUMN IF NOT EXISTS drift_score NUMERIC(5,3) NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_narrative_clusters
+    ADD COLUMN IF NOT EXISTS support_score NUMERIC(5,3) NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_narrative_clusters
+    ADD COLUMN IF NOT EXISTS contradiction_score NUMERIC(5,3) NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_narrative_clusters
+    ADD COLUMN IF NOT EXISTS time_coherence_score NUMERIC(5,3) NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_narrative_clusters
+    ADD COLUMN IF NOT EXISTS review_state TEXT NOT NULL DEFAULT 'watch'
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_narrative_clusters
+    ADD COLUMN IF NOT EXISTS review_reason TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_narrative_clusters
+    ADD COLUMN IF NOT EXISTS review_owner TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_narrative_clusters
+    ADD COLUMN IF NOT EXISTS review_updated_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_narrative_clusters
+    ADD COLUMN IF NOT EXISTS review_updated_by TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_narrative_clusters
+    ADD COLUMN IF NOT EXISTS review_resolved_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_narrative_cluster_memberships (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      cluster_id UUID NOT NULL REFERENCES intelligence_narrative_clusters(id) ON DELETE CASCADE,
+      event_id UUID NOT NULL REFERENCES intelligence_events(id) ON DELETE CASCADE,
+      relation TEXT NOT NULL,
+      score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      days_delta INTEGER,
+      is_latest BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (workspace_id, event_id)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_temporal_narrative_ledger (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      event_id UUID NOT NULL REFERENCES intelligence_events(id) ON DELETE CASCADE,
+      related_event_id UUID NOT NULL REFERENCES intelligence_events(id) ON DELETE CASCADE,
+      related_event_title TEXT NOT NULL,
+      relation TEXT NOT NULL,
+      score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      days_delta INTEGER,
+      top_domain_id TEXT,
+      graph_support_score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      graph_contradiction_score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      graph_hotspot_count INTEGER NOT NULL DEFAULT 0,
+      time_coherence_score NUMERIC(5,3) NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_execution_audits (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      event_id UUID NOT NULL REFERENCES intelligence_events(id) ON DELETE CASCADE,
+      candidate_id TEXT NOT NULL,
+      connector_id TEXT,
+      action_name TEXT,
+      status TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      result_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_operator_notes (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      event_id UUID NOT NULL REFERENCES intelligence_events(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      scope TEXT NOT NULL,
+      scope_id TEXT,
+      note TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_bridge_dispatches (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID NOT NULL REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      event_id UUID NOT NULL REFERENCES intelligence_events(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      target_id TEXT,
+      request_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      response_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_model_registry (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      provider TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      availability TEXT NOT NULL DEFAULT 'active',
+      context_window INTEGER,
+      supports_structured_output BOOLEAN NOT NULL DEFAULT false,
+      supports_tool_use BOOLEAN NOT NULL DEFAULT false,
+      supports_long_context BOOLEAN NOT NULL DEFAULT false,
+      supports_reasoning BOOLEAN NOT NULL DEFAULT false,
+      cost_class TEXT NOT NULL DEFAULT 'standard',
+      latency_class TEXT NOT NULL DEFAULT 'balanced',
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (provider, model_id)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_provider_health (
+      provider TEXT PRIMARY KEY,
+      available BOOLEAN NOT NULL DEFAULT true,
+      cooldown_until TIMESTAMPTZ,
+      reason_code TEXT,
+      failure_count INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_model_alias_bindings (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      alias TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      weight NUMERIC(5,3) NOT NULL DEFAULT 1,
+      fallback_rank INTEGER NOT NULL DEFAULT 1,
+      canary_percent NUMERIC(5,3) NOT NULL DEFAULT 0,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      requires_structured_output BOOLEAN NOT NULL DEFAULT false,
+      requires_tool_use BOOLEAN NOT NULL DEFAULT false,
+      requires_long_context BOOLEAN NOT NULL DEFAULT false,
+      max_cost_class TEXT,
+      updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS intelligence_alias_rollouts (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      workspace_id UUID REFERENCES intelligence_workspaces(id) ON DELETE CASCADE,
+      alias TEXT NOT NULL,
+      binding_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      note TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_workspace_members_user
+    ON intelligence_workspace_members(user_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_sources_workspace_updated
+    ON intelligence_sources(workspace_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_fetch_failures_workspace_created
+    ON intelligence_fetch_failures(workspace_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_scan_runs_workspace_started
+    ON intelligence_scan_runs(workspace_id, started_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_documents_workspace_created
+    ON intelligence_raw_documents(workspace_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_signals_workspace_created
+    ON intelligence_signals(workspace_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_signals_processing_status
+    ON intelligence_signals(workspace_id, processing_status, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_events_workspace_updated
+    ON intelligence_events(workspace_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_linked_claims_workspace_updated
+    ON intelligence_linked_claims(workspace_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_claim_links_event_created
+    ON intelligence_claim_links(workspace_id, event_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_linked_claim_edges_left
+    ON intelligence_linked_claim_edges(workspace_id, left_linked_claim_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_linked_claim_edges_right
+    ON intelligence_linked_claim_edges(workspace_id, right_linked_claim_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_event_memberships_event
+    ON intelligence_event_memberships(workspace_id, event_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_hypothesis_ledger_event_updated
+    ON intelligence_hypothesis_ledger(workspace_id, event_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_hypothesis_evidence_event_created
+    ON intelligence_hypothesis_evidence_links(workspace_id, event_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_invalidation_entries_event_updated
+    ON intelligence_invalidation_entries(workspace_id, event_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_expected_signal_entries_event_updated
+    ON intelligence_expected_signal_entries(workspace_id, event_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_outcome_entries_event_created
+    ON intelligence_outcome_entries(workspace_id, event_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_narrative_clusters_workspace_updated
+    ON intelligence_narrative_clusters(workspace_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_narrative_cluster_memberships_cluster_updated
+    ON intelligence_narrative_cluster_memberships(workspace_id, cluster_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_temporal_narrative_ledger_event_updated
+    ON intelligence_temporal_narrative_ledger(workspace_id, event_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_execution_audits_event_created
+    ON intelligence_execution_audits(workspace_id, event_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_operator_notes_event_created
+    ON intelligence_operator_notes(workspace_id, event_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_bridge_dispatches_workspace_updated
+    ON intelligence_bridge_dispatches(workspace_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_model_alias_bindings_alias
+    ON intelligence_model_alias_bindings(alias, workspace_id, is_active, fallback_rank ASC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_intelligence_alias_rollouts_alias_created
+    ON intelligence_alias_rollouts(alias, created_at DESC)
   `);
 
   await pool.query(

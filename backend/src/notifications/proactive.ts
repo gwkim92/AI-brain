@@ -5,6 +5,7 @@ import type { NotificationChannel } from './channels';
 export type NotificationEventType =
   | 'mission_step_completed'
   | 'radar_new_item'
+  | 'intelligence_event'
   | 'eval_gate_degradation'
   | 'idle_reminder'
   | 'approval_required'
@@ -240,7 +241,7 @@ export function createNotificationService(input?: {
     title: string,
     summary: string,
     dossierId?: string | null,
-    options?: { severity?: NotificationSeverity }
+    options?: { severity?: NotificationSeverity; dedupeWindowMs?: number }
   ): void {
     emit({
       id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -252,7 +253,10 @@ export function createNotificationService(input?: {
       entityId: watcherId,
       actionUrl: dossierId ? `/?widget=dossier&focus=dossier&dossier=${dossierId}` : '/?widget=watchers&focus=watchers',
       createdAt: new Date().toISOString()
-    }, { dedupeKey: `watcher_hit:${watcherId}:${summary}`, dedupeWindowMs: WATCHER_HIT_DEDUPE_WINDOW_MS });
+    }, {
+      dedupeKey: `watcher_hit:${watcherId}:${summary}`,
+      dedupeWindowMs: options?.dedupeWindowMs ?? WATCHER_HIT_DEDUPE_WINDOW_MS
+    });
   }
 
   function emitBriefingReady(
@@ -260,7 +264,7 @@ export function createNotificationService(input?: {
     title: string,
     sourceCount: number,
     dossierId?: string | null,
-    options?: { severity?: NotificationSeverity; message?: string }
+    options?: { severity?: NotificationSeverity; message?: string; dedupeWindowMs?: number }
   ): void {
     emit({
       id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -272,7 +276,7 @@ export function createNotificationService(input?: {
       entityId: briefingId,
       actionUrl: dossierId ? `/?widget=dossier&focus=dossier&dossier=${dossierId}` : '/?widget=reports&focus=reports',
       createdAt: new Date().toISOString()
-    }, { dedupeKey: `briefing_ready:${briefingId}` });
+    }, { dedupeKey: `briefing_ready:${briefingId}`, dedupeWindowMs: options?.dedupeWindowMs });
   }
 
   function emitActionProposalReady(

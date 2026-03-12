@@ -243,19 +243,19 @@ function SidebarContent() {
 
   return (
     <div
-      className={`${compact ? "w-16" : "w-64"} h-full border-r border-white/10 bg-black/50 backdrop-blur-xl flex flex-col justify-between shrink-0 relative z-50 transition-[width] duration-200`}
+      className={`${compact ? "w-12" : "w-52"} h-full border-r border-white/10 bg-black/50 backdrop-blur-xl flex flex-col justify-between shrink-0 relative z-50 transition-[width] duration-200`}
     >
       <div
-        className={`h-20 border-b border-white/10 shrink-0 ${compact ? "flex items-center justify-center" : "flex items-center justify-between px-3"}`}
+        className={`h-14 border-b border-white/10 shrink-0 ${compact ? "flex items-center justify-center" : "flex items-center justify-between px-3"}`}
       >
         <div className={`flex items-center ${compact ? "justify-center" : "gap-3 min-w-0"}`}>
-          <div className="w-8 h-8 rounded-full border-2 border-cyan-500/50 flex items-center justify-center p-1 relative">
+          <div className="w-6 h-6 rounded-full border-2 border-cyan-500/50 flex items-center justify-center p-1 relative">
             <div className="absolute inset-0 rounded-full border border-cyan-400 animate-ping opacity-20" />
             <div className="w-full h-full bg-cyan-400 rounded-full shadow-[0_0_10px_rgba(0,255,255,0.8)]" />
           </div>
           {!compact && (
             <div className="min-w-0">
-              <p className="text-xs font-mono tracking-widest text-cyan-300 font-bold">JARVIS</p>
+              <p className="text-[10px] font-mono tracking-[0.22em] text-cyan-300 font-bold">JARVIS</p>
               <p className="text-[10px] font-mono text-white/45 truncate">{t("sidebar.currentWorkspace")}</p>
             </div>
           )}
@@ -264,7 +264,8 @@ function SidebarContent() {
         {!compact ? (
           <button
             type="button"
-            aria-label="Collapse sidebar"
+            aria-label={t("sidebar.collapse")}
+            title={t("sidebar.collapse")}
             onClick={() => setCompact(true)}
             className="h-8 w-8 rounded-md border border-white/15 bg-white/[0.04] text-white/60 hover:text-cyan-200 hover:border-cyan-500/40 transition-colors flex items-center justify-center"
           >
@@ -273,9 +274,10 @@ function SidebarContent() {
         ) : (
           <button
             type="button"
-            aria-label="Expand sidebar"
+            aria-label={t("sidebar.expand")}
+            title={t("sidebar.expand")}
             onClick={() => setCompact(false)}
-            className="absolute -right-3 top-6 h-6 w-6 rounded-full border border-cyan-500/40 bg-black text-cyan-300 hover:text-cyan-100 transition-colors flex items-center justify-center"
+            className="absolute -right-3 top-4 h-6 w-6 rounded-full border border-cyan-500/40 bg-black text-cyan-300 hover:text-cyan-100 transition-colors flex items-center justify-center"
           >
             <ChevronRight size={12} />
           </button>
@@ -575,6 +577,7 @@ function NavItem({
   disabled = false,
   onTooltipChange,
 }: NavItemDescriptor) {
+  const [showSecondaryAction, setShowSecondaryAction] = useState(false);
   const inactiveClass =
     tone === "danger"
       ? "text-rose-300/70 hover:text-rose-200 hover:bg-rose-500/10 border border-transparent"
@@ -592,8 +595,14 @@ function NavItem({
   const hintId = actionHint ? hintIdForLabel(label) : undefined;
 
   return (
-    <div className={`relative group ${compact ? "flex items-center my-1" : "my-0.5"}`}>
-      <div className={compact ? "" : "flex items-center gap-1"}>
+    <div
+      className={`relative group ${compact ? "flex items-center my-1" : "my-0.5"}`}
+      onMouseEnter={() => setShowSecondaryAction(true)}
+      onMouseLeave={() => setShowSecondaryAction(false)}
+      onFocusCapture={() => setShowSecondaryAction(true)}
+      onBlurCapture={() => setShowSecondaryAction(false)}
+    >
+      <div className={compact ? "" : "relative"}>
         <button
           data-testid={testId}
           onClick={onClick}
@@ -611,7 +620,7 @@ function NavItem({
               secondaryShortcut();
             }
           }}
-          className={`${compact ? "w-10 h-10 justify-center" : "flex-1 min-h-[44px] px-2.5 py-2 justify-start gap-2.5"} flex items-center rounded-xl transition-all ${
+          className={`${compact ? "w-10 h-10 justify-center" : "w-full min-h-[44px] px-2.5 py-2 justify-start gap-2.5 pr-11"} flex items-center rounded-xl transition-all ${
             active
               ? "bg-cyan-500/10 text-cyan-300 border border-cyan-500/25 shadow-[0_0_18px_rgba(0,255,255,0.12)]"
               : inactiveClass
@@ -630,7 +639,7 @@ function NavItem({
           ) : null}
         </button>
 
-        {!compact && secondaryAction ? (
+        {!compact && secondaryAction && showSecondaryAction ? (
           <button
             type="button"
             aria-label={secondaryAction.label}
@@ -645,7 +654,7 @@ function NavItem({
               })
             }
             onMouseLeave={() => onTooltipChange?.(null)}
-            className="pointer-events-none h-[44px] w-10 shrink-0 rounded-xl border border-white/10 bg-white/[0.03] text-white/55 opacity-0 transition-all duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 hover:text-cyan-200 hover:border-cyan-500/35 flex items-center justify-center"
+            className="absolute right-0 top-1/2 h-[44px] w-10 -translate-y-1/2 rounded-xl border border-white/10 bg-black/80 text-white/55 transition-all duration-150 hover:text-cyan-200 hover:border-cyan-500/35 flex items-center justify-center"
           >
             {secondaryAction.icon}
           </button>

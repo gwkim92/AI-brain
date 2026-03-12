@@ -22,9 +22,14 @@ import { startProviderTokenRefreshWorker } from './providers/token-refresh-worke
 import { createTelegramNotificationChannel, createWebhookNotificationChannel } from './notifications/channels';
 import { createNotificationService } from './notifications/proactive';
 import { startAiTraceCleanupWorker } from './observability/ai-trace-worker';
+import { startIntelligenceCatalogSyncWorker } from './intelligence/catalog-sync-worker';
+import { startIntelligenceScannerWorker } from './intelligence/scanner-worker';
+import { startIntelligenceSemanticWorker } from './intelligence/semantic-worker';
+import { startRadarScannerWorker } from './radar/scanner-worker';
 import { registerRoutes } from './routes';
 import { createStore } from './store';
 import type { JarvisStore } from './store/types';
+import { startWorldModelOutcomeWorker } from './world-model/outcome-worker';
 import { getWorkspaceRuntimeManager } from './workspaces/runtime-manager';
 
 type RawBodyFastifyRequest = {
@@ -261,9 +266,62 @@ export async function buildServer() {
     jarvisWatcherWorker.stop();
   });
 
+  const radarScannerWorker = startRadarScannerWorker({
+    store,
+    env,
+    notificationService,
+    logger: app.log,
+  });
+  app.addHook('onClose', async () => {
+    radarScannerWorker.stop();
+  });
+
+  const intelligenceScannerWorker = startIntelligenceScannerWorker({
+    store,
+    env,
+    providerRouter,
+    notificationService,
+    logger: app.log,
+  });
+  app.addHook('onClose', async () => {
+    intelligenceScannerWorker.stop();
+  });
+
+  const intelligenceSemanticWorker = startIntelligenceSemanticWorker({
+    store,
+    env,
+    providerRouter,
+    notificationService,
+    logger: app.log,
+  });
+  app.addHook('onClose', async () => {
+    intelligenceSemanticWorker.stop();
+  });
+
+  const intelligenceCatalogSyncWorker = startIntelligenceCatalogSyncWorker({
+    store,
+    env,
+    providerRouter,
+    logger: app.log,
+  });
+  app.addHook('onClose', async () => {
+    intelligenceCatalogSyncWorker.stop();
+  });
+
+  const worldModelOutcomeWorker = startWorldModelOutcomeWorker({
+    store,
+    env,
+    logger: app.log
+  });
+  app.addHook('onClose', async () => {
+    worldModelOutcomeWorker.stop();
+  });
+
   return {
     app,
-    env
+    env,
+    store,
+    providerRouter,
   };
 }
 

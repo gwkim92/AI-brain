@@ -48,6 +48,8 @@ export const JARVIS_REPOSITORY_METHOD_KEYS = [
   'updateJarvisSession',
   'appendJarvisSessionEvent',
   'listJarvisSessionEvents',
+  'upsertJarvisSessionStage',
+  'listJarvisSessionStages',
   'createActionProposal',
   'listActionProposals',
   'decideActionProposal',
@@ -71,6 +73,33 @@ export const JARVIS_REPOSITORY_METHOD_KEYS = [
   'listDossierSources',
   'replaceDossierClaims',
   'listDossierClaims'
+] as const satisfies readonly (keyof JarvisStore)[];
+
+export const WORLD_MODEL_REPOSITORY_METHOD_KEYS = [
+  'upsertWorldModelEntity',
+  'listWorldModelEntities',
+  'createWorldModelEvent',
+  'listWorldModelEvents',
+  'createWorldModelObservation',
+  'listWorldModelObservations',
+  'createWorldModelConstraint',
+  'listWorldModelConstraints',
+  'updateWorldModelConstraint',
+  'createWorldModelHypothesis',
+  'listWorldModelHypotheses',
+  'updateWorldModelHypothesis',
+  'createWorldModelHypothesisEvidence',
+  'listWorldModelHypothesisEvidence',
+  'createWorldModelInvalidationCondition',
+  'listWorldModelInvalidationConditions',
+  'updateWorldModelInvalidationCondition',
+  'createWorldModelStateSnapshot',
+  'listWorldModelStateSnapshots',
+  'createWorldModelProjection',
+  'listWorldModelProjections',
+  'updateWorldModelProjection',
+  'createWorldModelOutcome',
+  'listWorldModelOutcomes'
 ] as const satisfies readonly (keyof JarvisStore)[];
 
 export const MISSION_REPOSITORY_METHOD_KEYS = [
@@ -104,10 +133,28 @@ export const TASK_REPOSITORY_METHOD_KEYS = [
 ] as const satisfies readonly (keyof JarvisStore)[];
 
 export const RADAR_UPGRADE_REPOSITORY_METHOD_KEYS = [
+  'upsertRadarFeedSources',
+  'listRadarFeedSources',
+  'toggleRadarFeedSource',
+  'listRadarFeedCursors',
+  'upsertRadarFeedCursor',
+  'createRadarIngestRun',
+  'completeRadarIngestRun',
+  'listRadarIngestRuns',
   'ingestRadarItems',
   'listRadarItems',
   'evaluateRadar',
   'listRadarRecommendations',
+  'listRadarEvents',
+  'getRadarEventById',
+  'listRadarDomainPosteriors',
+  'getRadarAutonomyDecision',
+  'getRadarControlSettings',
+  'updateRadarControlSettings',
+  'listRadarDomainPackMetrics',
+  'recordRadarDomainPackOutcome',
+  'createRadarOperatorFeedback',
+  'listRadarOperatorFeedback',
   'listUpgradeProposals',
   'findUpgradeProposalById',
   'decideUpgradeProposal',
@@ -143,20 +190,97 @@ export const COUNCIL_EXECUTION_APPROVAL_REPOSITORY_METHOD_KEYS = [
 export const MEMORY_REPOSITORY_METHOD_KEYS = [
   'createMemorySegment',
   'searchMemoryByEmbedding',
-  'listMemorySegments'
+  'listMemorySegments',
+  'createMemoryNote',
+  'listMemoryNotes',
+  'updateMemoryNote',
+  'deleteMemoryNote'
+] as const satisfies readonly (keyof JarvisStore)[];
+
+export const INTELLIGENCE_REPOSITORY_METHOD_KEYS = [
+  'getOrCreateIntelligenceWorkspace',
+  'createIntelligenceWorkspace',
+  'listIntelligenceWorkspaces',
+  'getIntelligenceWorkspaceMembership',
+  'createIntelligenceSource',
+  'updateIntelligenceSource',
+  'listAllIntelligenceSources',
+  'listIntelligenceSources',
+  'toggleIntelligenceSource',
+  'listIntelligenceSourceCursors',
+  'upsertIntelligenceSourceCursor',
+  'createIntelligenceScanRun',
+  'completeIntelligenceScanRun',
+  'listIntelligenceScanRuns',
+  'createIntelligenceFetchFailure',
+  'listIntelligenceFetchFailures',
+  'findIntelligenceRawDocumentByFingerprint',
+  'createIntelligenceRawDocument',
+  'listIntelligenceRawDocuments',
+  'createIntelligenceSignal',
+  'listIntelligenceSignals',
+  'updateIntelligenceSignalProcessing',
+  'createIntelligenceLinkedClaim',
+  'listIntelligenceLinkedClaims',
+  'updateIntelligenceLinkedClaimReviewState',
+  'createIntelligenceClaimLink',
+  'listIntelligenceClaimLinks',
+  'createIntelligenceLinkedClaimEdge',
+  'listIntelligenceLinkedClaimEdges',
+  'replaceIntelligenceEventMemberships',
+  'listIntelligenceEventMemberships',
+  'upsertIntelligenceEvent',
+  'listIntelligenceEvents',
+  'getIntelligenceEventById',
+  'updateIntelligenceEventReviewState',
+  'createIntelligenceOperatorNote',
+  'listIntelligenceOperatorNotes',
+  'createIntelligenceHypothesisLedgerEntry',
+  'listIntelligenceHypothesisLedgerEntries',
+  'updateIntelligenceHypothesisLedgerReviewState',
+  'createIntelligenceHypothesisEvidenceLink',
+  'listIntelligenceHypothesisEvidenceLinks',
+  'replaceIntelligenceInvalidationEntries',
+  'listIntelligenceInvalidationEntries',
+  'replaceIntelligenceExpectedSignalEntries',
+  'listIntelligenceExpectedSignalEntries',
+  'createIntelligenceOutcomeEntry',
+  'listIntelligenceOutcomeEntries',
+  'upsertIntelligenceNarrativeCluster',
+  'listIntelligenceNarrativeClusters',
+  'getIntelligenceNarrativeClusterById',
+  'updateIntelligenceNarrativeClusterReviewState',
+  'upsertIntelligenceNarrativeClusterMembership',
+  'listIntelligenceNarrativeClusterMemberships',
+  'replaceIntelligenceTemporalNarrativeLedgerEntries',
+  'listIntelligenceTemporalNarrativeLedgerEntries',
+  'createIntelligenceExecutionAudit',
+  'listIntelligenceExecutionAudits',
+  'createIntelligenceBridgeDispatch',
+  'listIntelligenceBridgeDispatches',
+  'upsertIntelligenceModelRegistryEntries',
+  'listIntelligenceModelRegistryEntries',
+  'replaceIntelligenceProviderHealth',
+  'listIntelligenceProviderHealth',
+  'replaceIntelligenceAliasBindings',
+  'listIntelligenceAliasBindings',
+  'createIntelligenceAliasRollout',
+  'listIntelligenceAliasRollouts'
 ] as const satisfies readonly (keyof JarvisStore)[];
 
 export const STORE_METHOD_KEY_GROUPS = {
   core: CORE_STORE_METHOD_KEYS,
   auth: AUTH_REPOSITORY_METHOD_KEYS,
   jarvis: JARVIS_REPOSITORY_METHOD_KEYS,
+  world_model: WORLD_MODEL_REPOSITORY_METHOD_KEYS,
   mission: MISSION_REPOSITORY_METHOD_KEYS,
   assistant_context: ASSISTANT_CONTEXT_REPOSITORY_METHOD_KEYS,
   task: TASK_REPOSITORY_METHOD_KEYS,
   radar_upgrade: RADAR_UPGRADE_REPOSITORY_METHOD_KEYS,
   telegram_report: TELEGRAM_REPORT_REPOSITORY_METHOD_KEYS,
   council_execution_approval: COUNCIL_EXECUTION_APPROVAL_REPOSITORY_METHOD_KEYS,
-  memory: MEMORY_REPOSITORY_METHOD_KEYS
+  memory: MEMORY_REPOSITORY_METHOD_KEYS,
+  intelligence: INTELLIGENCE_REPOSITORY_METHOD_KEYS
 } as const satisfies Record<string, readonly (keyof JarvisStore)[]>;
 
 export type StoreMethodKeyGroupName = keyof typeof STORE_METHOD_KEY_GROUPS;
@@ -208,6 +332,8 @@ export type JarvisRepositoryContract = Pick<
   | 'updateJarvisSession'
   | 'appendJarvisSessionEvent'
   | 'listJarvisSessionEvents'
+  | 'upsertJarvisSessionStage'
+  | 'listJarvisSessionStages'
   | 'createActionProposal'
   | 'listActionProposals'
   | 'decideActionProposal'
@@ -231,6 +357,34 @@ export type JarvisRepositoryContract = Pick<
   | 'listDossierSources'
   | 'replaceDossierClaims'
   | 'listDossierClaims'
+>;
+
+export type WorldModelRepositoryContract = Pick<
+  JarvisStore,
+  | 'upsertWorldModelEntity'
+  | 'listWorldModelEntities'
+  | 'createWorldModelEvent'
+  | 'listWorldModelEvents'
+  | 'createWorldModelObservation'
+  | 'listWorldModelObservations'
+  | 'createWorldModelConstraint'
+  | 'listWorldModelConstraints'
+  | 'updateWorldModelConstraint'
+  | 'createWorldModelHypothesis'
+  | 'listWorldModelHypotheses'
+  | 'updateWorldModelHypothesis'
+  | 'createWorldModelHypothesisEvidence'
+  | 'listWorldModelHypothesisEvidence'
+  | 'createWorldModelInvalidationCondition'
+  | 'listWorldModelInvalidationConditions'
+  | 'updateWorldModelInvalidationCondition'
+  | 'createWorldModelStateSnapshot'
+  | 'listWorldModelStateSnapshots'
+  | 'createWorldModelProjection'
+  | 'listWorldModelProjections'
+  | 'updateWorldModelProjection'
+  | 'createWorldModelOutcome'
+  | 'listWorldModelOutcomes'
 >;
 
 export type MissionRepositoryContract = Pick<
@@ -260,10 +414,28 @@ export type TaskRepositoryContract = Pick<
 
 export type RadarUpgradeRepositoryContract = Pick<
   JarvisStore,
+  | 'upsertRadarFeedSources'
+  | 'listRadarFeedSources'
+  | 'toggleRadarFeedSource'
+  | 'listRadarFeedCursors'
+  | 'upsertRadarFeedCursor'
+  | 'createRadarIngestRun'
+  | 'completeRadarIngestRun'
+  | 'listRadarIngestRuns'
   | 'ingestRadarItems'
   | 'listRadarItems'
   | 'evaluateRadar'
   | 'listRadarRecommendations'
+  | 'listRadarEvents'
+  | 'getRadarEventById'
+  | 'listRadarDomainPosteriors'
+  | 'getRadarAutonomyDecision'
+  | 'getRadarControlSettings'
+  | 'updateRadarControlSettings'
+  | 'listRadarDomainPackMetrics'
+  | 'recordRadarDomainPackOutcome'
+  | 'createRadarOperatorFeedback'
+  | 'listRadarOperatorFeedback'
   | 'listUpgradeProposals'
   | 'findUpgradeProposalById'
   | 'decideUpgradeProposal'
@@ -298,7 +470,82 @@ export type CouncilExecutionApprovalRepositoryContract = Pick<
   | 'decideApproval'
 >;
 
-export type MemoryRepositoryContract = Pick<JarvisStore, 'createMemorySegment' | 'searchMemoryByEmbedding' | 'listMemorySegments'>;
+export type MemoryRepositoryContract = Pick<
+  JarvisStore,
+  'createMemorySegment' | 'searchMemoryByEmbedding' | 'listMemorySegments' | 'createMemoryNote' | 'listMemoryNotes' | 'updateMemoryNote' | 'deleteMemoryNote'
+>;
+
+export type IntelligenceRepositoryContract = Pick<
+  JarvisStore,
+  | 'getOrCreateIntelligenceWorkspace'
+  | 'createIntelligenceWorkspace'
+  | 'listIntelligenceWorkspaces'
+  | 'getIntelligenceWorkspaceMembership'
+  | 'createIntelligenceSource'
+  | 'updateIntelligenceSource'
+  | 'listAllIntelligenceSources'
+  | 'listIntelligenceSources'
+  | 'toggleIntelligenceSource'
+  | 'listIntelligenceSourceCursors'
+  | 'upsertIntelligenceSourceCursor'
+  | 'createIntelligenceScanRun'
+  | 'completeIntelligenceScanRun'
+  | 'listIntelligenceScanRuns'
+  | 'createIntelligenceFetchFailure'
+  | 'listIntelligenceFetchFailures'
+  | 'findIntelligenceRawDocumentByFingerprint'
+  | 'createIntelligenceRawDocument'
+  | 'listIntelligenceRawDocuments'
+  | 'createIntelligenceSignal'
+  | 'listIntelligenceSignals'
+  | 'updateIntelligenceSignalProcessing'
+  | 'createIntelligenceLinkedClaim'
+  | 'listIntelligenceLinkedClaims'
+  | 'updateIntelligenceLinkedClaimReviewState'
+  | 'createIntelligenceLinkedClaimEdge'
+  | 'listIntelligenceLinkedClaimEdges'
+  | 'createIntelligenceClaimLink'
+  | 'listIntelligenceClaimLinks'
+  | 'replaceIntelligenceEventMemberships'
+  | 'listIntelligenceEventMemberships'
+  | 'upsertIntelligenceEvent'
+  | 'listIntelligenceEvents'
+  | 'getIntelligenceEventById'
+  | 'updateIntelligenceEventReviewState'
+  | 'createIntelligenceOperatorNote'
+  | 'listIntelligenceOperatorNotes'
+  | 'createIntelligenceHypothesisLedgerEntry'
+  | 'listIntelligenceHypothesisLedgerEntries'
+  | 'updateIntelligenceHypothesisLedgerReviewState'
+  | 'createIntelligenceHypothesisEvidenceLink'
+  | 'listIntelligenceHypothesisEvidenceLinks'
+  | 'replaceIntelligenceInvalidationEntries'
+  | 'listIntelligenceInvalidationEntries'
+  | 'replaceIntelligenceExpectedSignalEntries'
+  | 'listIntelligenceExpectedSignalEntries'
+  | 'createIntelligenceOutcomeEntry'
+  | 'listIntelligenceOutcomeEntries'
+  | 'upsertIntelligenceNarrativeCluster'
+  | 'listIntelligenceNarrativeClusters'
+  | 'getIntelligenceNarrativeClusterById'
+  | 'updateIntelligenceNarrativeClusterReviewState'
+  | 'upsertIntelligenceNarrativeClusterMembership'
+  | 'listIntelligenceNarrativeClusterMemberships'
+  | 'replaceIntelligenceTemporalNarrativeLedgerEntries'
+  | 'listIntelligenceTemporalNarrativeLedgerEntries'
+  | 'createIntelligenceExecutionAudit'
+  | 'listIntelligenceExecutionAudits'
+  | 'createIntelligenceBridgeDispatch'
+  | 'listIntelligenceBridgeDispatches'
+  | 'upsertIntelligenceModelRegistryEntries'
+  | 'listIntelligenceModelRegistryEntries'
+  | 'replaceIntelligenceProviderHealth'
+  | 'listIntelligenceProviderHealth'
+  | 'replaceIntelligenceAliasBindings'
+  | 'listIntelligenceAliasBindings'
+  | 'createIntelligenceAliasRollout'
+  | 'listIntelligenceAliasRollouts'
+>;
 
 export type UpgradeExecutorGatewayStoreDepsContract = Pick<JarvisStore, 'findUpgradeProposalById' | 'createUpgradeRun'>;
 export type UpgradeExecutorGatewayContract = ReturnType<JarvisStore['createUpgradeExecutorGateway']>;
