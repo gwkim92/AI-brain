@@ -1,6 +1,10 @@
 -- JARVIS DB Schema v1
 -- Date: 2026-02-22
 -- Scope: context/radar/upgrade/telegram domain objects
+-- Status: reference snapshot only
+-- Source of truth for runtime/db:init is:
+--   /Users/woody/ai/brain/backend/src/store/postgres/initializer.ts
+-- Do not use this file directly for production bootstrap.
 --
 -- Migration order:
 --   1) create extensions

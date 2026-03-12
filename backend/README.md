@@ -26,6 +26,15 @@ docker compose up -d postgres valkey
 DATABASE_URL=postgres://jarvis:jarvis@127.0.0.1:5432/jarvis pnpm db:init
 ```
 
+`pnpm db:init` now uses the same Postgres initializer as runtime bootstrap:
+`/Users/woody/ai/brain/backend/src/store/postgres/initializer.ts`
+
+Reference schema snapshots still exist at:
+- `/Users/woody/ai/brain/backend/db-schema-v1.sql`
+- `/Users/woody/ai/brain/docs/db-schema-v1.sql`
+
+They are documentation/reference only and are not the production init path.
+
 5. Run server
 
 ```bash

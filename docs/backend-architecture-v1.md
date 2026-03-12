@@ -8,6 +8,10 @@
 `/Users/woody/ai/brain/docs/openapi-v1.yaml`
 `/Users/woody/ai/brain/docs/db-schema-v1.sql`
 
+주의:
+- `docs/db-schema-v1.sql`은 reference snapshot이다.
+- 실제 운영 스키마 정본과 `db:init` 경로는 `/Users/woody/ai/brain/backend/src/store/postgres/initializer.ts`를 따른다.
+
 ## 1) 목표
 이 백엔드는 다음 6가지를 동시에 만족해야 한다.
 
