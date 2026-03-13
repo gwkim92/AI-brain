@@ -2267,6 +2267,51 @@ export type IntelligenceSignalRetryResult = {
   processingStatus: IntelligenceSignalProcessingStatus;
 };
 
+export type IntelligenceStaleEventPreview = {
+  eventId: string;
+  title: string;
+  topDomainId: IntelligenceDomainId | null;
+  staleScore: number;
+  reasons: string[];
+  linkedClaimCount: number;
+  genericPredicateRatio: number;
+  nonSocialCorroborationCount: number;
+  edgeCount: number;
+  graphSupportScore: number;
+  graphContradictionScore: number;
+  linkedClaimHealthScore: number;
+  updatedAt: string;
+};
+
+export type IntelligenceEventRebuildResult = {
+  workspaceId: string;
+  previousEventId: string;
+  rebuiltEventId: string | null;
+  requeuedSignalIds: string[];
+  deletedLinkedClaimIds: string[];
+  semanticSummary: {
+    processedSignalCount: number;
+    clusteredEventCount: number;
+    deliberationCount: number;
+    executionCount: number;
+    failedCount: number;
+    failedSignalIds: string[];
+    eventIds: string[];
+  };
+};
+
+export type IntelligenceBulkEventRebuildResult = {
+  workspaceId: string;
+  attemptedEventIds: string[];
+  rebuiltCount: number;
+  failedCount: number;
+  results: IntelligenceEventRebuildResult[];
+  failures: Array<{
+    eventId: string;
+    message: string;
+  }>;
+};
+
 export type IntelligenceEventClusterRecord = {
   id: string;
   workspaceId: string;
@@ -2397,6 +2442,7 @@ export type IntelligenceNarrativeClusterRecord = {
   reviewUpdatedBy: string | null;
   reviewResolvedAt: string | null;
   lastLedgerAt: string | null;
+  lastTransition?: IntelligenceNarrativeClusterLastTransition | null;
   lastEventAt: string | null;
   lastRecurringAt: string | null;
   lastDivergingAt: string | null;
@@ -2429,6 +2475,13 @@ export type IntelligenceNarrativeClusterLedgerEntryRecord = {
   scoreDelta: number;
   sourceEventIds: string[];
   createdAt: string;
+};
+
+export type IntelligenceNarrativeClusterLastTransition = {
+  entry_type: IntelligenceNarrativeClusterLedgerEntryType | "snapshot";
+  summary: string;
+  score_delta: number;
+  created_at: string;
 };
 
 export type IntelligenceNarrativeClusterTimelineRecord = {
@@ -2577,6 +2630,13 @@ export type IntelligenceSemanticWorkerRun = IntelligenceWorkerRun & {
 
 export type IntelligenceCatalogSyncRun = IntelligenceWorkerRun & {
   syncedEntries: number;
+};
+
+export type IntelligenceStaleMaintenanceWorkerRun = IntelligenceWorkerRun & {
+  workspaceIds: string[];
+  attemptedCount: number;
+  rebuiltCount: number;
+  failedCount: number;
 };
 
 export type IntelligenceWorkerStatus<T> = {

@@ -31,7 +31,7 @@ export const HUD_WORKSPACE_PRESETS: Record<HudWorkspacePreset, HudWorkspacePrese
   },
   studio_intelligence: {
     primary: "reports",
-    widgets: ["reports", "action_center", "notifications", "model_control", "skills", "tasks"],
+    widgets: ["reports", "notifications", "model_control", "skills", "tasks"],
     focus: "reports",
   },
   studio_council: {

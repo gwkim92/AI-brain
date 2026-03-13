@@ -148,7 +148,11 @@ import type {
   SemanticBacklogStatus,
   IntelligenceScanRunRecord,
   IntelligenceSourceRecord,
+  IntelligenceStaleEventPreview,
+  IntelligenceStaleMaintenanceWorkerRun,
   IntelligenceSemanticWorkerRun,
+  IntelligenceBulkEventRebuildResult,
+  IntelligenceEventRebuildResult,
   IntelligenceWorkspaceRecord,
   IntelligenceScannerWorkerRun,
   IntelligenceCatalogSyncRun,
@@ -279,6 +283,7 @@ export async function listIntelligenceRuns(query: {
   runs: IntelligenceScanRunRecord[];
   scanner_worker: IntelligenceWorkerStatus<IntelligenceScannerWorkerRun>;
   semantic_worker: IntelligenceWorkerStatus<IntelligenceSemanticWorkerRun>;
+  stale_maintenance_worker: IntelligenceWorkerStatus<IntelligenceStaleMaintenanceWorkerRun>;
   model_sync_worker: IntelligenceWorkerStatus<IntelligenceCatalogSyncRun>;
   semantic_backlog: SemanticBacklogStatus;
 }> {
@@ -405,10 +410,40 @@ export async function listIntelligenceFetchFailures(query: {
   return apiRequest("/api/v1/intelligence/fetch-failures", { method: "GET", query });
 }
 
+export async function listIntelligenceStaleEvents(query: {
+  workspace_id?: string;
+  limit?: number;
+} = {}): Promise<{
+  workspace_id: string;
+  stale_events: IntelligenceStaleEventPreview[];
+}> {
+  return apiRequest("/api/v1/intelligence/maintenance/stale-events", { method: "GET", query });
+}
+
 export async function retryIntelligenceSignal(signalId: string, payload: {
   workspace_id?: string;
 }): Promise<{ workspace_id: string; result: IntelligenceSignalRetryResult }> {
   return apiRequest(`/api/v1/intelligence/signals/${signalId}/retry`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function rebuildIntelligenceEventById(eventId: string, payload: {
+  workspace_id?: string;
+}): Promise<{ workspace_id: string; result: IntelligenceEventRebuildResult }> {
+  return apiRequest(`/api/v1/intelligence/events/${eventId}/rebuild`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function bulkRebuildIntelligenceEvents(payload: {
+  workspace_id?: string;
+  event_ids?: string[];
+  limit?: number;
+}): Promise<{ workspace_id: string; result: IntelligenceBulkEventRebuildResult }> {
+  return apiRequest("/api/v1/intelligence/maintenance/rebuild-stale-events", {
     method: "POST",
     body: JSON.stringify(payload),
   });

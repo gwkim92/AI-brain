@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Bot, BrainCircuit, Cable, Play, RefreshCw, ScanSearch, Send, ShieldCheck } from "lucide-react";
+import { Bot, BrainCircuit, Cable, ChevronDown, ChevronRight, Play, RefreshCw, ScanSearch, Send, ShieldCheck } from "lucide-react";
 
+import { useLocale } from "@/components/providers/LocaleProvider";
 import { ApiRequestError } from "@/lib/api/client";
 import {
   bridgeIntelligenceEventToAction,
@@ -20,11 +21,14 @@ import {
   listIntelligenceFetchFailures,
   listIntelligenceEvents,
   listIntelligenceNarrativeClusters,
+  listIntelligenceStaleEvents,
+  bulkRebuildIntelligenceEvents,
   listIntelligenceRuntimeAliases,
   listIntelligenceRuntimeModels,
   listIntelligenceRuns,
   listIntelligenceSources,
   listIntelligenceWorkspaces,
+  rebuildIntelligenceEventById,
   retryIntelligenceSignal,
   retryIntelligenceSource,
   toggleIntelligenceSource,
@@ -50,6 +54,8 @@ import type {
   IntelligenceEventGraphSummary,
   IntelligenceExpectedSignalEntryRecord,
   IntelligenceFetchFailureRecord,
+  IntelligenceBulkEventRebuildResult,
+  IntelligenceEventRebuildResult,
   IntelligenceHotspotCluster,
   IntelligenceHypothesisEvidenceSummary,
   IntelligenceInvalidationEntryRecord,
@@ -62,10 +68,12 @@ import type {
   IntelligenceNarrativeClusterRecord,
   IntelligenceOutcomeEntryRecord,
   IntelligenceRelatedHistoricalEventSummary,
+  IntelligenceStaleMaintenanceWorkerRun,
   IntelligenceTemporalNarrativeLedgerEntryRecord,
   IntelligenceSemanticWorkerRun,
   IntelligenceScanRunRecord,
   IntelligenceSourceRecord,
+  IntelligenceStaleEventPreview,
   IntelligenceWorkspaceRecord,
   IntelligenceWorkerStatus,
   IntelligenceScannerWorkerRun,
@@ -77,16 +85,403 @@ import type {
   SemanticBacklogStatus,
 } from "@/lib/api/types";
 
-function formatDateTime(value: string | null | undefined): string {
-  if (!value) return "—";
+function formatDateTime(value: string | null | undefined, emptyLabel = "—"): string {
+  if (!value) return emptyLabel;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("ko-KR", {
+  const localeTag =
+    typeof document !== "undefined" && document.documentElement.lang
+      ? document.documentElement.lang
+      : undefined;
+  return new Intl.DateTimeFormat(localeTag, {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+type IntelligenceCopy = {
+  titleEyebrow: string;
+  title: string;
+  subtitle: string;
+  runtimeReady: string;
+  loadingRuntime: string;
+  refresh: string;
+  newWorkspace: string;
+  stats: {
+    sources: string;
+    loadedEvents: string;
+    pendingExec: string;
+    semantic: string;
+    stale: string;
+    backlog: string;
+    models: string;
+    sync: string;
+  };
+  sections: {
+    sources: string;
+    events: string;
+    eventDetail: string;
+    recentRuns: string;
+    fetchFailures: string;
+    reviewQueue: string;
+    clusterInbox: string;
+    hypothesisDrift: string;
+    executionInbox: string;
+  };
+  explainer: {
+    heading: string;
+    loadedEvents: string;
+    backlog: string;
+    primary: string;
+    counter: string;
+    invalidation: string;
+    expectedSignals: string;
+  };
+  empty: string;
+  selectedEventEmpty: string;
+  noReviewItems: string;
+  noExecutionCandidates: string;
+};
+
+function getIntelligenceCopy(locale: "ko" | "en"): IntelligenceCopy {
+  if (locale === "en") {
+    return {
+      titleEyebrow: "Autonomous Intelligence Plane",
+      title: "Independent Scanner and Reasoning Plane",
+      subtitle:
+        "A separate event-tracking system from JARVIS. It scans registered sources, groups documents into events, and produces hypotheses and execution candidates through the semantic layer.",
+      runtimeReady: "Runtime snapshot ready",
+      loadingRuntime: "Loading intelligence plane...",
+      refresh: "Refresh",
+      newWorkspace: "New Workspace",
+      stats: {
+        sources: "Sources",
+        loadedEvents: "Loaded Events",
+        pendingExec: "Pending Exec",
+        semantic: "Semantic",
+        stale: "Stale",
+        backlog: "Semantic Backlog",
+        models: "Models",
+        sync: "Sync",
+      },
+      sections: {
+        sources: "Sources",
+        events: "Events",
+        eventDetail: "Event Detail",
+        recentRuns: "Recent Runs",
+        fetchFailures: "Fetch Failures",
+        reviewQueue: "Review Queue",
+        clusterInbox: "Narrative Cluster Inbox",
+        hypothesisDrift: "Hypothesis Drift",
+        executionInbox: "Execution Inbox",
+      },
+      explainer: {
+        heading: "What these numbers mean",
+        loadedEvents: "Loaded Events: the latest 50 events currently fetched for this workspace, not the total database count.",
+        backlog: "Semantic Backlog: signals waiting for semantic processing and claim linking.",
+        primary: "Primary: the system's current main hypothesis.",
+        counter: "Counter: the strongest competing explanation.",
+        invalidation: "Invalidation: conditions that weaken or break the current hypothesis.",
+        expectedSignals: "Expected Signals: observations the system expects next if the hypothesis is right.",
+      },
+      empty: "No data",
+      selectedEventEmpty: "Select an event on the left to inspect hypotheses, counter-hypotheses, invalidation, and execution candidates.",
+      noReviewItems: "No items in review queue",
+      noExecutionCandidates: "No execution candidates",
+    };
+  }
+  return {
+    titleEyebrow: "자율 인텔리전스 평면",
+    title: "독립 스캐너와 추론 평면",
+    subtitle:
+      "기존 JARVIS와 분리된 이벤트 추적 시스템이다. 등록된 소스를 주기적으로 훑고, 문서를 사건으로 묶고, 시맨틱 계층을 거쳐 가설과 실행 후보까지 만든다.",
+    runtimeReady: "런타임 스냅샷 준비 완료",
+    loadingRuntime: "인텔리전스 평면을 불러오는 중...",
+    refresh: "새로고침",
+    newWorkspace: "새 워크스페이스",
+    stats: {
+      sources: "소스",
+      loadedEvents: "불러온 이벤트",
+      pendingExec: "대기 실행",
+      semantic: "시맨틱",
+      stale: "정리",
+      backlog: "시맨틱 백로그",
+      models: "모델",
+      sync: "동기화",
+    },
+    sections: {
+      sources: "소스",
+      events: "이벤트",
+      eventDetail: "이벤트 상세",
+      recentRuns: "최근 실행",
+      fetchFailures: "수집 실패",
+      reviewQueue: "검토 큐",
+      clusterInbox: "서사 클러스터 인박스",
+      hypothesisDrift: "가설 드리프트",
+      executionInbox: "실행 인박스",
+    },
+    explainer: {
+      heading: "현재 숫자 의미",
+      loadedEvents: "불러온 이벤트: 이 워크스페이스에서 지금 화면에 가져온 최신 50개 이벤트다. DB 전체 개수는 아니다.",
+      backlog: "시맨틱 백로그: 시맨틱 처리와 클레임 연결을 아직 기다리는 신호 수다.",
+      primary: "주 가설: 시스템이 현재 가장 유력하게 보는 설명이다.",
+      counter: "대안 가설: 주 가설과 경쟁하는 다른 설명이다.",
+      invalidation: "무효화 조건: 현재 가설을 약화시키거나 깨는 조건이다.",
+      expectedSignals: "예상 신호: 가설이 맞다면 다음에 보여야 하는 관측 신호다.",
+    },
+    empty: "데이터 없음",
+    selectedEventEmpty: "좌측 이벤트를 선택하면 주 가설, 대안 가설, 무효화 조건, 실행 후보를 볼 수 있다.",
+    noReviewItems: "검토 큐 항목이 없다",
+    noExecutionCandidates: "실행 후보가 없다",
+  };
+}
+
+function reviewStateLabel(state: EventReviewState, locale: "ko" | "en"): string {
+  if (locale === "ko") {
+    if (state === "watch") return "주시";
+    if (state === "review") return "검토";
+    return "무시";
+  }
+  return state;
+}
+
+function text(locale: "ko" | "en", ko: string, en: string): string {
+  return locale === "ko" ? ko : en;
+}
+
+function narrativeStateLabel(state: string | null | undefined, locale: "ko" | "en"): string {
+  if (!state) return locale === "ko" ? "없음" : "none";
+  if (locale === "ko") {
+    if (state === "forming") return "형성중";
+    if (state === "recurring") return "반복";
+    if (state === "diverging") return "분기";
+    if (state === "new") return "신규";
+  }
+  return state;
+}
+
+function temporalRelationLabel(value: string | null | undefined, locale: "ko" | "en"): string {
+  if (!value) return locale === "ko" ? "없음" : "none";
+  const labels: Record<string, { ko: string; en: string }> = {
+    recurring: { ko: "반복", en: "recurring" },
+    diverging: { ko: "분기", en: "diverging" },
+    supportive_history: { ko: "지지 이력", en: "supportive history" },
+    merge: { ko: "병합", en: "merge" },
+    split: { ko: "분리", en: "split" },
+    recurring_strengthened: { ko: "반복 강화", en: "recurring strengthened" },
+    diverging_strengthened: { ko: "분기 강화", en: "diverging strengthened" },
+    supportive_history_added: { ko: "지지 이력 추가", en: "supportive history added" },
+    stability_drop: { ko: "안정성 하락", en: "stability drop" },
+    latest: { ko: "최신", en: "latest" },
+  };
+  const row = labels[value];
+  return row ? row[locale] : value;
+}
+
+function graphRelationLabel(value: string | null | undefined, locale: "ko" | "en"): string {
+  if (!value) return locale === "ko" ? "없음" : "none";
+  const labels: Record<string, { ko: string; en: string }> = {
+    supports: { ko: "지지", en: "supports" },
+    contradicts: { ko: "반박", en: "contradicts" },
+    related: { ko: "관련", en: "related" },
+    same: { ko: "동일", en: "same" },
+    supporting: { ko: "보강", en: "supporting" },
+    contradicting: { ko: "반박", en: "contradicting" },
+    unrelated: { ko: "무관", en: "unrelated" },
+  };
+  const row = labels[value];
+  return row ? row[locale] : value;
+}
+
+function executionStatusLabel(value: string | null | undefined, locale: "ko" | "en"): string {
+  if (!value) return locale === "ko" ? "없음" : "none";
+  const labels: Record<string, { ko: string; en: string }> = {
+    pending: { ko: "대기", en: "pending" },
+    approved: { ko: "승인", en: "approved" },
+    blocked: { ko: "차단", en: "blocked" },
+    executed: { ko: "실행됨", en: "executed" },
+    failed: { ko: "실패", en: "failed" },
+    proposal: { ko: "제안", en: "proposal" },
+    proceed: { ko: "진행", en: "proceed" },
+    hold: { ko: "보류", en: "hold" },
+    reject: { ko: "거절", en: "reject" },
+    active: { ko: "활성", en: "active" },
+    inactive: { ko: "비활성", en: "inactive" },
+  };
+  const row = labels[value];
+  return row ? row[locale] : value;
+}
+
+function workerStatusLabel(value: string | null | undefined, locale: "ko" | "en"): string {
+  if (!value) return locale === "ko" ? "없음" : "none";
+  const labels: Record<string, { ko: string; en: string }> = {
+    ok: { ko: "정상", en: "ok" },
+    degraded: { ko: "저하", en: "degraded" },
+    failed: { ko: "실패", en: "failed" },
+    scanning: { ko: "스캔중", en: "scanning" },
+    stable: { ko: "안정", en: "stable" },
+    on: { ko: "켜짐", en: "on" },
+    off: { ko: "꺼짐", en: "off" },
+    available: { ko: "사용 가능", en: "available" },
+  };
+  const row = labels[value];
+  return row ? row[locale] : value;
+}
+
+function sourceKindLabel(value: string | null | undefined, locale: "ko" | "en"): string {
+  if (!value) return locale === "ko" ? "없음" : "none";
+  const labels: Record<string, { ko: string; en: string }> = {
+    rss: { ko: "RSS", en: "RSS" },
+    atom: { ko: "Atom", en: "Atom" },
+    json: { ko: "JSON", en: "JSON" },
+    api: { ko: "API", en: "API" },
+    search: { ko: "검색", en: "search" },
+    headless: { ko: "브라우저", en: "headless" },
+    mcp_connector: { ko: "MCP 커넥터", en: "MCP connector" },
+    synthetic: { ko: "합성", en: "synthetic" },
+  };
+  const row = labels[value];
+  return row ? row[locale] : value;
+}
+
+function sourceTypeLabel(value: string | null | undefined, locale: "ko" | "en"): string {
+  if (!value) return locale === "ko" ? "없음" : "none";
+  const labels: Record<string, { ko: string; en: string }> = {
+    news: { ko: "뉴스", en: "news" },
+    filing: { ko: "공시", en: "filing" },
+    policy: { ko: "정책", en: "policy" },
+    market_tick: { ko: "시장 틱", en: "market tick" },
+    freight: { ko: "운임", en: "freight" },
+    inventory: { ko: "재고", en: "inventory" },
+    blog: { ko: "블로그", en: "blog" },
+    forum: { ko: "포럼", en: "forum" },
+    social: { ko: "소셜", en: "social" },
+    search_result: { ko: "검색 결과", en: "search result" },
+    web_page: { ko: "웹 페이지", en: "web page" },
+    manual: { ko: "수동", en: "manual" },
+  };
+  const row = labels[value];
+  return row ? row[locale] : value;
+}
+
+function sourceTierLabel(value: string | null | undefined, locale: "ko" | "en"): string {
+  if (!value) return locale === "ko" ? "없음" : "none";
+  const labels: Record<string, { ko: string; en: string }> = {
+    tier_0: { ko: "티어 0", en: "tier 0" },
+    tier_1: { ko: "티어 1", en: "tier 1" },
+    tier_2: { ko: "티어 2", en: "tier 2" },
+    tier_3: { ko: "티어 3", en: "tier 3" },
+  };
+  const row = labels[value];
+  return row ? row[locale] : value;
+}
+
+function eventFamilyLabel(value: string | null | undefined, locale: "ko" | "en"): string {
+  if (!value) return locale === "ko" ? "없음" : "none";
+  const labels: Record<string, { ko: string; en: string }> = {
+    geopolitical_flashpoint: { ko: "지정학 충돌", en: "geopolitical flashpoint" },
+    policy_change: { ko: "정책 변화", en: "policy change" },
+    earnings_guidance: { ko: "실적 가이던스", en: "earnings guidance" },
+    supply_chain_shift: { ko: "공급망 변화", en: "supply chain shift" },
+    rate_repricing: { ko: "금리 재평가", en: "rate repricing" },
+    commodity_move: { ko: "원자재 변동", en: "commodity move" },
+    platform_ai_shift: { ko: "플랫폼/AI 변화", en: "platform AI shift" },
+    general_signal: { ko: "일반 신호", en: "general signal" },
+  };
+  const row = labels[value];
+  return row ? row[locale] : value;
+}
+
+function domainLabel(value: string | null | undefined, locale: "ko" | "en"): string {
+  if (!value) return locale === "ko" ? "알수없음" : "unknown";
+  const labels: Record<string, { ko: string; en: string }> = {
+    geopolitics_energy_lng: { ko: "지정학·에너지·LNG", en: "geopolitics · energy · LNG" },
+    macro_rates_inflation_fx: { ko: "거시·금리·인플레·환율", en: "macro · rates · inflation · FX" },
+    shipping_supply_chain: { ko: "해운·공급망", en: "shipping · supply chain" },
+    policy_regulation_platform_ai: { ko: "정책·규제·플랫폼·AI", en: "policy · regulation · platform · AI" },
+    company_earnings_guidance: { ko: "기업 실적·가이던스", en: "company earnings · guidance" },
+    commodities_raw_materials: { ko: "원자재·상품", en: "commodities · raw materials" },
+  };
+  const row = labels[value];
+  return row ? row[locale] : value;
+}
+
+function capabilityAliasLabel(value: string | null | undefined, locale: "ko" | "en"): string {
+  if (!value) return locale === "ko" ? "없음" : "none";
+  const labels: Record<string, { ko: string; en: string }> = {
+    fast_triage: { ko: "빠른 분류", en: "fast triage" },
+    structured_extraction: { ko: "구조화 추출", en: "structured extraction" },
+    cross_doc_linking: { ko: "문서 간 연결", en: "cross-document linking" },
+    skeptical_critique: { ko: "비판 검토", en: "skeptical critique" },
+    deep_synthesis: { ko: "심층 합성", en: "deep synthesis" },
+    policy_judgment: { ko: "정책 판단", en: "policy judgment" },
+    deep_research: { ko: "심층 리서치", en: "deep research" },
+    execution_planning: { ko: "실행 계획", en: "execution planning" },
+  };
+  const row = labels[value];
+  return row ? row[locale] : value;
+}
+
+function providerLabel(value: string | null | undefined, locale: "ko" | "en"): string {
+  if (!value) return locale === "ko" ? "없음" : "none";
+  const labels: Record<string, { ko: string; en: string }> = {
+    openai: { ko: "OpenAI", en: "OpenAI" },
+    gemini: { ko: "Gemini", en: "Gemini" },
+    anthropic: { ko: "Anthropic", en: "Anthropic" },
+    local: { ko: "로컬", en: "local" },
+  };
+  const row = labels[value];
+  return row ? row[locale] : value;
+}
+
+function hypothesisKindLabel(value: string | null | undefined, locale: "ko" | "en"): string {
+  if (!value) return locale === "ko" ? "없음" : "none";
+  const labels: Record<string, { ko: string; en: string }> = {
+    primary: { ko: "주 가설", en: "primary" },
+    counter: { ko: "대안 가설", en: "counter" },
+  };
+  const row = labels[value];
+  return row ? row[locale] : value;
+}
+
+function bridgeKindLabel(value: string | null | undefined, locale: "ko" | "en"): string {
+  if (!value) return locale === "ko" ? "없음" : "none";
+  const labels: Record<string, { ko: string; en: string }> = {
+    council: { ko: "토론", en: "council" },
+    brief: { ko: "브리프", en: "brief" },
+    action: { ko: "액션", en: "action" },
+  };
+  const row = labels[value];
+  return row ? row[locale] : value;
+}
+
+function genericStatusLabel(value: string | null | undefined, locale: "ko" | "en"): string {
+  if (!value) return locale === "ko" ? "없음" : "none";
+  const labels: Record<string, { ko: string; en: string }> = {
+    pending: { ko: "대기", en: "pending" },
+    blocked: { ko: "차단", en: "blocked" },
+    executed: { ko: "실행됨", en: "executed" },
+    failed: { ko: "실패", en: "failed" },
+    proposal: { ko: "제안", en: "proposal" },
+    active: { ko: "활성", en: "active" },
+    inactive: { ko: "비활성", en: "inactive" },
+    hit: { ko: "적중", en: "hit" },
+    missed: { ko: "미적중", en: "missed" },
+    observed: { ko: "관측됨", en: "observed" },
+    absent: { ko: "부재", en: "absent" },
+    completed: { ko: "완료", en: "completed" },
+    superseded: { ko: "대체됨", en: "superseded" },
+    weakened: { ko: "약화", en: "weakened" },
+    invalidated: { ko: "무효화", en: "invalidated" },
+    confirmed: { ko: "확인됨", en: "confirmed" },
+    mixed: { ko: "혼합", en: "mixed" },
+    unresolved: { ko: "미해결", en: "unresolved" },
+    dispatched: { ko: "전달됨", en: "dispatched" },
+  };
+  const row = labels[value];
+  return row ? row[locale] : value;
 }
 
 function readBlockedReason(candidate: IntelligenceEventClusterRecord["executionCandidates"][number]): string | null {
@@ -97,6 +492,7 @@ function readBlockedReason(candidate: IntelligenceEventClusterRecord["executionC
 type RuntimeSnapshot = {
   scannerWorker: IntelligenceWorkerStatus<IntelligenceScannerWorkerRun> | null;
   semanticWorker: IntelligenceWorkerStatus<IntelligenceSemanticWorkerRun> | null;
+  staleMaintenanceWorker: IntelligenceWorkerStatus<IntelligenceStaleMaintenanceWorkerRun> | null;
   syncWorker: IntelligenceWorkerStatus<IntelligenceCatalogSyncRun> | null;
   semanticBacklog: SemanticBacklogStatus;
   aliases: {
@@ -168,11 +564,16 @@ type SelectedNarrativeClusterGraph = {
 };
 
 export function IntelligenceModule() {
+  const { locale } = useLocale();
+  const copy = useMemo(() => getIntelligenceCopy(locale), [locale]);
   const [workspaces, setWorkspaces] = useState<IntelligenceWorkspaceRecord[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [sources, setSources] = useState<IntelligenceSourceRecord[]>([]);
   const [runs, setRuns] = useState<IntelligenceScanRunRecord[]>([]);
   const [fetchFailures, setFetchFailures] = useState<IntelligenceFetchFailureRecord[]>([]);
+  const [staleEvents, setStaleEvents] = useState<IntelligenceStaleEventPreview[]>([]);
+  const [lastRebuildResult, setLastRebuildResult] = useState<IntelligenceEventRebuildResult | null>(null);
+  const [lastBulkRebuildResult, setLastBulkRebuildResult] = useState<IntelligenceBulkEventRebuildResult | null>(null);
   const [events, setEvents] = useState<IntelligenceEventClusterRecord[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<IntelligenceEventClusterRecord | null>(null);
@@ -188,6 +589,7 @@ export function IntelligenceModule() {
   const [runtime, setRuntime] = useState<RuntimeSnapshot>({
     scannerWorker: null,
     semanticWorker: null,
+    staleMaintenanceWorker: null,
     syncWorker: null,
     semanticBacklog: {
       pendingCount: 0,
@@ -210,6 +612,18 @@ export function IntelligenceModule() {
   const [clusterReviewFilter, setClusterReviewFilter] = useState<"all" | EventReviewState>("all");
   const [clusterHotspotOnly, setClusterHotspotOnly] = useState(false);
   const [clusterBlockedOnly, setClusterBlockedOnly] = useState(false);
+  const [metricHelpOpen, setMetricHelpOpen] = useState(false);
+  const [sectionOpen, setSectionOpen] = useState({
+    sources: true,
+    events: true,
+    eventDetail: true,
+    recentRuns: true,
+    fetchFailures: false,
+    reviewQueue: true,
+    clusterInbox: true,
+    hypothesisDrift: false,
+    executionInbox: true,
+  });
 
   const loadWorkspaceBundle = useCallback(async (nextWorkspaceId?: string | null) => {
     setLoading(true);
@@ -224,6 +638,8 @@ export function IntelligenceModule() {
         setSources([]);
         setRuns([]);
         setFetchFailures([]);
+        setStaleEvents([]);
+        setLastRebuildResult(null);
         setEvents([]);
         setSelectedEvent(null);
         setSelectedEventDetail(null);
@@ -232,6 +648,7 @@ export function IntelligenceModule() {
         setRuntime({
           scannerWorker: null,
           semanticWorker: null,
+          staleMaintenanceWorker: null,
           syncWorker: null,
           semanticBacklog: {
             pendingCount: 0,
@@ -247,7 +664,7 @@ export function IntelligenceModule() {
         return;
       }
 
-      const [sourceData, runData, eventData, clusterData, modelData, aliasData, failureData] = await Promise.all([
+      const [sourceData, runData, eventData, clusterData, modelData, aliasData, failureData, staleData] = await Promise.all([
         listIntelligenceSources({ workspace_id: resolvedWorkspaceId }),
         listIntelligenceRuns({ workspace_id: resolvedWorkspaceId, limit: 20 }),
         listIntelligenceEvents({ workspace_id: resolvedWorkspaceId, limit: 50 }),
@@ -255,6 +672,7 @@ export function IntelligenceModule() {
         listIntelligenceRuntimeModels({ workspace_id: resolvedWorkspaceId }),
         listIntelligenceRuntimeAliases({ workspace_id: resolvedWorkspaceId }),
         listIntelligenceFetchFailures({ workspace_id: resolvedWorkspaceId, limit: 20 }),
+        listIntelligenceStaleEvents({ workspace_id: resolvedWorkspaceId, limit: 20 }),
       ]);
       const nextSelectedEventId = selectedEventId && eventData.events.some((event) => event.id === selectedEventId)
         ? selectedEventId
@@ -269,6 +687,7 @@ export function IntelligenceModule() {
       setSources(sourceData.sources);
       setRuns(runData.runs);
       setFetchFailures(failureData.fetch_failures);
+      setStaleEvents(staleData.stale_events);
       setEvents(eventData.events);
       setNarrativeClusters(clusterData.narrative_clusters);
       setSelectedEventId(nextSelectedEventId);
@@ -276,6 +695,7 @@ export function IntelligenceModule() {
       setRuntime({
         scannerWorker: sourceData.scanner_worker,
         semanticWorker: sourceData.semantic_worker,
+        staleMaintenanceWorker: runData.stale_maintenance_worker,
         syncWorker: modelData.sync_worker,
         semanticBacklog: runData.semantic_backlog,
         aliases: aliasData.bindings,
@@ -365,12 +785,12 @@ export function IntelligenceModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("Failed to load intelligence plane.");
+        setError(text(locale, "인텔리전스 평면을 불러오지 못했다.", "Failed to load intelligence plane."));
       }
     } finally {
       setLoading(false);
     }
-  }, [selectedEventId, selectedNarrativeClusterId]);
+  }, [locale, selectedEventId, selectedNarrativeClusterId]);
 
   useEffect(() => {
     void loadWorkspaceBundle();
@@ -424,12 +844,12 @@ export function IntelligenceModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("Failed to load event detail.");
+        setError(text(locale, "이벤트 상세를 불러오지 못했다.", "Failed to load event detail."));
       }
     } finally {
       setBusyKey(null);
     }
-  }, [workspaceId]);
+  }, [locale, workspaceId]);
 
   const selectNarrativeCluster = useCallback(async (clusterId: string) => {
     if (!workspaceId) return;
@@ -463,12 +883,65 @@ export function IntelligenceModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("Failed to load narrative cluster detail.");
+        setError(text(locale, "서사 클러스터 상세를 불러오지 못했다.", "Failed to load narrative cluster detail."));
       }
     } finally {
       setBusyKey(null);
     }
-  }, [workspaceId]);
+  }, [locale, workspaceId]);
+
+  const rebuildEventAction = useCallback(async (eventId: string) => {
+    if (!workspaceId) return;
+    setBusyKey(`event-rebuild:${eventId}`);
+    try {
+      const response = await rebuildIntelligenceEventById(eventId, {
+        workspace_id: workspaceId,
+      });
+      setLastRebuildResult(response.result);
+      await loadWorkspaceBundle(workspaceId);
+      if (response.result.rebuiltEventId) {
+        await selectEvent(response.result.rebuiltEventId);
+      }
+    } catch (err) {
+      if (err instanceof ApiRequestError) {
+        setError(`${err.code}: ${err.message}`);
+      } else {
+        setError(text(locale, "오래된 이벤트를 다시 빌드하지 못했다.", "Failed to rebuild stale event."));
+      }
+    } finally {
+      setBusyKey(null);
+    }
+  }, [loadWorkspaceBundle, locale, selectEvent, workspaceId]);
+
+  const bulkRebuildStaleEventsAction = useCallback(async () => {
+    if (!workspaceId || staleEvents.length === 0) return;
+    setBusyKey("stale-bulk-rebuild");
+    try {
+      const eventIds = staleEvents.slice(0, 5).map((event) => event.eventId);
+      const response = await bulkRebuildIntelligenceEvents({
+        workspace_id: workspaceId,
+        event_ids: eventIds,
+        limit: eventIds.length,
+      });
+      setLastBulkRebuildResult(response.result);
+      if (response.result.results.length > 0) {
+        setLastRebuildResult(response.result.results.at(-1) ?? null);
+      }
+      await loadWorkspaceBundle(workspaceId);
+      const firstRebuiltEventId = response.result.results.find((row) => row.rebuiltEventId)?.rebuiltEventId ?? null;
+      if (firstRebuiltEventId) {
+        await selectEvent(firstRebuiltEventId);
+      }
+    } catch (err) {
+      if (err instanceof ApiRequestError) {
+        setError(`${err.code}: ${err.message}`);
+      } else {
+        setError(text(locale, "오래된 이벤트 일괄 재빌드에 실패했다.", "Failed to bulk rebuild stale events."));
+      }
+    } finally {
+      setBusyKey(null);
+    }
+  }, [loadWorkspaceBundle, locale, selectEvent, staleEvents, workspaceId]);
 
   const toggleSource = useCallback(async (source: IntelligenceSourceRecord) => {
     if (!workspaceId) return;
@@ -483,12 +956,12 @@ export function IntelligenceModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("Failed to toggle source.");
+        setError(text(locale, "소스 상태를 바꾸지 못했다.", "Failed to toggle source."));
       }
     } finally {
       setBusyKey(null);
     }
-  }, [loadWorkspaceBundle, workspaceId]);
+  }, [loadWorkspaceBundle, locale, workspaceId]);
 
   const retrySourceAction = useCallback(async (source: IntelligenceSourceRecord) => {
     if (!workspaceId) return;
@@ -500,12 +973,12 @@ export function IntelligenceModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("Failed to retry source.");
+        setError(text(locale, "소스 재시도에 실패했다.", "Failed to retry source."));
       }
     } finally {
       setBusyKey(null);
     }
-  }, [loadWorkspaceBundle, workspaceId]);
+  }, [loadWorkspaceBundle, locale, workspaceId]);
 
   const retrySignalAction = useCallback(async (signalId: string) => {
     if (!workspaceId) return;
@@ -517,12 +990,12 @@ export function IntelligenceModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("Failed to retry signal.");
+        setError(text(locale, "신호 재시도에 실패했다.", "Failed to retry signal."));
       }
     } finally {
       setBusyKey(null);
     }
-  }, [loadWorkspaceBundle, workspaceId]);
+  }, [loadWorkspaceBundle, locale, workspaceId]);
 
   const runAction = useCallback(async (kind: "deliberate" | "brief" | "action" | "execute", candidateId?: string) => {
     if (!workspaceId || !selectedEvent) return;
@@ -545,21 +1018,21 @@ export function IntelligenceModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("Intelligence action failed.");
+        setError(text(locale, "인텔리전스 작업 실행에 실패했다.", "Intelligence action failed."));
       }
     } finally {
       setBusyKey(null);
     }
-  }, [loadWorkspaceBundle, selectedEvent, workspaceId]);
+  }, [loadWorkspaceBundle, locale, selectedEvent, workspaceId]);
 
   const updateReviewStateForEvent = useCallback(async (eventId: string, reviewState: EventReviewState) => {
     if (!workspaceId) return;
     const current = events.find((event) => event.id === eventId) ?? null;
     const reviewReason = typeof window !== "undefined" && reviewState !== "watch"
-      ? window.prompt("review reason을 입력해라", current?.reviewReason ?? "")?.trim() ?? null
+      ? window.prompt(text(locale, "검토 사유를 입력해라", "Enter a review reason"), current?.reviewReason ?? "")?.trim() ?? null
       : null;
     const reviewOwner = typeof window !== "undefined" && reviewState === "review"
-      ? window.prompt("review owner(user id)를 입력해라", current?.reviewOwner ?? "")?.trim() ?? null
+      ? window.prompt(text(locale, "검토 담당자(user id)를 입력해라", "Enter a review owner (user id)"), current?.reviewOwner ?? "")?.trim() ?? null
       : null;
     setBusyKey(`review:${eventId}:${reviewState}`);
     try {
@@ -575,12 +1048,12 @@ export function IntelligenceModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("Failed to update review state.");
+        setError(text(locale, "검토 상태를 바꾸지 못했다.", "Failed to update review state."));
       }
     } finally {
       setBusyKey(null);
     }
-  }, [events, loadWorkspaceBundle, workspaceId]);
+  }, [events, loadWorkspaceBundle, locale, workspaceId]);
 
   const updateReviewStateAction = useCallback(async (reviewState: EventReviewState) => {
     if (!selectedEvent) return;
@@ -591,10 +1064,10 @@ export function IntelligenceModule() {
     if (!workspaceId || !selectedEventDetail || !selectedEvent) return;
     const current = selectedEventDetail.linkedClaims.find((row) => row.id === linkedClaimId) ?? null;
     const reviewReason = typeof window !== "undefined" && reviewState !== "watch"
-      ? window.prompt("linked claim review reason을 입력해라", current?.reviewReason ?? "")?.trim() ?? null
+      ? window.prompt(text(locale, "연결 클레임 검토 사유를 입력해라", "Enter a linked claim review reason"), current?.reviewReason ?? "")?.trim() ?? null
       : null;
     const reviewOwner = typeof window !== "undefined" && reviewState === "review"
-      ? window.prompt("linked claim review owner(user id)를 입력해라", current?.reviewOwner ?? "")?.trim() ?? null
+      ? window.prompt(text(locale, "연결 클레임 담당자(user id)를 입력해라", "Enter a linked claim review owner (user id)"), current?.reviewOwner ?? "")?.trim() ?? null
       : null;
     setBusyKey(`linked-claim-review:${linkedClaimId}:${reviewState}`);
     try {
@@ -610,21 +1083,21 @@ export function IntelligenceModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("Failed to update linked claim review state.");
+        setError(text(locale, "연결 클레임 검토 상태를 바꾸지 못했다.", "Failed to update linked claim review state."));
       }
     } finally {
       setBusyKey(null);
     }
-  }, [selectedEvent, selectedEventDetail, selectEvent, workspaceId]);
+  }, [locale, selectedEvent, selectedEventDetail, selectEvent, workspaceId]);
 
   const updateReviewStateForHypothesis = useCallback(async (entryId: string, reviewState: EventReviewState) => {
     if (!workspaceId || !selectedHypothesisDetail || !selectedEvent) return;
     const current = selectedHypothesisDetail.ledgerEntries.find((row) => row.id === entryId) ?? null;
     const reviewReason = typeof window !== "undefined" && reviewState !== "watch"
-      ? window.prompt("hypothesis review reason을 입력해라", current?.reviewReason ?? "")?.trim() ?? null
+      ? window.prompt(text(locale, "가설 검토 사유를 입력해라", "Enter a hypothesis review reason"), current?.reviewReason ?? "")?.trim() ?? null
       : null;
     const reviewOwner = typeof window !== "undefined" && reviewState === "review"
-      ? window.prompt("hypothesis review owner(user id)를 입력해라", current?.reviewOwner ?? "")?.trim() ?? null
+      ? window.prompt(text(locale, "가설 담당자(user id)를 입력해라", "Enter a hypothesis review owner (user id)"), current?.reviewOwner ?? "")?.trim() ?? null
       : null;
     setBusyKey(`hypothesis-review:${entryId}:${reviewState}`);
     try {
@@ -640,12 +1113,12 @@ export function IntelligenceModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("Failed to update hypothesis review state.");
+        setError(text(locale, "가설 검토 상태를 바꾸지 못했다.", "Failed to update hypothesis review state."));
       }
     } finally {
       setBusyKey(null);
     }
-  }, [selectedEvent, selectedHypothesisDetail, selectEvent, workspaceId]);
+  }, [locale, selectedEvent, selectedHypothesisDetail, selectEvent, workspaceId]);
 
   const updateReviewStateForNarrativeCluster = useCallback(async (clusterId: string, reviewState: EventReviewState) => {
     const currentCluster =
@@ -655,10 +1128,10 @@ export function IntelligenceModule() {
       (selectedEventDetail?.narrativeCluster?.id === clusterId ? selectedEventDetail.narrativeCluster : null);
     if (!workspaceId || !currentCluster) return;
     const reviewReason = typeof window !== "undefined" && reviewState !== "watch"
-      ? window.prompt("narrative cluster review reason을 입력해라", currentCluster.reviewReason ?? "")?.trim() ?? null
+      ? window.prompt(text(locale, "서사 클러스터 검토 사유를 입력해라", "Enter a narrative cluster review reason"), currentCluster.reviewReason ?? "")?.trim() ?? null
       : null;
     const reviewOwner = typeof window !== "undefined" && reviewState === "review"
-      ? window.prompt("narrative cluster review owner(user id)를 입력해라", currentCluster.reviewOwner ?? "")?.trim() ?? null
+      ? window.prompt(text(locale, "서사 클러스터 담당자(user id)를 입력해라", "Enter a narrative cluster review owner (user id)"), currentCluster.reviewOwner ?? "")?.trim() ?? null
       : null;
     setBusyKey(`narrative-cluster-review:${clusterId}:${reviewState}`);
     try {
@@ -674,12 +1147,12 @@ export function IntelligenceModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("Failed to update narrative cluster review state.");
+        setError(text(locale, "서사 클러스터 검토 상태를 바꾸지 못했다.", "Failed to update narrative cluster review state."));
       }
     } finally {
       setBusyKey(null);
     }
-  }, [loadWorkspaceBundle, selectedEventDetail, selectedNarrativeClusterDetail, workspaceId]);
+  }, [loadWorkspaceBundle, locale, selectedEventDetail, selectedNarrativeClusterDetail, workspaceId]);
 
   const addOperatorNoteAction = useCallback(async (
     scope: OperatorNoteRecord["scope"] = "event",
@@ -694,7 +1167,9 @@ export function IntelligenceModule() {
       selectedNarrativeClusterDetail?.recentEvents[0]?.id ??
       null;
     if (!targetEventId) return;
-    const note = typeof window !== "undefined" ? window.prompt(`${label} 메모를 입력해라`)?.trim() : null;
+    const note = typeof window !== "undefined"
+      ? window.prompt(locale === "ko" ? `${label} 메모를 입력해라` : `Enter a note for ${label}`)?.trim()
+      : null;
     if (!note) return;
     setBusyKey(`operator-note:create:${scope}:${scopeId ?? "event"}`);
     try {
@@ -709,12 +1184,12 @@ export function IntelligenceModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("Failed to create operator note.");
+        setError(text(locale, "운영자 메모를 만들지 못했다.", "Failed to create operator note."));
       }
     } finally {
       setBusyKey(null);
     }
-  }, [loadWorkspaceBundle, selectedEvent, selectedNarrativeClusterDetail, workspaceId]);
+  }, [loadWorkspaceBundle, locale, selectedEvent, selectedNarrativeClusterDetail, workspaceId]);
 
   const saveRuntimeAliasBindings = useCallback(async (input: {
     alias: IntelligenceCapabilityAlias;
@@ -745,13 +1220,13 @@ export function IntelligenceModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("Failed to update runtime alias bindings.");
+        setError(text(locale, "런타임 별칭 바인딩을 바꾸지 못했다.", "Failed to update runtime alias bindings."));
       }
       throw err;
     } finally {
       setBusyKey(null);
     }
-  }, [loadWorkspaceBundle, workspaceId]);
+  }, [loadWorkspaceBundle, locale, workspaceId]);
 
   const pendingExecutionCount = useMemo(
     () => events.reduce((total, event) => total + event.executionCandidates.filter((candidate) => candidate.status === "pending").length, 0),
@@ -778,8 +1253,8 @@ export function IntelligenceModule() {
       sourceId: string | null;
     }>();
     for (const failure of fetchFailures) {
-      const sourceName = sources.find((source) => source.id === failure.sourceId)?.name ?? "unknown source";
-      const key = `${failure.sourceId ?? "unknown"}:${sourceName}`;
+      const sourceName = sources.find((source) => source.id === failure.sourceId)?.name ?? text(locale, "알수없는 소스", "unknown source");
+      const key = `${failure.sourceId ?? text(locale, "알수없음", "unknown")}:${sourceName}`;
       const current = grouped.get(key);
       if (!current) {
         grouped.set(key, {
@@ -800,7 +1275,7 @@ export function IntelligenceModule() {
       }
     }
     return Array.from(grouped.values()).sort((left, right) => new Date(right.latestAt).getTime() - new Date(left.latestAt).getTime());
-  }, [fetchFailures, sources]);
+  }, [fetchFailures, locale, sources]);
   const reviewQueue = useMemo(
     () =>
       events
@@ -1057,9 +1532,15 @@ export function IntelligenceModule() {
     [selectedHypothesisDetail],
   );
   const latestRun = runs[0] ?? null;
+  const formatDisplayDateTime = useCallback((value: string | null | undefined) => formatDateTime(value, copy.empty), [copy.empty]);
+  const toggleSection = useCallback((key: keyof typeof sectionOpen) => {
+    setSectionOpen((current) => ({ ...current, [key]: !current[key] }));
+  }, []);
 
   const createWorkspaceAction = useCallback(async () => {
-    const proposedName = typeof window !== "undefined" ? window.prompt("새 intelligence workspace 이름")?.trim() : null;
+    const proposedName = typeof window !== "undefined"
+      ? window.prompt(text(locale, "새 인텔리전스 워크스페이스 이름", "New intelligence workspace name"))?.trim()
+      : null;
     setBusyKey("workspace:create");
     try {
       const result = await createIntelligenceWorkspace({ name: proposedName || undefined });
@@ -1068,29 +1549,26 @@ export function IntelligenceModule() {
       if (err instanceof ApiRequestError) {
         setError(`${err.code}: ${err.message}`);
       } else {
-        setError("Failed to create workspace.");
+        setError(text(locale, "워크스페이스를 만들지 못했다.", "Failed to create workspace."));
       }
     } finally {
       setBusyKey(null);
     }
-  }, [loadWorkspaceBundle]);
+  }, [loadWorkspaceBundle, locale]);
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(83,208,255,0.18),_transparent_28%),radial-gradient(circle_at_top_right,_rgba(68,255,181,0.12),_transparent_22%),linear-gradient(180deg,_#08111a_0%,_#05080f_100%)] text-white p-6">
-      <div className="mx-auto max-w-[1500px] space-y-6">
+    <main className="h-full overflow-y-auto bg-[radial-gradient(circle_at_top_left,_rgba(83,208,255,0.18),_transparent_28%),radial-gradient(circle_at_top_right,_rgba(68,255,181,0.12),_transparent_22%),linear-gradient(180deg,_#08111a_0%,_#05080f_100%)] text-white">
+      <div className="mx-auto max-w-[1500px] space-y-6 p-6">
         <section className="rounded-3xl border border-white/10 bg-black/35 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.35)] backdrop-blur-xl">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div className="space-y-2">
-              <p className="text-[11px] font-mono uppercase tracking-[0.35em] text-cyan-300/80">Autonomous Intelligence Plane</p>
-              <h1 className="text-3xl font-semibold tracking-tight">독립 스캐너와 추론 평면</h1>
-              <p className="max-w-3xl text-sm text-white/70">
-                기존 JARVIS와 분리된 이벤트 추적 시스템이다. 등록된 소스를 주기적으로 훑고, 문서를 사건으로 묶고,
-                LLM semantic layer를 거쳐 가설과 실행 후보까지 만든다.
-              </p>
+              <p className="text-[11px] font-mono uppercase tracking-[0.35em] text-cyan-300/80">{copy.titleEyebrow}</p>
+              <h1 className="text-3xl font-semibold tracking-tight">{copy.title}</h1>
+              <p className="max-w-3xl text-sm text-white/70">{copy.subtitle}</p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
               <span className="text-xs text-white/50">
-                {loading ? "Loading intelligence plane..." : "Runtime snapshot ready"}
+                {loading ? copy.loadingRuntime : copy.runtimeReady}
               </span>
               <select
                 value={workspaceId ?? ""}
@@ -1111,7 +1589,7 @@ export function IntelligenceModule() {
                 onClick={() => void loadWorkspaceBundle(workspaceId)}
                 className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/30 bg-cyan-400/10 px-4 py-2 text-sm text-cyan-100 hover:border-cyan-300/60 hover:bg-cyan-400/20"
               >
-                <RefreshCw size={14} /> 새로고침
+                <RefreshCw size={14} /> {copy.refresh}
               </button>
               <button
                 type="button"
@@ -1119,7 +1597,7 @@ export function IntelligenceModule() {
                 className="inline-flex items-center gap-2 rounded-xl border border-white/12 bg-white/[0.06] px-4 py-2 text-sm text-white/85 hover:border-white/25 hover:bg-white/[0.09]"
               >
                 {busyKey === "workspace:create" ? <RefreshCw size={14} className="animate-spin" /> : <Bot size={14} />}
-                새 워크스페이스
+                {copy.newWorkspace}
               </button>
             </div>
           </div>
@@ -1129,49 +1607,83 @@ export function IntelligenceModule() {
             </div>
           ) : null}
           <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-            <StatCard icon={<ScanSearch size={16} />} label="Sources" value={String(sources.length)} note={runtime.scannerWorker?.enabled ? "scanner on" : "scanner off"} />
-            <StatCard icon={<BrainCircuit size={16} />} label="Events" value={String(events.length)} note={latestRun ? `last scan ${formatDateTime(latestRun.startedAt)}` : "no runs"} />
-            <StatCard icon={<ShieldCheck size={16} />} label="Pending Exec" value={String(pendingExecutionCount)} note={latestRun ? `${latestRun.executionCount} exec candidates` : "idle"} />
-            <StatCard icon={<Cable size={16} />} label="Semantic" value={runtime.semanticWorker?.enabled ? "ON" : "OFF"} note={runtime.semanticWorker?.lastRun ? `last ${formatDateTime(runtime.semanticWorker.lastRun.finishedAt)}` : "not yet"} />
-            <StatCard icon={<RefreshCw size={16} />} label="Backlog" value={String(runtime.semanticBacklog.pendingCount)} note={`${runtime.semanticBacklog.failedCount} failed`} />
-            <StatCard icon={<Bot size={16} />} label="Models" value={String(runtime.models.length)} note={`${runtime.aliases.workspace.length + runtime.aliases.global.length} bindings`} />
-            <StatCard icon={<ShieldCheck size={16} />} label="Sync" value={runtime.syncWorker?.enabled ? "ON" : "OFF"} note={runtime.syncWorker?.lastRun ? `last ${formatDateTime(runtime.syncWorker.lastRun.finishedAt)}` : "not yet"} />
+            <StatCard icon={<ScanSearch size={16} />} label={copy.stats.sources} value={String(sources.length)} note={runtime.scannerWorker?.enabled ? text(locale, "스캐너 켜짐", "scanner on") : text(locale, "스캐너 꺼짐", "scanner off")} />
+            <StatCard icon={<BrainCircuit size={16} />} label={copy.stats.loadedEvents} value={String(events.length)} note={latestRun ? `${formatDisplayDateTime(latestRun.startedAt)} · ${text(locale, "최신 50개", "latest 50")}` : copy.empty} />
+            <StatCard icon={<ShieldCheck size={16} />} label={copy.stats.pendingExec} value={String(pendingExecutionCount)} note={latestRun ? `${latestRun.executionCount} ${text(locale, "실행 후보", "exec candidates")}` : text(locale, "유휴", "idle")} />
+            <StatCard icon={<Cable size={16} />} label={copy.stats.semantic} value={runtime.semanticWorker?.enabled ? text(locale, "켜짐", "ON") : text(locale, "꺼짐", "OFF")} note={runtime.semanticWorker?.lastRun ? `${text(locale, "최근", "last")} ${formatDisplayDateTime(runtime.semanticWorker.lastRun.finishedAt)}` : text(locale, "아직 없음", "not yet")} />
+            <StatCard icon={<RefreshCw size={16} />} label={copy.stats.stale} value={runtime.staleMaintenanceWorker?.enabled ? text(locale, "켜짐", "ON") : text(locale, "꺼짐", "OFF")} note={runtime.staleMaintenanceWorker?.lastRun ? `${text(locale, "최근", "last")} ${formatDisplayDateTime(runtime.staleMaintenanceWorker.lastRun.finishedAt)}` : text(locale, "아직 없음", "not yet")} />
+            <StatCard icon={<RefreshCw size={16} />} label={copy.stats.backlog} value={String(runtime.semanticBacklog.pendingCount)} note={`${text(locale, "시맨틱 대기열", "pending semantic queue")} · ${runtime.semanticBacklog.failedCount} ${text(locale, "실패", "failed")}`} />
+            <StatCard icon={<Bot size={16} />} label={copy.stats.models} value={String(runtime.models.length)} note={`${runtime.aliases.workspace.length + runtime.aliases.global.length} ${text(locale, "바인딩", "bindings")}`} />
+            <StatCard icon={<ShieldCheck size={16} />} label={copy.stats.sync} value={runtime.syncWorker?.enabled ? text(locale, "켜짐", "ON") : text(locale, "꺼짐", "OFF")} note={runtime.syncWorker?.lastRun ? `${text(locale, "최근", "last")} ${formatDisplayDateTime(runtime.syncWorker.lastRun.finishedAt)}` : text(locale, "아직 없음", "not yet")} />
+          </div>
+          <div className="mt-4 flex items-center justify-end">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setMetricHelpOpen((current) => !current)}
+                title={text(locale, "지표 의미 보기", "Show metric help")}
+                className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/70 hover:border-white/20 hover:bg-white/[0.08]"
+              >
+                {locale === "ko" ? "? 도움말" : "? Help"}
+              </button>
+              {metricHelpOpen ? (
+                <div className="absolute right-0 z-20 mt-2 w-[360px] rounded-2xl border border-white/10 bg-[#09121a]/95 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+                  <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-cyan-200/80">{copy.explainer.heading}</p>
+                  <div className="mt-3 space-y-2">
+                    {[copy.explainer.loadedEvents, copy.explainer.backlog, copy.explainer.primary, copy.explainer.counter, copy.explainer.invalidation, copy.explainer.expectedSignals].map((line) => (
+                      <div key={line} className="rounded-xl border border-white/8 bg-black/20 px-3 py-2 text-xs leading-5 text-white/70">
+                        {line}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
           </div>
         </section>
 
         <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,420px)_minmax(0,1fr)]">
-          <section className="rounded-3xl border border-white/10 bg-black/35 p-4 backdrop-blur-xl">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-mono uppercase tracking-[0.25em] text-white/70">Sources</h2>
-              <span className="text-xs text-white/50">{runtime.scannerWorker?.inflight ? "Scanning..." : "Stable"}</span>
-            </div>
+          <CollapsiblePanel
+            title={copy.sections.sources}
+            meta={runtime.scannerWorker?.inflight ? text(locale, "스캔중...", "Scanning...") : text(locale, "안정", "Stable")}
+            open={sectionOpen.sources}
+            onToggle={() => toggleSection("sources")}
+          >
             <div className="space-y-2">
               {sources.map((source) => (
-                <button
+                <div
                   key={source.id}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => undefined}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                    }
+                  }}
                   className="w-full rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-left hover:border-white/20"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <p className="text-sm font-medium text-white">{source.name}</p>
-                      <p className="mt-1 text-xs text-white/50">{source.kind} · {source.sourceType} · {source.sourceTier}</p>
-                      <p className="mt-1 text-[11px] text-white/40">poll {source.pollMinutes}m · last {formatDateTime(source.lastFetchedAt)}</p>
+                      <p className="mt-1 text-xs text-white/50">
+                        {sourceKindLabel(source.kind, locale)} · {sourceTypeLabel(source.sourceType, locale)} · {sourceTierLabel(source.sourceTier, locale)}
+                      </p>
+                      <p className="mt-1 text-[11px] text-white/40">{text(locale, "주기", "poll")} {source.pollMinutes}m · {text(locale, "최근", "last")} {formatDateTime(source.lastFetchedAt)}</p>
                       <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-white/45">
-                        <span>health {source.health.lastStatus}</span>
-                        <span>robots {source.crawlPolicy.respectRobots ? "on" : "off"}</span>
-                        <span>depth {source.crawlPolicy.maxDepth}</span>
-                        <span>pages/run {source.crawlPolicy.maxPagesPerRun}</span>
+                        <span>{text(locale, "상태", "health")} {workerStatusLabel(source.health.lastStatus, locale)}</span>
+                        <span>robots {source.crawlPolicy.respectRobots ? text(locale, "켜짐", "on") : text(locale, "꺼짐", "off")}</span>
+                        <span>{text(locale, "깊이", "depth")} {source.crawlPolicy.maxDepth}</span>
+                        <span>{text(locale, "실행당 페이지", "pages/run")} {source.crawlPolicy.maxPagesPerRun}</span>
                         <span>403 {source.health.status403Count}</span>
                         <span>429 {source.health.status429Count}</span>
                       </div>
                       <p className="mt-2 text-[11px] text-white/35">
-                        allow {source.crawlPolicy.allowDomains.length || 0} · deny {source.crawlPolicy.denyDomains.length || 0} · latency {source.health.recentLatencyMs ?? "—"}ms
+                        {text(locale, "허용", "allow")} {source.crawlPolicy.allowDomains.length || 0} · {text(locale, "차단", "deny")} {source.crawlPolicy.denyDomains.length || 0} · {text(locale, "지연", "latency")} {source.health.recentLatencyMs ?? "—"}ms
                       </p>
                     </div>
                     <span className={`rounded-full px-2 py-1 text-[10px] font-mono ${source.enabled ? "bg-emerald-400/15 text-emerald-200" : "bg-white/10 text-white/50"}`}>
-                      {source.enabled ? "ON" : "OFF"}
+                      {source.enabled ? text(locale, "켜짐", "ON") : text(locale, "꺼짐", "OFF")}
                     </span>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -1196,16 +1708,17 @@ export function IntelligenceModule() {
                       {busyKey === `source-retry:${source.id}` ? "..." : "재시도"}
                     </button>
                   </div>
-                </button>
+                </div>
               ))}
             </div>
-          </section>
+          </CollapsiblePanel>
 
-          <section className="rounded-3xl border border-white/10 bg-black/35 p-4 backdrop-blur-xl">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-mono uppercase tracking-[0.25em] text-white/70">Events</h2>
-              <span className="text-xs text-white/50">{latestRun ? `${latestRun.clusteredEventCount} clustered` : "no run"}</span>
-            </div>
+          <CollapsiblePanel
+            title={copy.sections.events}
+            meta={latestRun ? `${latestRun.clusteredEventCount} ${text(locale, "클러스터링", "clustered")} · ${text(locale, "최신 50개 로드", "latest 50 loaded")}` : copy.empty}
+            open={sectionOpen.events}
+            onToggle={() => toggleSection("events")}
+          >
             <div className="space-y-2">
               {events.map((event) => {
                 const active = event.id === selectedEventId;
@@ -1219,20 +1732,20 @@ export function IntelligenceModule() {
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <p className="text-sm font-medium text-white">{event.title}</p>
-                        <p className="mt-1 text-xs text-white/55">{event.topDomainId ?? "unknown"} · {event.eventFamily}</p>
+                        <p className="mt-1 text-xs text-white/55">{domainLabel(event.topDomainId, locale)} · {eventFamilyLabel(event.eventFamily, locale)}</p>
                         <p className="mt-1 text-[11px] text-white/40">
-                          claims {event.linkedClaimCount} · contradictions {event.contradictionCount} · non-social {event.nonSocialCorroborationCount} · review {event.reviewState}
+                          {text(locale, "클레임", "claims")} {event.linkedClaimCount} · {text(locale, "반박", "contradictions")} {event.contradictionCount} · {text(locale, "비소셜", "non-social")} {event.nonSocialCorroborationCount} · {text(locale, "검토", "review")} {reviewStateLabel(event.reviewState, locale)}
                         </p>
                         <p className="mt-1 text-[11px] text-white/35">
-                          operator priority {event.operatorPriorityScore ?? 0} · claim health {event.linkedClaimHealthScore.toFixed(2)} · time {event.timeCoherenceScore.toFixed(2)} · graph +{event.graphSupportScore.toFixed(2)} / -{event.graphContradictionScore.toFixed(2)} / hot {event.graphHotspotCount}
+                          {text(locale, "운영 우선순위", "operator priority")} {event.operatorPriorityScore ?? 0} · {text(locale, "클레임 건전도", "claim health")} {event.linkedClaimHealthScore.toFixed(2)} · {text(locale, "시간", "time")} {event.timeCoherenceScore.toFixed(2)} · {text(locale, "그래프", "graph")} +{event.graphSupportScore.toFixed(2)} / -{event.graphContradictionScore.toFixed(2)} / {text(locale, "핫스팟", "hot")} {event.graphHotspotCount}
                         </p>
                         <p className="mt-1 text-[11px] text-white/35">
-                          temporal {event.temporalNarrativeState ?? "new"} · recurring {(event.recurringNarrativeScore ?? 0).toFixed(2)} · related {event.relatedHistoricalEventCount ?? 0}
+                          {text(locale, "시간축", "temporal")} {narrativeStateLabel(event.temporalNarrativeState ?? "new", locale)} · {text(locale, "반복", "recurring")} {(event.recurringNarrativeScore ?? 0).toFixed(2)} · {text(locale, "연결", "related")} {event.relatedHistoricalEventCount ?? 0}
                         </p>
                       </div>
                       <div className="text-right">
                         <p className="text-xs font-mono text-cyan-200">{Math.round(event.structuralityScore * 100)}</p>
-                        <p className="text-[10px] text-white/45">{event.riskBand} · {event.deliberationStatus}</p>
+                        <p className="text-[10px] text-white/45">{event.riskBand} · {executionStatusLabel(event.deliberationStatus, locale)}</p>
                       </div>
                     </div>
                     <p className="mt-2 line-clamp-3 text-xs leading-5 text-white/65">{event.summary}</p>
@@ -1240,21 +1753,26 @@ export function IntelligenceModule() {
                 );
               })}
             </div>
-          </section>
+          </CollapsiblePanel>
 
-          <section className="rounded-3xl border border-white/10 bg-black/35 p-4 backdrop-blur-xl">
+          <CollapsiblePanel
+            title={copy.sections.eventDetail}
+            meta={selectedEvent ? selectedEvent.id : copy.empty}
+            open={sectionOpen.eventDetail}
+            onToggle={() => toggleSection("eventDetail")}
+          >
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-sm font-mono uppercase tracking-[0.25em] text-white/70">Event Detail</h2>
-                <p className="mt-1 text-sm text-white/50">{selectedEvent ? selectedEvent.id : "선택된 이벤트 없음"}</p>
+                <h2 className="text-sm font-mono uppercase tracking-[0.25em] text-white/70">{copy.sections.eventDetail}</h2>
+                <p className="mt-1 text-sm text-white/50">{selectedEvent ? selectedEvent.id : copy.empty}</p>
               </div>
               {selectedEvent ? (
                 <div className="flex flex-wrap gap-2">
-                  <ActionButton label="Deliberate" icon={<BrainCircuit size={14} />} busy={busyKey === "action:deliberate"} onClick={() => void runAction("deliberate")} />
-                  <ActionButton label="Bridge Brief" icon={<Send size={14} />} busy={busyKey === "action:brief"} onClick={() => void runAction("brief")} />
-                  <ActionButton label="Bridge Action" icon={<Cable size={14} />} busy={busyKey === "action:action"} onClick={() => void runAction("action")} />
+                  <ActionButton label={locale === "ko" ? "토론" : "Deliberate"} icon={<BrainCircuit size={14} />} busy={busyKey === "action:deliberate"} onClick={() => void runAction("deliberate")} />
+                  <ActionButton label={locale === "ko" ? "브리프 브리지" : "Bridge Brief"} icon={<Send size={14} />} busy={busyKey === "action:brief"} onClick={() => void runAction("brief")} />
+                  <ActionButton label={locale === "ko" ? "액션 브리지" : "Bridge Action"} icon={<Cable size={14} />} busy={busyKey === "action:action"} onClick={() => void runAction("action")} />
                   <ActionButton
-                    label="Event Note"
+                    label={locale === "ko" ? "이벤트 메모" : "Event Note"}
                     icon={<Bot size={14} />}
                     busy={busyKey === "operator-note:create:event:event"}
                     onClick={() => void addOperatorNoteAction()}
@@ -1265,35 +1783,35 @@ export function IntelligenceModule() {
 
             {!selectedEvent ? (
               <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-8 text-sm text-white/45">
-                좌측 이벤트를 선택하면 가설, 반대가설, invalidation, execution candidate를 볼 수 있다.
+                {copy.selectedEventEmpty}
               </div>
             ) : (
               <div className="space-y-4">
                 <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                   <div className="flex flex-wrap gap-2 text-[11px] font-mono text-white/50">
-                    <span>{selectedEvent.topDomainId ?? "unknown"}</span>
-                    <span>structurality {selectedEvent.structuralityScore.toFixed(2)}</span>
-                    <span>actionability {selectedEvent.actionabilityScore.toFixed(2)}</span>
-                    <span>{selectedEvent.signalIds.length} signals</span>
-                    <span>claims {selectedEvent.linkedClaimCount}</span>
-                    <span>contradictions {selectedEvent.contradictionCount}</span>
-                    <span>non-social {selectedEvent.nonSocialCorroborationCount}</span>
-                    <span>claim health {selectedEvent.linkedClaimHealthScore.toFixed(2)}</span>
-                    <span>time coherence {selectedEvent.timeCoherenceScore.toFixed(2)}</span>
-                    <span>graph support {selectedEvent.graphSupportScore.toFixed(2)}</span>
-                    <span>graph contradiction {selectedEvent.graphContradictionScore.toFixed(2)}</span>
-                    <span>graph hotspots {selectedEvent.graphHotspotCount}</span>
-                    <span>temporal {selectedEvent.temporalNarrativeState ?? "new"}</span>
-                    <span>recurring {(selectedEvent.recurringNarrativeScore ?? 0).toFixed(2)}</span>
-                    <span>related {selectedEvent.relatedHistoricalEventCount ?? 0}</span>
-                    <span>deliberation {selectedEvent.deliberationStatus}</span>
-                    <span>review {selectedEvent.reviewState}</span>
-                    <span>priority {selectedEvent.operatorPriorityScore ?? 0}</span>
+                    <span>{domainLabel(selectedEvent.topDomainId, locale)}</span>
+                    <span>{text(locale, "구조성", "structurality")} {selectedEvent.structuralityScore.toFixed(2)}</span>
+                    <span>{text(locale, "행동성", "actionability")} {selectedEvent.actionabilityScore.toFixed(2)}</span>
+                    <span>{selectedEvent.signalIds.length} {text(locale, "신호", "signals")}</span>
+                    <span>{text(locale, "클레임", "claims")} {selectedEvent.linkedClaimCount}</span>
+                    <span>{text(locale, "반박", "contradictions")} {selectedEvent.contradictionCount}</span>
+                    <span>{text(locale, "비소셜", "non-social")} {selectedEvent.nonSocialCorroborationCount}</span>
+                    <span>{text(locale, "클레임 건전도", "claim health")} {selectedEvent.linkedClaimHealthScore.toFixed(2)}</span>
+                    <span>{text(locale, "시간 일관성", "time coherence")} {selectedEvent.timeCoherenceScore.toFixed(2)}</span>
+                    <span>{text(locale, "그래프 지지", "graph support")} {selectedEvent.graphSupportScore.toFixed(2)}</span>
+                    <span>{text(locale, "그래프 반박", "graph contradiction")} {selectedEvent.graphContradictionScore.toFixed(2)}</span>
+                    <span>{text(locale, "그래프 핫스팟", "graph hotspots")} {selectedEvent.graphHotspotCount}</span>
+                    <span>{text(locale, "시간축", "temporal")} {narrativeStateLabel(selectedEvent.temporalNarrativeState ?? "new", locale)}</span>
+                    <span>{text(locale, "반복", "recurring")} {(selectedEvent.recurringNarrativeScore ?? 0).toFixed(2)}</span>
+                    <span>{text(locale, "연결", "related")} {selectedEvent.relatedHistoricalEventCount ?? 0}</span>
+                    <span>{text(locale, "토론", "deliberation")} {executionStatusLabel(selectedEvent.deliberationStatus, locale)}</span>
+                    <span>{text(locale, "검토", "review")} {reviewStateLabel(selectedEvent.reviewState, locale)}</span>
+                    <span>{text(locale, "우선순위", "priority")} {selectedEvent.operatorPriorityScore ?? 0}</span>
                   </div>
                   <p className="mt-3 text-sm leading-6 text-white/75">{selectedEvent.summary}</p>
                   {selectedEvent.reviewReason || selectedEvent.reviewOwner || selectedEvent.reviewResolvedAt ? (
                     <p className="mt-2 text-xs text-white/45">
-                      review reason {selectedEvent.reviewReason ?? "—"} · owner {selectedEvent.reviewOwner ?? "—"} · resolved {formatDateTime(selectedEvent.reviewResolvedAt)}
+                      {text(locale, "검토 사유", "review reason")} {selectedEvent.reviewReason ?? "—"} · {text(locale, "담당", "owner")} {selectedEvent.reviewOwner ?? "—"} · {text(locale, "해결", "resolved")} {formatDateTime(selectedEvent.reviewResolvedAt)}
                     </p>
                   ) : null}
                   {selectedEventFlags.length > 0 ? (
@@ -1320,25 +1838,28 @@ export function IntelligenceModule() {
                             : "border-white/10 bg-white/[0.04] text-white/65"
                         }`}
                       >
-                        {busyKey === `review:${selectedEvent.id}:${state}` ? "..." : state}
+                        {busyKey === `review:${selectedEvent.id}:${state}` ? "..." : reviewStateLabel(state, locale)}
                       </button>
                     ))}
                   </div>
                 </div>
 
-                <DetailBlock title="Primary Hypotheses" items={selectedEvent.primaryHypotheses.map((row) => `${row.title} · ${row.summary}`)} />
-                <DetailBlock title="Counter Hypotheses" items={selectedEvent.counterHypotheses.map((row) => `${row.title} · ${row.summary}`)} />
-                <DetailBlock title="Invalidation Snapshot" items={selectedEvent.invalidationConditions.map((row) => `${row.title} · ${row.description} · ${row.status}`)} />
-                <DetailBlock title="Expected Signals Snapshot" items={selectedEvent.expectedSignals.map((row) => `${row.signalKey} · ${row.description} · ${row.status}`)} />
+                <DetailBlock title={locale === "ko" ? "주 가설" : "Primary Hypotheses"} items={selectedEvent.primaryHypotheses.map((row) => `${row.title} · ${row.summary}`)} />
+                <DetailBlock title={locale === "ko" ? "대안 가설" : "Counter Hypotheses"} items={selectedEvent.counterHypotheses.map((row) => `${row.title} · ${row.summary}`)} />
+                <DetailBlock title={locale === "ko" ? "무효화 스냅샷" : "Invalidation Snapshot"} locale={locale} items={selectedEvent.invalidationConditions.map((row) => `${row.title} · ${row.description} · ${genericStatusLabel(row.status, locale)}`)} />
+                <DetailBlock title={locale === "ko" ? "예상 신호 스냅샷" : "Expected Signals Snapshot"} locale={locale} items={selectedEvent.expectedSignals.map((row) => `${row.signalKey} · ${row.description} · ${genericStatusLabel(row.status, locale)}`)} />
                 <DetailBlock
-                  title="Linked Claims"
-                  items={selectedLinkedClaims.map((row) => `${row.canonicalSubject} ${row.canonicalPredicate} ${row.canonicalObject} · family ${row.predicateFamily} · non-social ${row.nonSocialSourceCount} · contradictions ${row.contradictionCount}`)}
+                  title={locale === "ko" ? "연결된 클레임" : "Linked Claims"}
+                  locale={locale}
+                  items={selectedLinkedClaims.map((row) => `${row.canonicalSubject} ${row.canonicalPredicate} ${row.canonicalObject} · ${text(locale, "패밀리", "family")} ${row.predicateFamily} · ${text(locale, "비소셜", "non-social")} ${row.nonSocialSourceCount} · ${text(locale, "반박", "contradictions")} ${row.contradictionCount}`)}
                 />
                 <RelatedNarrativesPanel
+                  locale={locale}
                   items={selectedRelatedHistoricalEvents}
                   onSelectEvent={(eventId) => void selectEvent(eventId)}
                 />
                 <NarrativeClusterPanel
+                  locale={locale}
                   cluster={selectedNarrativeCluster}
                   members={selectedNarrativeClusterMembers}
                   notes={selectedNarrativeClusterNotes}
@@ -1346,7 +1867,7 @@ export function IntelligenceModule() {
                   onOpenClusterInbox={(clusterId) => void selectNarrativeCluster(clusterId)}
                   onNoteClick={() => {
                     if (!selectedNarrativeCluster) return;
-                    void addOperatorNoteAction("narrative_cluster", selectedNarrativeCluster.id, "narrative cluster");
+                    void addOperatorNoteAction("narrative_cluster", selectedNarrativeCluster.id, text(locale, "서사 클러스터", "narrative cluster"));
                   }}
                   onReviewStateChange={(clusterId, state) => void updateReviewStateForNarrativeCluster(clusterId, state)}
                   reviewBusyState={
@@ -1356,35 +1877,38 @@ export function IntelligenceModule() {
                   }
                 />
                 <TemporalNarrativeLedgerPanel
+                  locale={locale}
                   items={selectedTemporalNarrativeLedger}
                   onSelectEvent={(eventId) => void selectEvent(eventId)}
                 />
                 <ClaimGraphPanel
+                  locale={locale}
                   graph={selectedEventGraph}
-                  onNoteClick={(linkedClaimId) => void addOperatorNoteAction("linked_claim", linkedClaimId, "linked claim")}
+                  onNoteClick={(linkedClaimId) => void addOperatorNoteAction("linked_claim", linkedClaimId, text(locale, "연결 클레임", "linked claim"))}
                   onReviewStateChange={(linkedClaimId, state) => void updateReviewStateForLinkedClaim(linkedClaimId, state)}
                   busyKey={busyKey}
                 />
                 {selectedEventDetail && selectedLinkedClaims.length > 0 ? (
                   <ScopeActionBlock
-                    title="Linked Claim Notes"
+                    locale={locale}
+                    title={locale === "ko" ? "연결된 클레임 메모" : "Linked Claim Notes"}
                     items={selectedLinkedClaims.slice(0, 6).map((row) => ({
                       id: row.id,
                       label: `${row.canonicalSubject} ${row.canonicalPredicate} ${row.canonicalObject}`,
-                      meta: `family ${row.predicateFamily} · non-social ${row.nonSocialSourceCount} · contradictions ${row.contradictionCount} · review ${row.reviewState}`,
+                      meta: `${text(locale, "패밀리", "family")} ${row.predicateFamily} · ${text(locale, "비소셜", "non-social")} ${row.nonSocialSourceCount} · ${text(locale, "반박", "contradictions")} ${row.contradictionCount} · ${text(locale, "검토", "review")} ${reviewStateLabel(row.reviewState, locale)}`,
                       detail:
                         [
-                          `bucket ${formatDateTime(row.timeBucketStart)} ~ ${formatDateTime(row.timeBucketEnd)}`,
-                          `support ${formatDateTime(row.lastSupportedAt)}`,
-                          `contradict ${formatDateTime(row.lastContradictedAt)}`,
+                          `${text(locale, "버킷", "bucket")} ${formatDateTime(row.timeBucketStart)} ~ ${formatDateTime(row.timeBucketEnd)}`,
+                          `${text(locale, "지지", "support")} ${formatDateTime(row.lastSupportedAt)}`,
+                          `${text(locale, "반박", "contradict")} ${formatDateTime(row.lastContradictedAt)}`,
                           row.reviewReason || row.reviewOwner || row.reviewResolvedAt
-                            ? `reason ${row.reviewReason ?? "—"} · owner ${row.reviewOwner ?? "—"} · resolved ${formatDateTime(row.reviewResolvedAt)}`
+                            ? `${text(locale, "사유", "reason")} ${row.reviewReason ?? "—"} · ${text(locale, "담당", "owner")} ${row.reviewOwner ?? "—"} · ${text(locale, "해결", "resolved")} ${formatDateTime(row.reviewResolvedAt)}`
                             : null,
                         ]
                           .filter((value): value is string => Boolean(value))
                           .join(" · "),
                       noteBusy: busyKey === `operator-note:create:linked_claim:${row.id}`,
-                      onNoteClick: () => void addOperatorNoteAction("linked_claim", row.id, "linked claim"),
+                      onNoteClick: () => void addOperatorNoteAction("linked_claim", row.id, text(locale, "연결 클레임", "linked claim")),
                       reviewState: row.reviewState,
                       onReviewStateChange: (state) => void updateReviewStateForLinkedClaim(row.id, state),
                       reviewBusyState: busyKey?.startsWith(`linked-claim-review:${row.id}:`) ? busyKey.split(":")[2] as EventReviewState : null,
@@ -1392,31 +1916,34 @@ export function IntelligenceModule() {
                   />
                 ) : null}
                 <DetailBlock
-                  title="Claim Links"
-                  items={(selectedEventDetail?.claimLinks ?? []).map((row) => `${row.relation} · linked ${row.linkedClaimId.slice(0, 8)} · signal ${row.signalId.slice(0, 8)} · confidence ${row.confidence.toFixed(2)} · strength ${row.linkStrength.toFixed(2)}`)}
+                  title={locale === "ko" ? "클레임 링크" : "Claim Links"}
+                  locale={locale}
+                  items={(selectedEventDetail?.claimLinks ?? []).map((row) => `${graphRelationLabel(row.relation, locale)} · ${text(locale, "연결", "linked")} ${row.linkedClaimId.slice(0, 8)} · ${text(locale, "신호", "signal")} ${row.signalId.slice(0, 8)} · ${text(locale, "신뢰도", "confidence")} ${row.confidence.toFixed(2)} · ${text(locale, "강도", "strength")} ${row.linkStrength.toFixed(2)}`)}
                 />
                 <DetailBlock
-                  title="Hypothesis Ledger"
+                  title={locale === "ko" ? "가설 원장" : "Hypothesis Ledger"}
+                  locale={locale}
                   items={(selectedHypothesisDetail?.ledgerEntries ?? []).map((row) => {
                     const summary = hypothesisEvidenceSummaryMap.get(row.hypothesisId);
                     const supportStrength = summary ? summary.support_strength.toFixed(2) : "0.00";
                     const contradictStrength = summary ? summary.contradict_strength.toFixed(2) : "0.00";
-                    return `${row.kind} · ${row.title} · ${row.confidence.toFixed(2)} · ${row.status} · support ${summary?.support_count ?? 0}/${supportStrength} · contradict ${summary?.contradict_count ?? 0}/${contradictStrength} · edge +${summary?.support_edge_count ?? 0}/${summary?.graph_support_strength?.toFixed?.(2) ?? "0.00"} · edge -${summary?.contradict_edge_count ?? 0}/${summary?.graph_contradict_strength?.toFixed?.(2) ?? "0.00"}`;
+                    return `${hypothesisKindLabel(row.kind, locale)} · ${row.title} · ${row.confidence.toFixed(2)} · ${genericStatusLabel(row.status, locale)} · ${text(locale, "지지", "support")} ${summary?.support_count ?? 0}/${supportStrength} · ${text(locale, "반박", "contradict")} ${summary?.contradict_count ?? 0}/${contradictStrength} · ${text(locale, "엣지", "edge")} +${summary?.support_edge_count ?? 0}/${summary?.graph_support_strength?.toFixed?.(2) ?? "0.00"} · ${text(locale, "엣지", "edge")} -${summary?.contradict_edge_count ?? 0}/${summary?.graph_contradict_strength?.toFixed?.(2) ?? "0.00"}`;
                   })}
                 />
                 {selectedHypothesisDetail && selectedHypothesisDetail.ledgerEntries.length > 0 ? (
                   <ScopeActionBlock
-                    title="Hypothesis Notes"
+                    locale={locale}
+                    title={locale === "ko" ? "가설 메모" : "Hypothesis Notes"}
                     items={selectedHypothesisDetail.ledgerEntries.slice(0, 6).map((row) => ({
                       id: row.id,
-                      label: `${row.kind} · ${row.title}`,
-                      meta: `${row.confidence.toFixed(2)} · ${row.status} · review ${row.reviewState}`,
+                      label: `${hypothesisKindLabel(row.kind, locale)} · ${row.title}`,
+                      meta: `${row.confidence.toFixed(2)} · ${genericStatusLabel(row.status, locale)} · ${text(locale, "검토", "review")} ${reviewStateLabel(row.reviewState, locale)}`,
                       detail:
                         row.reviewReason || row.reviewOwner || row.reviewResolvedAt
-                          ? `reason ${row.reviewReason ?? "—"} · owner ${row.reviewOwner ?? "—"} · resolved ${formatDateTime(row.reviewResolvedAt)}`
+                          ? `${text(locale, "사유", "reason")} ${row.reviewReason ?? "—"} · ${text(locale, "담당", "owner")} ${row.reviewOwner ?? "—"} · ${text(locale, "해결", "resolved")} ${formatDateTime(row.reviewResolvedAt)}`
                           : null,
                       noteBusy: busyKey === `operator-note:create:hypothesis:${row.id}`,
-                      onNoteClick: () => void addOperatorNoteAction("hypothesis", row.id, "hypothesis"),
+                      onNoteClick: () => void addOperatorNoteAction("hypothesis", row.id, text(locale, "가설", "hypothesis")),
                       reviewState: row.reviewState,
                       onReviewStateChange: (state) => void updateReviewStateForHypothesis(row.id, state),
                       reviewBusyState: busyKey?.startsWith(`hypothesis-review:${row.id}:`) ? busyKey.split(":")[2] as EventReviewState : null,
@@ -1424,57 +1951,63 @@ export function IntelligenceModule() {
                   />
                 ) : null}
                 <DetailBlock
-                  title="Evidence Links"
-                  items={(selectedHypothesisDetail?.evidenceLinks ?? []).map((row) => `${row.relation} · hypothesis ${row.hypothesisId.slice(0, 8)} · claim ${row.linkedClaimId?.slice(0, 8) ?? "—"} · strength ${(row.evidenceStrength ?? 0).toFixed(2)}`)}
+                  title={locale === "ko" ? "근거 링크" : "Evidence Links"}
+                  locale={locale}
+                  items={(selectedHypothesisDetail?.evidenceLinks ?? []).map((row) => `${graphRelationLabel(row.relation, locale)} · ${text(locale, "가설", "hypothesis")} ${row.hypothesisId.slice(0, 8)} · ${text(locale, "클레임", "claim")} ${row.linkedClaimId?.slice(0, 8) ?? "—"} · ${text(locale, "강도", "strength")} ${(row.evidenceStrength ?? 0).toFixed(2)}`)}
                 />
                 <div className="grid gap-4 lg:grid-cols-3">
                   <DetailBlock
-                    title="Invalidation Ledger"
-                    items={(selectedHypothesisDetail?.invalidationEntries ?? []).map((row) => `${row.title} · ${row.description} · ${row.status} · ${formatDateTime(row.updatedAt)}`)}
+                    title={locale === "ko" ? "무효화 원장" : "Invalidation Ledger"}
+                    locale={locale}
+                    items={(selectedHypothesisDetail?.invalidationEntries ?? []).map((row) => `${row.title} · ${row.description} · ${genericStatusLabel(row.status, locale)} · ${formatDateTime(row.updatedAt)}`)}
                   />
                   <DetailBlock
-                    title="Expected Signal Ledger"
-                    items={(selectedHypothesisDetail?.expectedSignalEntries ?? []).map((row) => `${row.signalKey} · ${row.description} · ${row.status} · ${formatDateTime(row.dueAt)}`)}
+                    title={locale === "ko" ? "예상 신호 원장" : "Expected Signal Ledger"}
+                    locale={locale}
+                    items={(selectedHypothesisDetail?.expectedSignalEntries ?? []).map((row) => `${row.signalKey} · ${row.description} · ${genericStatusLabel(row.status, locale)} · ${formatDateTime(row.dueAt)}`)}
                   />
                   <DetailBlock
-                    title="Outcome Ledger"
-                    items={(selectedHypothesisDetail?.outcomeEntries ?? []).map((row) => `${row.status} · ${row.summary} · ${formatDateTime(row.createdAt)}`)}
+                    title={locale === "ko" ? "결과 원장" : "Outcome Ledger"}
+                    locale={locale}
+                    items={(selectedHypothesisDetail?.outcomeEntries ?? []).map((row) => `${genericStatusLabel(row.status, locale)} · ${row.summary} · ${formatDateTime(row.createdAt)}`)}
                   />
                 </div>
                 <div className="grid gap-4 lg:grid-cols-2">
                   <DetailBlock
-                    title="Primary Drift"
+                    title={locale === "ko" ? "주 가설 드리프트" : "Primary Drift"}
+                    locale={locale}
                     items={[
                       selectedLedgerDrift.primaryLatest
-                        ? `latest · ${selectedLedgerDrift.primaryLatest.title} · ${selectedLedgerDrift.primaryLatest.confidence.toFixed(2)} · ${formatDateTime(selectedLedgerDrift.primaryLatest.updatedAt)}`
-                        : "No primary ledger entry",
+                        ? `${text(locale, "최신", "latest")} · ${selectedLedgerDrift.primaryLatest.title} · ${selectedLedgerDrift.primaryLatest.confidence.toFixed(2)} · ${formatDateTime(selectedLedgerDrift.primaryLatest.updatedAt)}`
+                        : text(locale, "주 가설 원장 항목 없음", "No primary ledger entry"),
                       selectedLedgerDrift.primaryPrevious
-                        ? `previous · ${selectedLedgerDrift.primaryPrevious.title} · ${selectedLedgerDrift.primaryPrevious.confidence.toFixed(2)} · ${formatDateTime(selectedLedgerDrift.primaryPrevious.updatedAt)}`
-                        : "No previous primary entry",
+                        ? `${text(locale, "이전", "previous")} · ${selectedLedgerDrift.primaryPrevious.title} · ${selectedLedgerDrift.primaryPrevious.confidence.toFixed(2)} · ${formatDateTime(selectedLedgerDrift.primaryPrevious.updatedAt)}`
+                        : text(locale, "이전 주 가설 원장 항목 없음", "No previous primary entry"),
                       selectedLedgerDrift.primaryDelta !== null
-                        ? `delta · ${selectedLedgerDrift.primaryDelta >= 0 ? "+" : ""}${selectedLedgerDrift.primaryDelta.toFixed(2)}`
-                        : "delta · —",
+                        ? `${text(locale, "변화", "delta")} · ${selectedLedgerDrift.primaryDelta >= 0 ? "+" : ""}${selectedLedgerDrift.primaryDelta.toFixed(2)}`
+                        : `${text(locale, "변화", "delta")} · —`,
                     ]}
                   />
                   <DetailBlock
-                    title="Counter Drift"
+                    title={locale === "ko" ? "대안 가설 드리프트" : "Counter Drift"}
+                    locale={locale}
                     items={[
                       selectedLedgerDrift.counterLatest
-                        ? `latest · ${selectedLedgerDrift.counterLatest.title} · ${selectedLedgerDrift.counterLatest.confidence.toFixed(2)} · ${formatDateTime(selectedLedgerDrift.counterLatest.updatedAt)}`
-                        : "No counter ledger entry",
+                        ? `${text(locale, "최신", "latest")} · ${selectedLedgerDrift.counterLatest.title} · ${selectedLedgerDrift.counterLatest.confidence.toFixed(2)} · ${formatDateTime(selectedLedgerDrift.counterLatest.updatedAt)}`
+                        : text(locale, "대안 가설 원장 항목 없음", "No counter ledger entry"),
                       selectedLedgerDrift.counterPrevious
-                        ? `previous · ${selectedLedgerDrift.counterPrevious.title} · ${selectedLedgerDrift.counterPrevious.confidence.toFixed(2)} · ${formatDateTime(selectedLedgerDrift.counterPrevious.updatedAt)}`
-                        : "No previous counter entry",
+                        ? `${text(locale, "이전", "previous")} · ${selectedLedgerDrift.counterPrevious.title} · ${selectedLedgerDrift.counterPrevious.confidence.toFixed(2)} · ${formatDateTime(selectedLedgerDrift.counterPrevious.updatedAt)}`
+                        : text(locale, "이전 대안 가설 원장 항목 없음", "No previous counter entry"),
                       selectedLedgerDrift.counterDelta !== null
-                        ? `delta · ${selectedLedgerDrift.counterDelta >= 0 ? "+" : ""}${selectedLedgerDrift.counterDelta.toFixed(2)}`
-                        : "delta · —",
+                        ? `${text(locale, "변화", "delta")} · ${selectedLedgerDrift.counterDelta >= 0 ? "+" : ""}${selectedLedgerDrift.counterDelta.toFixed(2)}`
+                        : `${text(locale, "변화", "delta")} · —`,
                     ]}
                   />
                 </div>
 
                 <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                   <div className="mb-3 flex items-center justify-between">
-                    <h3 className="text-xs font-mono uppercase tracking-[0.2em] text-white/60">Execution Candidates</h3>
+                    <h3 className="text-xs font-mono uppercase tracking-[0.2em] text-white/60">{locale === "ko" ? "실행 후보" : "Execution Candidates"}</h3>
                     <span className="text-xs text-white/40">{selectedEvent.executionCandidates.length}</span>
                   </div>
                   <div className="space-y-2">
@@ -1483,11 +2016,11 @@ export function IntelligenceModule() {
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <p className="text-sm font-medium text-white">{candidate.title}</p>
-                            <p className="mt-1 text-xs text-white/55">{candidate.executionMode} · {candidate.status} · {candidate.riskBand}</p>
+                            <p className="mt-1 text-xs text-white/55">{candidate.executionMode} · {executionStatusLabel(candidate.status, locale)} · {candidate.riskBand}</p>
                             <p className="mt-2 text-xs leading-5 text-white/65">{candidate.summary}</p>
                             {readBlockedReason(candidate) ? (
                               <p className="mt-2 text-[11px] text-amber-200/85">
-                                blocked reason · {readBlockedReason(candidate)}
+                                {text(locale, "차단 사유", "blocked reason")} · {readBlockedReason(candidate)}
                               </p>
                             ) : null}
                           </div>
@@ -1497,7 +2030,7 @@ export function IntelligenceModule() {
                             disabled={candidate.status === "executed" || busyKey === "action:execute"}
                             className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-xs text-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            <Play size={12} /> Run
+                            <Play size={12} /> {text(locale, "실행", "Run")}
                           </button>
                         </div>
                       </div>
@@ -1506,35 +2039,39 @@ export function IntelligenceModule() {
                 </div>
 
                 <div className="grid gap-4 lg:grid-cols-2">
-                  <DetailBlock title="Deliberations" items={selectedEvent.deliberations.map((row) => `${row.status} · ${row.executionStance} · ${row.weakestLink}`)} />
-                  <DetailBlock title="Outcome Snapshot" items={selectedEvent.outcomes.map((row) => `${row.status} · ${row.summary}`)} />
+                  <DetailBlock title={locale === "ko" ? "토론 결과" : "Deliberations"} locale={locale} items={selectedEvent.deliberations.map((row) => `${genericStatusLabel(row.status, locale)} · ${executionStatusLabel(row.executionStance, locale)} · ${row.weakestLink}`)} />
+                  <DetailBlock title={locale === "ko" ? "결과 스냅샷" : "Outcome Snapshot"} locale={locale} items={selectedEvent.outcomes.map((row) => `${genericStatusLabel(row.status, locale)} · ${row.summary}`)} />
                 </div>
                 <div className="grid gap-4 lg:grid-cols-2">
-                  <DetailBlock title="Bridge Dispatch Log" items={(selectedEventDetail?.bridgeDispatches ?? []).map((row) => `${row.kind} · ${row.status} · ${row.targetId ?? "no target"}`)} />
-                  <DetailBlock title="Execution Audit" items={(selectedEventDetail?.executionAudit ?? []).map((row) => `${row.status} · ${row.actionName ?? "unknown"} · ${row.summary}`)} />
+                  <DetailBlock title={locale === "ko" ? "브리지 디스패치 로그" : "Bridge Dispatch Log"} locale={locale} items={(selectedEventDetail?.bridgeDispatches ?? []).map((row) => `${bridgeKindLabel(row.kind, locale)} · ${genericStatusLabel(row.status, locale)} · ${row.targetId ?? text(locale, "대상 없음", "no target")}`)} />
+                  <DetailBlock title={locale === "ko" ? "실행 감사 로그" : "Execution Audit"} locale={locale} items={(selectedEventDetail?.executionAudit ?? []).map((row) => `${genericStatusLabel(row.status, locale)} · ${row.actionName ?? text(locale, "알수없음", "unknown")} · ${row.summary}`)} />
                 </div>
-                <DetailBlock title="Operator Notes" items={(selectedEventDetail?.operatorNotes ?? []).map((row) => `${formatDateTime(row.createdAt)} · ${row.scope} · ${row.note}`)} />
+                <DetailBlock title={locale === "ko" ? "운영자 메모" : "Operator Notes"} items={(selectedEventDetail?.operatorNotes ?? []).map((row) => `${formatDateTime(row.createdAt)} · ${row.scope} · ${row.note}`)} />
               </div>
             )}
-          </section>
+          </CollapsiblePanel>
         </div>
 
         <section className="grid gap-6 xl:grid-cols-2">
-          <section className="rounded-3xl border border-white/10 bg-black/35 p-4 backdrop-blur-xl">
-            <h2 className="mb-3 text-sm font-mono uppercase tracking-[0.25em] text-white/70">Recent Runs</h2>
+          <CollapsiblePanel
+            title={copy.sections.recentRuns}
+            meta={`${runtime.semanticBacklog.pendingCount} pending · ${runtime.semanticBacklog.failedCount} failed`}
+            open={sectionOpen.recentRuns}
+            onToggle={() => toggleSection("recentRuns")}
+          >
             <div className="mb-4 grid gap-3 md:grid-cols-3">
-              <MiniMetric label="pending" value={String(runtime.semanticBacklog.pendingCount)} />
-              <MiniMetric label="processing" value={String(runtime.semanticBacklog.processingCount)} />
-              <MiniMetric label="failed" value={String(runtime.semanticBacklog.failedCount)} />
+              <MiniMetric label={text(locale, "대기", "pending")} value={String(runtime.semanticBacklog.pendingCount)} />
+              <MiniMetric label={text(locale, "처리중", "processing")} value={String(runtime.semanticBacklog.processingCount)} />
+              <MiniMetric label={text(locale, "실패", "failed")} value={String(runtime.semanticBacklog.failedCount)} />
             </div>
             <div className="mb-4 grid gap-3 md:grid-cols-3">
-              <MiniMetric label="degraded sources" value={String(degradedSources.length)} />
-              <MiniMetric label="robots blocked" value={String(robotsBlockedSources.length)} />
-              <MiniMetric label="429 throttled" value={String(throttledSources.length)} />
+              <MiniMetric label={text(locale, "저하된 소스", "degraded sources")} value={String(degradedSources.length)} />
+              <MiniMetric label={text(locale, "robots 차단", "robots blocked")} value={String(robotsBlockedSources.length)} />
+              <MiniMetric label={text(locale, "429 제한", "429 throttled")} value={String(throttledSources.length)} />
             </div>
             {runtime.semanticBacklog.latestFailedSignalIds.length > 0 ? (
               <div className="mb-4 rounded-2xl border border-amber-400/20 bg-amber-500/10 p-3">
-                <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-amber-100/80">Failed Signals</p>
+                <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-amber-100/80">{text(locale, "실패한 신호", "Failed Signals")}</p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {runtime.semanticBacklog.latestFailedSignalIds.map((signalId) => (
                     <button
@@ -1553,21 +2090,22 @@ export function IntelligenceModule() {
               {runs.map((run) => (
                 <div key={run.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm text-white">{run.status}</p>
+                    <p className="text-sm text-white">{genericStatusLabel(run.status, locale)}</p>
                     <p className="text-xs text-white/45">{formatDateTime(run.startedAt)}</p>
                   </div>
                   <p className="mt-1 text-xs text-white/55">
-                    fetched {run.fetchedCount} · docs {run.storedDocumentCount} · signals {run.signalCount} · events {run.clusteredEventCount}
+                    {text(locale, "수집", "fetched")} {run.fetchedCount} · {text(locale, "문서", "docs")} {run.storedDocumentCount} · {text(locale, "신호", "signals")} {run.signalCount} · {text(locale, "이벤트", "events")} {run.clusteredEventCount}
                   </p>
                   <p className="mt-1 text-[11px] text-white/40">
-                    failed {run.failedCount} · exec {run.executionCount}
+                    {text(locale, "실패", "failed")} {run.failedCount} · {text(locale, "실행", "exec")} {run.executionCount}
                   </p>
                 </div>
-              ))}
-            </div>
-          </section>
+                ))}
+              </div>
+          </CollapsiblePanel>
 
           <RuntimeControlPlanePanel
+            locale={locale}
             runtime={runtime}
             workspaceId={workspaceId}
             busyKey={busyKey}
@@ -1576,15 +2114,104 @@ export function IntelligenceModule() {
         </section>
 
         <section className="grid gap-6 xl:grid-cols-4">
-          <section className="rounded-3xl border border-white/10 bg-black/35 p-4 backdrop-blur-xl">
-            <h2 className="mb-3 text-sm font-mono uppercase tracking-[0.25em] text-white/70">Fetch Failures</h2>
+          <CollapsiblePanel
+            title={copy.sections.fetchFailures}
+            meta={`${fetchFailures.length} ${text(locale, "최근 실패", "recent failures")} · ${staleEvents.length} ${text(locale, "오염 후보", "stale candidates")}`}
+            open={sectionOpen.fetchFailures}
+            onToggle={() => toggleSection("fetchFailures")}
+          >
+            <div className="mb-4 rounded-2xl border border-amber-400/20 bg-amber-500/10 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-amber-100/80">{text(locale, "오염 이벤트 정비", "Stale Event Maintenance")}</p>
+                  <p className="mt-1 text-xs text-amber-100/70">
+                    {text(locale, "예전 폴백 산출물로 보이는 인텔리전스 이벤트를 선별해서 정리 후 다시 빌드한다.", "Select suspicious fallback-generated intelligence events and rebuild them cleanly.")}
+                  </p>
+                  <p className="mt-1 text-[11px] text-amber-100/55">
+                    {text(locale, "자동 워커", "auto worker")}: {runtime.staleMaintenanceWorker?.enabled ? text(locale, "켜짐", "on") : text(locale, "꺼짐", "off")}
+                    {runtime.staleMaintenanceWorker?.lastRun
+                      ? ` · ${text(locale, "재빌드", "rebuilt")} ${runtime.staleMaintenanceWorker.lastRun.rebuiltCount}/${runtime.staleMaintenanceWorker.lastRun.attemptedCount} · ${formatDateTime(runtime.staleMaintenanceWorker.lastRun.finishedAt)}`
+                      : ` · ${text(locale, "아직 없음", "not yet")}`}
+                  </p>
+                </div>
+                <span className="text-xs text-amber-100/75">{staleEvents.length} {text(locale, "후보", "candidates")}</span>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void bulkRebuildStaleEventsAction()}
+                  disabled={staleEvents.length === 0 || busyKey === "stale-bulk-rebuild"}
+                  className="rounded-lg border border-amber-300/30 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {busyKey === "stale-bulk-rebuild" ? "..." : locale === "ko" ? `상위 ${Math.min(5, staleEvents.length)}개 일괄 재빌드` : `top ${Math.min(5, staleEvents.length)} bulk rebuild`}
+                </button>
+              </div>
+              {lastBulkRebuildResult ? (
+                <div className="mt-3 rounded-xl border border-cyan-400/20 bg-cyan-500/10 px-3 py-2 text-[11px] text-cyan-100/85">
+                  {text(locale, "시도", "attempted")} {lastBulkRebuildResult.attemptedEventIds.length} · {text(locale, "재빌드", "rebuilt")} {lastBulkRebuildResult.rebuiltCount} · {text(locale, "실패", "failed")} {lastBulkRebuildResult.failedCount}
+                </div>
+              ) : null}
+              {lastRebuildResult ? (
+                <div className="mt-3 rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-100/85">
+                  {text(locale, "재빌드", "rebuilt")} {lastRebuildResult.previousEventId.slice(0, 8)} → {lastRebuildResult.rebuiltEventId?.slice(0, 8) ?? text(locale, "없음", "none")} ·
+                  {text(locale, "재대기", "requeued")} {lastRebuildResult.requeuedSignalIds.length} · {text(locale, "삭제된 클레임", "deleted claims")} {lastRebuildResult.deletedLinkedClaimIds.length}
+                </div>
+              ) : null}
+              <div className="mt-3 space-y-2">
+                {staleEvents.length === 0 ? (
+                  <p className="text-xs text-amber-100/60">{text(locale, "의심스러운 오염 이벤트가 없다.", "No suspicious stale events detected.")}</p>
+                ) : (
+                  staleEvents.slice(0, 6).map((event) => (
+                    <div key={event.eventId} className="rounded-xl border border-white/10 bg-black/20 px-3 py-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm text-white">{event.title}</p>
+                          <p className="mt-1 text-[11px] text-white/45">
+                            {text(locale, "오염 점수", "stale")} {event.staleScore} · {text(locale, "클레임", "claims")} {event.linkedClaimCount} · {text(locale, "일반 비율", "generic")} {Math.round(event.genericPredicateRatio * 100)}% · {text(locale, "엣지", "edges")} {event.edgeCount}
+                          </p>
+                          <p className="mt-1 text-[11px] text-white/35">
+                            {text(locale, "그래프", "graph")} +{event.graphSupportScore.toFixed(2)} / -{event.graphContradictionScore.toFixed(2)} · {text(locale, "건전도", "health")} {event.linkedClaimHealthScore.toFixed(2)} · {text(locale, "갱신", "updated")} {formatDateTime(event.updatedAt)}
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {event.reasons.map((reason) => (
+                              <span
+                                key={`${event.eventId}-${reason}`}
+                                className="rounded-full border border-amber-300/20 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-100/80"
+                              >
+                                {reason}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="flex flex-col gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void selectEvent(event.eventId)}
+                            className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-white/70"
+                          >
+                            {text(locale, "열기", "open")}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void rebuildEventAction(event.eventId)}
+                            className="rounded-lg border border-amber-300/30 bg-amber-500/10 px-2.5 py-1 text-[11px] text-amber-100"
+                          >
+                            {busyKey === `event-rebuild:${event.eventId}` ? "..." : text(locale, "정리 후 재빌드", "clean rebuild")}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
             {fetchFailureSummary.length > 0 ? (
               <div className="mb-4 grid gap-3 md:grid-cols-2">
                 {fetchFailureSummary.slice(0, 4).map((row) => (
                   <div key={`${row.sourceId ?? "unknown"}-${row.sourceName}`} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-sm text-white">{row.sourceName}</p>
-                      <span className="text-xs text-white/45">{row.total} failures</span>
+                      <span className="text-xs text-white/45">{row.total} {text(locale, "실패", "failures")}</span>
                     </div>
                     <p className="mt-1 text-[11px] text-white/45">{formatDateTime(row.latestAt)}</p>
                     <p className="mt-2 text-xs text-white/60">{row.reasons.slice(0, 2).join(" / ")}</p>
@@ -1618,7 +2245,7 @@ export function IntelligenceModule() {
             ) : null}
             <div className="space-y-2">
               {fetchFailures.length === 0 ? (
-                <p className="text-xs text-white/40">No recent fetch failures</p>
+                <p className="text-xs text-white/40">{text(locale, "최근 수집 실패가 없다.", "No recent fetch failures")}</p>
               ) : (
                 fetchFailures.map((failure) => (
                   <div key={failure.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-xs text-white/70">
@@ -1627,7 +2254,7 @@ export function IntelligenceModule() {
                         <p className="text-white/85">{failure.url}</p>
                         <p className="mt-1 text-white/45">{failure.reason}</p>
                         <p className="mt-1 text-[11px] text-white/35">
-                          {formatDateTime(failure.createdAt)} · status {failure.statusCode ?? "—"} · robots {failure.blockedByRobots ? "blocked" : "ok"}
+                          {formatDateTime(failure.createdAt)} · {text(locale, "상태", "status")} {failure.statusCode ?? "—"} · robots {failure.blockedByRobots ? text(locale, "차단", "blocked") : text(locale, "정상", "ok")}
                         </p>
                       </div>
                       {failure.sourceId ? (
@@ -1639,7 +2266,7 @@ export function IntelligenceModule() {
                           }}
                           className="rounded-lg border border-cyan-400/20 bg-cyan-400/10 px-2.5 py-1 text-[11px] text-cyan-100"
                         >
-                          재시도
+                          {text(locale, "재시도", "retry")}
                         </button>
                       ) : null}
                     </div>
@@ -1647,32 +2274,43 @@ export function IntelligenceModule() {
                 ))
               )}
             </div>
-          </section>
+          </CollapsiblePanel>
 
-          <section className="rounded-3xl border border-white/10 bg-black/35 p-4 backdrop-blur-xl">
-            <h2 className="mb-3 text-sm font-mono uppercase tracking-[0.25em] text-white/70">Review Queue</h2>
+          <CollapsiblePanel
+            title={copy.sections.reviewQueue}
+            meta={`${reviewQueue.length} ${text(locale, "항목", "items")}`}
+            open={sectionOpen.reviewQueue}
+            onToggle={() => toggleSection("reviewQueue")}
+          >
             <div className="space-y-2">
               {reviewQueue
                 .map((event) => (
-                  <button
+                  <div
                     key={event.id}
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     onClick={() => void selectEvent(event.id)}
+                    onKeyDown={(keyboardEvent) => {
+                      if (keyboardEvent.key === "Enter" || keyboardEvent.key === " ") {
+                        keyboardEvent.preventDefault();
+                        void selectEvent(event.id);
+                      }
+                    }}
                     className="w-full rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-left"
                   >
                     <p className="text-sm text-white">{event.title}</p>
                     <p className="mt-1 text-[11px] text-white/45">
-                      review {event.reviewState} · contradictions {event.contradictionCount} · non-social {event.nonSocialCorroborationCount} · deliberation {event.deliberationStatus}
+                      {text(locale, "검토", "review")} {reviewStateLabel(event.reviewState, locale)} · {text(locale, "반박", "contradictions")} {event.contradictionCount} · {text(locale, "비소셜", "non-social")} {event.nonSocialCorroborationCount} · {text(locale, "토론", "deliberation")} {executionStatusLabel(event.deliberationStatus, locale)}
                     </p>
                     <p className="mt-1 text-[11px] text-white/35">
-                      priority {event.operatorPriorityScore ?? 0} · structurality {event.structuralityScore.toFixed(2)} · actionability {event.actionabilityScore.toFixed(2)} · claim health {event.linkedClaimHealthScore.toFixed(2)} · time {event.timeCoherenceScore.toFixed(2)} · risk {event.riskBand}
+                      {text(locale, "우선순위", "priority")} {event.operatorPriorityScore ?? 0} · {text(locale, "구조성", "structurality")} {event.structuralityScore.toFixed(2)} · {text(locale, "행동성", "actionability")} {event.actionabilityScore.toFixed(2)} · {text(locale, "클레임 건전도", "claim health")} {event.linkedClaimHealthScore.toFixed(2)} · {text(locale, "시간", "time")} {event.timeCoherenceScore.toFixed(2)} · {text(locale, "위험", "risk")} {event.riskBand}
                     </p>
                     <p className="mt-1 text-[11px] text-white/35">
-                      temporal {event.temporalNarrativeState ?? "new"} · recurring {(event.recurringNarrativeScore ?? 0).toFixed(2)} · related {event.relatedHistoricalEventCount ?? 0}
+                      {text(locale, "시간축", "temporal")} {narrativeStateLabel(event.temporalNarrativeState ?? "new", locale)} · {text(locale, "반복", "recurring")} {(event.recurringNarrativeScore ?? 0).toFixed(2)} · {text(locale, "연결", "related")} {event.relatedHistoricalEventCount ?? 0}
                     </p>
                     {event.reviewReason || event.reviewOwner || event.reviewResolvedAt ? (
                       <p className="mt-1 text-[11px] text-white/35">
-                        reason {event.reviewReason ?? "—"} · owner {event.reviewOwner ?? "—"} · resolved {formatDateTime(event.reviewResolvedAt)}
+                        {text(locale, "사유", "reason")} {event.reviewReason ?? "—"} · {text(locale, "담당", "owner")} {event.reviewOwner ?? "—"} · {text(locale, "해결", "resolved")} {formatDateTime(event.reviewResolvedAt)}
                       </p>
                     ) : null}
                     <div className="mt-2 flex flex-wrap gap-2">
@@ -1690,19 +2328,20 @@ export function IntelligenceModule() {
                               : "border-white/10 bg-black/20 text-white/50"
                           }`}
                         >
-                          {busyKey === `review:${event.id}:${state}` ? "..." : state}
-                        </button>
-                      ))}
+                        {busyKey === `review:${event.id}:${state}` ? "..." : reviewStateLabel(state, locale)}
+                      </button>
+                    ))}
                     </div>
-                  </button>
+                  </div>
                 ))}
               {reviewQueue.length === 0 ? (
-                <p className="text-xs text-white/40">No items in review queue</p>
+                <p className="text-xs text-white/40">{copy.noReviewItems}</p>
               ) : null}
             </div>
-          </section>
+          </CollapsiblePanel>
 
           <NarrativeClusterInboxPanel
+            locale={locale}
             clusters={clusterInbox}
             selectedClusterId={selectedNarrativeClusterId}
             selectedClusterDetail={selectedNarrativeClusterDetail}
@@ -1723,67 +2362,75 @@ export function IntelligenceModule() {
             onSelectCluster={(clusterId) => void selectNarrativeCluster(clusterId)}
             onSelectEvent={(eventId) => void selectEvent(eventId)}
             onReviewStateChange={(clusterId, state) => void updateReviewStateForNarrativeCluster(clusterId, state)}
-            onNoteClick={(clusterId, eventId) => void addOperatorNoteAction("narrative_cluster", clusterId, "narrative cluster", eventId)}
+            onNoteClick={(clusterId, eventId) => void addOperatorNoteAction("narrative_cluster", clusterId, text(locale, "서사 클러스터", "narrative cluster"), eventId)}
+            panelTitle={copy.sections.clusterInbox}
+            panelOpen={sectionOpen.clusterInbox}
+            onTogglePanel={() => toggleSection("clusterInbox")}
           />
 
-          <section className="rounded-3xl border border-white/10 bg-black/35 p-4 backdrop-blur-xl">
-            <h2 className="mb-3 text-sm font-mono uppercase tracking-[0.25em] text-white/70">Hypothesis Drift</h2>
+          <CollapsiblePanel
+            title={copy.sections.hypothesisDrift}
+            meta={`${driftQueue.length} ${text(locale, "항목", "items")}`}
+            open={sectionOpen.hypothesisDrift}
+            onToggle={() => toggleSection("hypothesisDrift")}
+          >
             <div className="space-y-2">
               {driftQueue.map(({ event, primary, counter, drift, absentCount, invalidatedCount }) => (
                 <div key={event.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-xs text-white/70">
                   <p className="text-white">{event.title}</p>
                   <p className="mt-1 text-white/45">
-                    primary {primary.toFixed(2)} · counter {counter.toFixed(2)} · drift {drift.toFixed(2)}
+                    {text(locale, "주 가설", "primary")} {primary.toFixed(2)} · {text(locale, "대안", "counter")} {counter.toFixed(2)} · {text(locale, "드리프트", "drift")} {drift.toFixed(2)}
                   </p>
                   <p className="mt-1 text-[11px] text-white/35">
-                    absence {absentCount} · invalidated {invalidatedCount} · contradictions {event.contradictionCount} · non-social {event.nonSocialCorroborationCount} · health {event.linkedClaimHealthScore.toFixed(2)} · time {event.timeCoherenceScore.toFixed(2)} · temporal {event.temporalNarrativeState ?? "new"}
+                    {text(locale, "부재", "absence")} {absentCount} · {text(locale, "무효화", "invalidated")} {invalidatedCount} · {text(locale, "반박", "contradictions")} {event.contradictionCount} · {text(locale, "비소셜", "non-social")} {event.nonSocialCorroborationCount} · {text(locale, "건전도", "health")} {event.linkedClaimHealthScore.toFixed(2)} · {text(locale, "시간", "time")} {event.timeCoherenceScore.toFixed(2)} · {text(locale, "시간축", "temporal")} {narrativeStateLabel(event.temporalNarrativeState ?? "new", locale)}
                   </p>
                 </div>
               ))}
             </div>
-          </section>
+          </CollapsiblePanel>
         </section>
 
-        <section className="rounded-3xl border border-white/10 bg-black/35 p-4 backdrop-blur-xl">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-mono uppercase tracking-[0.25em] text-white/70">Execution Inbox</h2>
-            <span className="text-xs text-white/45">{filteredExecutionInbox.length} visible / {executionInbox.length} total</span>
-          </div>
-          <div className="mb-4 grid gap-3 md:grid-cols-3">
-            <label className="space-y-1 text-[11px] text-white/55">
-              <span className="font-mono uppercase tracking-[0.18em]">Status</span>
+          <CollapsiblePanel
+            title={copy.sections.executionInbox}
+            meta={`${filteredExecutionInbox.length} ${text(locale, "표시", "visible")} / ${executionInbox.length} ${text(locale, "전체", "total")}`}
+          open={sectionOpen.executionInbox}
+          onToggle={() => toggleSection("executionInbox")}
+        >
+            <div className="mb-4 grid gap-3 md:grid-cols-3">
+              <label className="space-y-1 text-[11px] text-white/55">
+              <span className="font-mono uppercase tracking-[0.18em]">{text(locale, "상태", "Status")}</span>
               <select
                 value={executionStatusFilter}
                 onChange={(event) => setExecutionStatusFilter(event.target.value as typeof executionStatusFilter)}
                 className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
               >
-                <option value="all" className="bg-slate-900">all</option>
-                <option value="pending" className="bg-slate-900">pending</option>
-                <option value="blocked" className="bg-slate-900">blocked</option>
-                <option value="executed" className="bg-slate-900">executed</option>
+                <option value="all" className="bg-slate-900">{text(locale, "전체", "all")}</option>
+                <option value="pending" className="bg-slate-900">{text(locale, "대기", "pending")}</option>
+                <option value="blocked" className="bg-slate-900">{text(locale, "차단", "blocked")}</option>
+                <option value="executed" className="bg-slate-900">{text(locale, "실행됨", "executed")}</option>
               </select>
             </label>
             <label className="space-y-1 text-[11px] text-white/55">
-              <span className="font-mono uppercase tracking-[0.18em]">Blocked Reason</span>
+              <span className="font-mono uppercase tracking-[0.18em]">{text(locale, "차단 사유", "Blocked Reason")}</span>
               <select
                 value={executionBlockedReasonFilter}
                 onChange={(event) => setExecutionBlockedReasonFilter(event.target.value)}
                 className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
               >
-                <option value="all" className="bg-slate-900">all</option>
+                <option value="all" className="bg-slate-900">{text(locale, "전체", "all")}</option>
                 {executionBlockedReasons.map((reason) => (
                   <option key={reason} value={reason} className="bg-slate-900">{reason}</option>
                 ))}
               </select>
             </label>
             <label className="space-y-1 text-[11px] text-white/55">
-              <span className="font-mono uppercase tracking-[0.18em]">Tool</span>
+              <span className="font-mono uppercase tracking-[0.18em]">{text(locale, "도구", "Tool")}</span>
               <select
                 value={executionToolFilter}
                 onChange={(event) => setExecutionToolFilter(event.target.value)}
                 className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
               >
-                <option value="all" className="bg-slate-900">all</option>
+                <option value="all" className="bg-slate-900">{text(locale, "전체", "all")}</option>
                 {executionTools.map((tool) => (
                   <option key={tool} value={tool} className="bg-slate-900">{tool}</option>
                 ))}
@@ -1792,7 +2439,7 @@ export function IntelligenceModule() {
           </div>
           <div className="grid gap-3 xl:grid-cols-2">
             {filteredExecutionInbox.length === 0 ? (
-              <p className="text-xs text-white/40">No execution candidates</p>
+              <p className="text-xs text-white/40">{copy.noExecutionCandidates}</p>
             ) : (
               filteredExecutionInbox.map(({ event, candidate }) => (
                 <div key={candidate.id} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
@@ -1800,23 +2447,23 @@ export function IntelligenceModule() {
                     <div>
                       <p className="text-sm text-white">{candidate.title}</p>
                       <p className="mt-1 text-[11px] text-white/45">
-                        {event.title} · {candidate.status} · {candidate.executionMode} · {candidate.riskBand}
+                        {event.title} · {executionStatusLabel(candidate.status, locale)} · {candidate.executionMode} · {candidate.riskBand}
                       </p>
                       <p className="mt-1 text-[11px] text-white/35">
-                        priority {event.operatorPriorityScore ?? 0} · structurality {event.structuralityScore.toFixed(2)} · actionability {event.actionabilityScore.toFixed(2)} · time {event.timeCoherenceScore.toFixed(2)}
+                        {text(locale, "우선순위", "priority")} {event.operatorPriorityScore ?? 0} · {text(locale, "구조성", "structurality")} {event.structuralityScore.toFixed(2)} · {text(locale, "행동성", "actionability")} {event.actionabilityScore.toFixed(2)} · {text(locale, "시간", "time")} {event.timeCoherenceScore.toFixed(2)}
                       </p>
                       {readBlockedReason(candidate) ? (
                         <p className="mt-1 text-[11px] text-amber-200/85">
-                          blocked reason · {readBlockedReason(candidate)}
+                          {text(locale, "차단 사유", "blocked reason")} · {readBlockedReason(candidate)}
                         </p>
                       ) : null}
                       <p className="mt-1 text-[11px] text-white/35">
-                        tool {typeof candidate.payload?.mcp_tool_name === "string" ? candidate.payload.mcp_tool_name : "unknown"} · connector{" "}
+                        {text(locale, "도구", "tool")} {typeof candidate.payload?.mcp_tool_name === "string" ? candidate.payload.mcp_tool_name : text(locale, "알수없음", "unknown")} · {text(locale, "커넥터", "connector")}{" "}
                         {typeof candidate.payload?.connector_capability === "object" &&
                         candidate.payload.connector_capability !== null &&
                         typeof (candidate.payload.connector_capability as { connector_id?: unknown }).connector_id === "string"
                           ? (candidate.payload.connector_capability as { connector_id: string }).connector_id
-                          : "builtin"}
+                          : text(locale, "내장", "builtin")}
                       </p>
                       <p className="mt-2 text-xs text-white/65">{candidate.summary}</p>
                     </div>
@@ -1826,7 +2473,7 @@ export function IntelligenceModule() {
                         onClick={() => void selectEvent(event.id)}
                         className="rounded-lg border border-white/10 bg-black/20 px-2.5 py-1 text-[11px] text-white/70"
                       >
-                        열기
+                        {text(locale, "열기", "Open")}
                       </button>
                       <button
                         type="button"
@@ -1834,21 +2481,21 @@ export function IntelligenceModule() {
                         disabled={candidate.status === "executed" || busyKey === "action:execute"}
                         className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1 text-[11px] text-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        {busyKey === "action:execute" ? "..." : "실행"}
+                        {busyKey === "action:execute" ? "..." : text(locale, "실행", "Run")}
                       </button>
                     </div>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2 text-[10px] text-white/45">
-                    <span>review {event.reviewState}</span>
-                    <span>deliberation {event.deliberationStatus}</span>
-                    <span>claims {event.linkedClaimCount}</span>
-                    <span>contradictions {event.contradictionCount}</span>
+                    <span>{text(locale, "검토", "review")} {reviewStateLabel(event.reviewState, locale)}</span>
+                    <span>{text(locale, "토론", "deliberation")} {executionStatusLabel(event.deliberationStatus, locale)}</span>
+                    <span>{text(locale, "클레임", "claims")} {event.linkedClaimCount}</span>
+                    <span>{text(locale, "반박", "contradictions")} {event.contradictionCount}</span>
                   </div>
                 </div>
               ))
             )}
           </div>
-        </section>
+        </CollapsiblePanel>
       </div>
     </main>
   );
@@ -1864,6 +2511,44 @@ function StatCard({ icon, label, value, note }: { icon: React.ReactNode; label: 
       <p className="mt-3 text-2xl font-semibold text-white">{value}</p>
       <p className="mt-1 text-xs text-white/45">{note}</p>
     </div>
+  );
+}
+
+function CollapsiblePanel({
+  title,
+  meta,
+  open,
+  onToggle,
+  children,
+  className = "",
+}: {
+  title: string;
+  meta?: string | null;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  const isKorean =
+    typeof document !== "undefined" ? document.documentElement.lang.startsWith("ko") : true;
+  return (
+    <section className={`rounded-3xl border border-white/10 bg-black/35 p-4 backdrop-blur-xl ${className}`.trim()}>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-base font-semibold tracking-tight text-white">{title}</h2>
+          {meta ? <p className="mt-1 text-xs text-white/45">{meta}</p> : null}
+        </div>
+        <button
+          type="button"
+          onClick={onToggle}
+          className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/70 hover:border-white/20 hover:bg-white/[0.08]"
+        >
+          {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          {open ? (isKorean ? "접기" : "Hide") : isKorean ? "펼치기" : "Show"}
+        </button>
+      </div>
+      {open ? children : null}
+    </section>
   );
 }
 
@@ -1889,21 +2574,33 @@ function MiniMetric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function DetailBlock({ title, items }: { title: string; items: string[] }) {
+function DetailBlock({ title, items, locale }: { title: string; items: string[]; locale?: "ko" | "en" }) {
+  const [open, setOpen] = useState(true);
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-      <h3 className="mb-3 text-xs font-mono uppercase tracking-[0.2em] text-white/60">{title}</h3>
-      <div className="space-y-2">
-        {items.length === 0 ? (
-          <p className="text-xs text-white/40">No data</p>
-        ) : (
-          items.map((item, index) => (
-            <div key={`${title}-${index}`} className="rounded-xl border border-white/8 bg-black/25 px-3 py-2 text-xs leading-5 text-white/70">
-              {item}
-            </div>
-          ))
-        )}
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="text-xs font-mono uppercase tracking-[0.2em] text-white/60">{title}</h3>
+        <button
+          type="button"
+          onClick={() => setOpen((current) => !current)}
+          className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-[11px] text-white/60"
+        >
+          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </button>
       </div>
+      {open ? (
+        <div className="space-y-2">
+          {items.length === 0 ? (
+            <p className="text-xs text-white/40">{locale === "ko" ? "데이터 없음" : "No data"}</p>
+          ) : (
+            items.map((item, index) => (
+              <div key={`${title}-${index}`} className="rounded-xl border border-white/8 bg-black/25 px-3 py-2 text-xs leading-5 text-white/70">
+                {item}
+              </div>
+            ))
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1911,8 +2608,10 @@ function DetailBlock({ title, items }: { title: string; items: string[] }) {
 function ScopeActionBlock({
   title,
   items,
+  locale,
 }: {
   title: string;
+  locale: "ko" | "en";
   items: Array<{
     id: string;
     label: string;
@@ -1925,71 +2624,85 @@ function ScopeActionBlock({
     onReviewStateChange?: (state: EventReviewState) => void;
   }>;
 }) {
+  const [open, setOpen] = useState(true);
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-      <h3 className="mb-3 text-xs font-mono uppercase tracking-[0.2em] text-white/60">{title}</h3>
-      <div className="space-y-2">
-        {items.length === 0 ? (
-          <p className="text-xs text-white/40">No targets</p>
-        ) : (
-          items.map((item) => (
-            <div key={item.id} className="rounded-xl border border-white/8 bg-black/25 px-3 py-3 text-xs text-white/70">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-white/85">{item.label}</p>
-                  <p className="mt-1 text-[11px] text-white/45">{item.meta}</p>
-                  {item.detail ? (
-                    <p className="mt-1 text-[11px] text-white/35">{item.detail}</p>
-                  ) : null}
-                </div>
-                <div className="flex flex-col items-end gap-2">
-                  <button
-                    type="button"
-                    onClick={item.onNoteClick}
-                    className="rounded-lg border border-cyan-400/20 bg-cyan-400/10 px-2.5 py-1 text-[11px] text-cyan-100"
-                  >
-                    {item.noteBusy ? "..." : "메모"}
-                  </button>
-                  {item.onReviewStateChange ? (
-                    <div className="flex flex-wrap justify-end gap-1">
-                      {(["watch", "review", "ignore"] as EventReviewState[]).map((state) => (
-                        <button
-                          key={`${item.id}-${state}`}
-                          type="button"
-                          onClick={() => item.onReviewStateChange?.(state)}
-                          className={`rounded-full border px-2 py-0.5 text-[10px] ${
-                            item.reviewState === state
-                              ? "border-cyan-300/40 bg-cyan-400/10 text-cyan-100"
-                              : "border-white/10 bg-black/20 text-white/50"
-                          }`}
-                        >
-                          {item.reviewBusyState === state ? "..." : state}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="text-xs font-mono uppercase tracking-[0.2em] text-white/60">{title}</h3>
+        <button
+          type="button"
+          onClick={() => setOpen((current) => !current)}
+          className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-[11px] text-white/60"
+        >
+          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </button>
+      </div>
+      {open ? (
+        <div className="space-y-2">
+          {items.length === 0 ? (
+            <p className="text-xs text-white/40">{locale === "ko" ? "대상 없음" : "No targets"}</p>
+          ) : (
+            items.map((item) => (
+              <div key={item.id} className="rounded-xl border border-white/8 bg-black/25 px-3 py-3 text-xs text-white/70">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-white/85">{item.label}</p>
+                    <p className="mt-1 text-[11px] text-white/45">{item.meta}</p>
+                    {item.detail ? (
+                      <p className="mt-1 text-[11px] text-white/35">{item.detail}</p>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-col items-end gap-2">
+                    <button
+                      type="button"
+                      onClick={item.onNoteClick}
+                      className="rounded-lg border border-cyan-400/20 bg-cyan-400/10 px-2.5 py-1 text-[11px] text-cyan-100"
+                    >
+                      {item.noteBusy ? "..." : text(locale, "메모", "Note")}
+                    </button>
+                    {item.onReviewStateChange ? (
+                      <div className="flex flex-wrap justify-end gap-1">
+                        {(["watch", "review", "ignore"] as EventReviewState[]).map((state) => (
+                          <button
+                            key={`${item.id}-${state}`}
+                            type="button"
+                            onClick={() => item.onReviewStateChange?.(state)}
+                            className={`rounded-full border px-2 py-0.5 text-[10px] ${
+                              item.reviewState === state
+                                ? "border-cyan-300/40 bg-cyan-400/10 text-cyan-100"
+                                : "border-white/10 bg-black/20 text-white/50"
+                            }`}
+                          >
+                            {item.reviewBusyState === state ? "..." : reviewStateLabel(state, locale)}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))
-        )}
-      </div>
+            ))
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
 
 function RelatedNarrativesPanel({
+  locale,
   items,
   onSelectEvent,
 }: {
+  locale: "ko" | "en";
   items: IntelligenceRelatedHistoricalEventSummary[];
   onSelectEvent: (eventId: string) => void;
 }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="text-xs font-mono uppercase tracking-[0.2em] text-white/60">Related Narratives</h3>
-        <span className="text-[11px] text-white/40">{items.length} related</span>
+        <h3 className="text-xs font-mono uppercase tracking-[0.2em] text-white/60">{text(locale, "연결 서사", "Related Narratives")}</h3>
+        <span className="text-[11px] text-white/40">{items.length} {text(locale, "연결", "related")}</span>
       </div>
       <div className="space-y-2">
         {items.length === 0 ? (
@@ -2004,10 +2717,10 @@ function RelatedNarrativesPanel({
             >
               <p className="text-white/85">{item.title}</p>
               <p className="mt-1 text-[11px] text-white/45">
-                {item.relation} · score {item.score.toFixed(2)} · {item.daysDelta ?? "—"}d ago
+                {temporalRelationLabel(item.relation, locale)} · {text(locale, "점수", "score")} {item.score.toFixed(2)} · {item.daysDelta ?? "—"}{locale === "ko" ? "일 전" : "d ago"}
               </p>
               <p className="mt-1 text-[11px] text-white/35">
-                domain {item.topDomainId ?? "unknown"} · graph +{item.graphSupportScore.toFixed(2)} / -{item.graphContradictionScore.toFixed(2)} / hot {item.graphHotspotCount} · time {item.timeCoherenceScore.toFixed(2)}
+                {text(locale, "도메인", "domain")} {domainLabel(item.topDomainId, locale)} · {text(locale, "그래프", "graph")} +{item.graphSupportScore.toFixed(2)} / -{item.graphContradictionScore.toFixed(2)} / {text(locale, "핫스팟", "hot")} {item.graphHotspotCount} · {text(locale, "시간", "time")} {item.timeCoherenceScore.toFixed(2)}
               </p>
             </button>
           ))
@@ -2018,6 +2731,7 @@ function RelatedNarrativesPanel({
 }
 
 function NarrativeClusterPanel({
+  locale,
   cluster,
   members,
   notes,
@@ -2027,6 +2741,7 @@ function NarrativeClusterPanel({
   onReviewStateChange,
   reviewBusyState,
 }: {
+  locale: "ko" | "en";
   cluster: IntelligenceNarrativeClusterRecord | null;
   members: IntelligenceNarrativeClusterMemberSummary[];
   notes: OperatorNoteRecord[];
@@ -2039,8 +2754,8 @@ function NarrativeClusterPanel({
   return (
     <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-mono uppercase tracking-[0.2em] text-white/70">Narrative Cluster</h3>
-        <span className="text-[11px] text-white/45">{cluster ? `${cluster.eventCount} events` : "none"}</span>
+        <h3 className="text-sm font-mono uppercase tracking-[0.2em] text-white/70">{text(locale, "서사 클러스터", "Narrative Cluster")}</h3>
+        <span className="text-[11px] text-white/45">{cluster ? `${cluster.eventCount} ${text(locale, "이벤트", "events")}` : text(locale, "없음", "none")}</span>
       </div>
       {!cluster ? (
         <p className="text-sm text-white/45">반복 서사 클러스터가 아직 형성되지 않았다.</p>
@@ -2049,16 +2764,16 @@ function NarrativeClusterPanel({
           <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
             <p className="text-sm font-medium text-white">{cluster.title}</p>
             <p className="mt-2 text-[11px] text-white/50">
-              {cluster.state} · {cluster.eventFamily} · domain {cluster.topDomainId ?? "unknown"} · recurring score {cluster.latestRecurringScore.toFixed(2)} · hotspot events {cluster.hotspotEventCount}
+              {narrativeStateLabel(cluster.state, locale)} · {eventFamilyLabel(cluster.eventFamily, locale)} · {text(locale, "도메인", "domain")} {domainLabel(cluster.topDomainId, locale)} · {text(locale, "반복 점수", "recurring score")} {cluster.latestRecurringScore.toFixed(2)} · {text(locale, "핫스팟 이벤트", "hotspot events")} {cluster.hotspotEventCount}
             </p>
             <p className="mt-1 text-[11px] text-white/40">
-              recurring {cluster.recurringEventCount} · diverging {cluster.divergingEventCount} · supportive {cluster.supportiveHistoryCount} · last {formatDateTime(cluster.lastEventAt)}
+              {text(locale, "반복", "recurring")} {cluster.recurringEventCount} · {text(locale, "분기", "diverging")} {cluster.divergingEventCount} · {text(locale, "지지 이력", "supportive")} {cluster.supportiveHistoryCount} · {text(locale, "최근", "last")} {formatDateTime(cluster.lastEventAt)}
             </p>
             <p className="mt-1 text-[11px] text-white/35">
-              drift {cluster.driftScore.toFixed(2)} · support {cluster.supportScore.toFixed(2)} · contradiction {cluster.contradictionScore.toFixed(2)} · time {cluster.timeCoherenceScore.toFixed(2)}
+              {text(locale, "드리프트", "drift")} {cluster.driftScore.toFixed(2)} · {text(locale, "지지", "support")} {cluster.supportScore.toFixed(2)} · {text(locale, "반박", "contradiction")} {cluster.contradictionScore.toFixed(2)} · {text(locale, "시간", "time")} {cluster.timeCoherenceScore.toFixed(2)}
             </p>
             <p className="mt-1 text-[11px] text-white/35">
-              review {cluster.reviewState} · reason {cluster.reviewReason ?? "—"} · owner {cluster.reviewOwner ?? "—"} · resolved {formatDateTime(cluster.reviewResolvedAt)}
+              {text(locale, "검토", "review")} {reviewStateLabel(cluster.reviewState, locale)} · {text(locale, "사유", "reason")} {cluster.reviewReason ?? "—"} · {text(locale, "담당", "owner")} {cluster.reviewOwner ?? "—"} · {text(locale, "해결", "resolved")} {formatDateTime(cluster.reviewResolvedAt)}
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               {(["watch", "review", "ignore"] as EventReviewState[]).map((state) => (
@@ -2072,7 +2787,7 @@ function NarrativeClusterPanel({
                       : "border-white/10 bg-white/[0.04] text-white/65"
                   }`}
                 >
-                  {reviewBusyState === state ? "..." : state}
+                  {reviewBusyState === state ? "..." : reviewStateLabel(state, locale)}
                 </button>
               ))}
               <button
@@ -2080,26 +2795,26 @@ function NarrativeClusterPanel({
                 onClick={() => onOpenClusterInbox(cluster.id)}
                 className="rounded-lg border border-violet-300/25 bg-violet-400/10 px-2.5 py-1 text-[11px] text-violet-100"
               >
-                cluster inbox
+                {text(locale, "클러스터 인박스", "cluster inbox")}
               </button>
               <button
                 type="button"
                 onClick={onNoteClick}
                 className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-white/70"
               >
-                cluster note
+                {text(locale, "클러스터 메모", "cluster note")}
               </button>
             </div>
           </div>
           {notes.length > 0 ? (
             <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
-              <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/55">Cluster Notes</p>
+              <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/55">{text(locale, "클러스터 메모", "Cluster Notes")}</p>
               <div className="mt-2 space-y-2">
                 {notes.slice(0, 4).map((note) => (
                   <div key={note.id} className="rounded-xl border border-white/8 bg-black/25 px-3 py-2 text-[11px] text-white/65">
                     <p>{note.note}</p>
                     <p className="mt-1 text-white/35">
-                      by {note.userId} · {formatDateTime(note.createdAt)}
+                      {text(locale, "작성자", "by")} {note.userId} · {formatDateTime(note.createdAt)}
                     </p>
                   </div>
                 ))}
@@ -2107,12 +2822,12 @@ function NarrativeClusterPanel({
             </div>
           ) : null}
           <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
-            <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/55">Cluster Drift</p>
+            <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/55">{text(locale, "클러스터 드리프트", "Cluster Drift")}</p>
             <p className="mt-2 text-[11px] text-white/45">
-              divergence pressure {cluster.divergingEventCount}/{cluster.eventCount} · hotspot pressure {cluster.hotspotEventCount}/{cluster.eventCount}
+              {text(locale, "분기 압력", "divergence pressure")} {cluster.divergingEventCount}/{cluster.eventCount} · {text(locale, "핫스팟 압력", "hotspot pressure")} {cluster.hotspotEventCount}/{cluster.eventCount}
             </p>
             <p className="mt-1 text-[11px] text-white/35">
-              recurring support {cluster.recurringEventCount + cluster.supportiveHistoryCount} · contradiction score {cluster.contradictionScore.toFixed(2)}
+              {text(locale, "반복 지지", "recurring support")} {cluster.recurringEventCount + cluster.supportiveHistoryCount} · {text(locale, "반박 점수", "contradiction score")} {cluster.contradictionScore.toFixed(2)}
             </p>
           </div>
           <div className="space-y-2">
@@ -2124,14 +2839,14 @@ function NarrativeClusterPanel({
                 className="w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-left hover:border-white/20"
               >
                 <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono text-white/50">
-                  <span>{member.isLatest ? "latest" : member.relation}</span>
-                  <span>score {member.score.toFixed(2)}</span>
-                  <span>days Δ {member.daysDelta ?? "—"}</span>
-                  <span>time {member.timeCoherenceScore.toFixed(2)}</span>
+                  <span>{member.isLatest ? text(locale, "최신", "latest") : temporalRelationLabel(member.relation, locale)}</span>
+                  <span>{text(locale, "점수", "score")} {member.score.toFixed(2)}</span>
+                  <span>{text(locale, "일 차이", "days Δ")} {member.daysDelta ?? "—"}</span>
+                  <span>{text(locale, "시간", "time")} {member.timeCoherenceScore.toFixed(2)}</span>
                 </div>
                 <p className="mt-2 text-sm font-medium text-white">{member.title}</p>
                 <p className="mt-2 text-[11px] text-white/45">
-                  graph +{member.graphSupportScore.toFixed(2)} / -{member.graphContradictionScore.toFixed(2)} / hot {member.graphHotspotCount} · state {member.temporalNarrativeState ?? "unknown"} · last {formatDateTime(member.lastEventAt)}
+                  {text(locale, "그래프", "graph")} +{member.graphSupportScore.toFixed(2)} / -{member.graphContradictionScore.toFixed(2)} / {text(locale, "핫스팟", "hot")} {member.graphHotspotCount} · {text(locale, "상태", "state")} {narrativeStateLabel(member.temporalNarrativeState ?? "unknown", locale)} · {text(locale, "최근", "last")} {formatDateTime(member.lastEventAt)}
                 </p>
               </button>
             ))}
@@ -2301,11 +3016,13 @@ function summarizeRuntimeBindingChanges(
 }
 
 function RuntimeControlPlanePanel({
+  locale,
   runtime,
   workspaceId,
   busyKey,
   onSaveBindings,
 }: {
+  locale: "ko" | "en";
   runtime: RuntimeSnapshot;
   workspaceId: string | null;
   busyKey: string | null;
@@ -2424,36 +3141,36 @@ function RuntimeControlPlanePanel({
 
   return (
     <section className="rounded-3xl border border-white/10 bg-black/35 p-4 backdrop-blur-xl">
-      <h2 className="mb-3 text-sm font-mono uppercase tracking-[0.25em] text-white/70">Model Control Plane</h2>
+      <h2 className="mb-3 text-sm font-mono uppercase tracking-[0.25em] text-white/70">{text(locale, "모델 제어판", "Model Control Plane")}</h2>
       <div className="grid gap-4 md:grid-cols-2">
         <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-          <p className="text-xs font-mono uppercase tracking-[0.2em] text-white/50">Registry</p>
+          <p className="text-xs font-mono uppercase tracking-[0.2em] text-white/50">{text(locale, "레지스트리", "Registry")}</p>
           <p className="mt-2 text-2xl font-semibold text-white">{runtime.models.length}</p>
-          <p className="mt-1 text-xs text-white/50">available model entries</p>
+          <p className="mt-1 text-xs text-white/50">{text(locale, "사용 가능한 모델 항목", "available model entries")}</p>
         </div>
         <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-          <p className="text-xs font-mono uppercase tracking-[0.2em] text-white/50">Alias Bindings</p>
+          <p className="text-xs font-mono uppercase tracking-[0.2em] text-white/50">{text(locale, "별칭 바인딩", "Alias Bindings")}</p>
           <p className="mt-2 text-2xl font-semibold text-white">{runtime.aliases.workspace.length + runtime.aliases.global.length}</p>
-          <p className="mt-1 text-xs text-white/50">workspace + global bindings</p>
+          <p className="mt-1 text-xs text-white/50">{text(locale, "워크스페이스 + 글로벌 바인딩", "workspace + global bindings")}</p>
         </div>
       </div>
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-          <p className="text-xs font-mono uppercase tracking-[0.2em] text-white/50">Provider Health</p>
+          <p className="text-xs font-mono uppercase tracking-[0.2em] text-white/50">{text(locale, "프로바이더 상태", "Provider Health")}</p>
           <div className="mt-3 space-y-2">
             {runtime.providerHealth.length === 0 ? (
-              <p className="text-xs text-white/40">No provider health telemetry yet</p>
+              <p className="text-xs text-white/40">{text(locale, "프로바이더 상태 텔레메트리가 아직 없다.", "No provider health telemetry yet")}</p>
             ) : (
               runtime.providerHealth.map((row) => (
                 <div key={row.provider} className="rounded-xl border border-white/8 bg-black/20 px-3 py-2 text-xs text-white/70">
                   <div className="flex items-center justify-between gap-3">
-                    <span className="font-mono text-cyan-200">{row.provider}</span>
+                    <span className="font-mono text-cyan-200">{providerLabel(row.provider, locale)}</span>
                     <span className={row.available ? "text-emerald-200" : "text-amber-200"}>
-                      {row.available ? "available" : "degraded"}
+                      {row.available ? text(locale, "사용 가능", "available") : text(locale, "저하", "degraded")}
                     </span>
                   </div>
                   <p className="mt-1 text-[11px] text-white/45">
-                    failures {row.failureCount} · cooldown {formatDateTime(row.cooldownUntil)} · {row.reasonCode ?? "ok"}
+                    {text(locale, "실패", "failures")} {row.failureCount} · {text(locale, "쿨다운", "cooldown")} {formatDateTime(row.cooldownUntil)} · {row.reasonCode ?? workerStatusLabel("ok", locale)}
                   </p>
                 </div>
               ))
@@ -2461,21 +3178,21 @@ function RuntimeControlPlanePanel({
           </div>
         </div>
         <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-          <p className="text-xs font-mono uppercase tracking-[0.2em] text-white/50">Alias Rollouts</p>
+          <p className="text-xs font-mono uppercase tracking-[0.2em] text-white/50">{text(locale, "별칭 롤아웃", "Alias Rollouts")}</p>
           <div className="mt-3 space-y-2">
             {runtime.rollouts.workspace.concat(runtime.rollouts.global).slice(0, 8).map((rollout) => (
               <div key={rollout.id} className="rounded-xl border border-white/8 bg-black/20 px-3 py-2 text-xs text-white/70">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-mono text-cyan-200">{rollout.alias}</span>
+                  <span className="font-mono text-cyan-200">{capabilityAliasLabel(rollout.alias, locale)}</span>
                   <span className="text-white/40">{formatDateTime(rollout.createdAt)}</span>
                 </div>
                 <p className="mt-1 text-[11px] text-white/45">
-                  {rollout.workspaceId ? "workspace" : "global"} · bindings {rollout.bindingIds.length} · {rollout.note ?? "no note"}
+                  {rollout.workspaceId ? text(locale, "워크스페이스", "workspace") : text(locale, "글로벌", "global")} · {text(locale, "바인딩", "bindings")} {rollout.bindingIds.length} · {rollout.note ?? text(locale, "메모 없음", "no note")}
                 </p>
               </div>
             ))}
             {runtime.rollouts.workspace.length + runtime.rollouts.global.length === 0 ? (
-              <p className="text-xs text-white/40">No rollout history yet</p>
+              <p className="text-xs text-white/40">{text(locale, "롤아웃 이력이 아직 없다.", "No rollout history yet")}</p>
             ) : null}
           </div>
         </div>
@@ -2483,32 +3200,32 @@ function RuntimeControlPlanePanel({
       <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
         <div className="grid gap-3 md:grid-cols-3">
           <label className="space-y-1 text-[11px] text-white/55">
-            <span className="font-mono uppercase tracking-[0.18em]">Alias</span>
+            <span className="font-mono uppercase tracking-[0.18em]">{text(locale, "별칭", "Alias")}</span>
             <select
               value={alias}
               onChange={(event) => setAlias(event.target.value as IntelligenceCapabilityAlias)}
               className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
             >
               {RUNTIME_ALIAS_OPTIONS.map((value) => (
-                <option key={value} value={value} className="bg-slate-900">{value}</option>
+                <option key={value} value={value} className="bg-slate-900">{capabilityAliasLabel(value, locale)}</option>
               ))}
             </select>
           </label>
           <label className="space-y-1 text-[11px] text-white/55">
-            <span className="font-mono uppercase tracking-[0.18em]">Scope</span>
+            <span className="font-mono uppercase tracking-[0.18em]">{text(locale, "범위", "Scope")}</span>
             <select
               value={scope}
               onChange={(event) => setScope(event.target.value as RuntimeBindingScope)}
               className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
             >
-              <option value="workspace" className="bg-slate-900">workspace</option>
-              <option value="global" className="bg-slate-900">global</option>
+              <option value="workspace" className="bg-slate-900">{text(locale, "워크스페이스", "workspace")}</option>
+              <option value="global" className="bg-slate-900">{text(locale, "글로벌", "global")}</option>
             </select>
           </label>
           <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/60">
-            <p className="font-mono uppercase tracking-[0.18em] text-white/40">Diff Preview</p>
-            <p className="mt-2">workspace {workspaceId ?? "—"}</p>
-            <p className="mt-1">baseline {aliasBindings.length} · draft {drafts.length} · {dirty ? "changed" : "clean"}</p>
+            <p className="font-mono uppercase tracking-[0.18em] text-white/40">{text(locale, "변경 미리보기", "Diff Preview")}</p>
+            <p className="mt-2">{text(locale, "워크스페이스", "workspace")} {workspaceId ?? "—"}</p>
+            <p className="mt-1">{text(locale, "기준", "baseline")} {aliasBindings.length} · {text(locale, "초안", "draft")} {drafts.length} · {dirty ? text(locale, "변경됨", "changed") : text(locale, "깨끗함", "clean")}</p>
             <p className="mt-1 text-[11px] text-white/45">
               +{changeSummary.added} / -{changeSummary.removed} / ~{changeSummary.changed} / ={changeSummary.unchanged}
             </p>
@@ -2516,7 +3233,7 @@ function RuntimeControlPlanePanel({
         </div>
         {changeSummary.rows.length > 0 ? (
           <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3">
-            <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/45">Pending Changes</p>
+            <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/45">{text(locale, "대기 변경", "Pending Changes")}</p>
             <div className="mt-2 space-y-2">
               {changeSummary.rows.slice(0, 6).map((row) => (
                 <div key={`${row.kind}-${row.index}-${row.title}`} className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2 text-xs text-white/70">
@@ -2531,7 +3248,7 @@ function RuntimeControlPlanePanel({
                             : "text-amber-200"
                       }
                     >
-                      {row.kind}
+                      {text(locale, row.kind === "added" ? "추가" : row.kind === "removed" ? "제거" : "변경", row.kind)}
                     </span>
                   </div>
                   <p className="mt-1 text-[11px] text-white/45">{row.details.join(" · ")}</p>
@@ -2541,10 +3258,10 @@ function RuntimeControlPlanePanel({
           </div>
         ) : null}
         <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-3">
-          <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/45">Selected Alias Rollouts</p>
+          <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/45">{text(locale, "선택된 별칭 롤아웃", "Selected Alias Rollouts")}</p>
           <div className="mt-2 space-y-2">
             {selectedRollouts.length === 0 ? (
-              <p className="text-xs text-white/40">No rollout history for this alias/scope yet</p>
+              <p className="text-xs text-white/40">{text(locale, "이 별칭/범위의 롤아웃 이력이 아직 없다.", "No rollout history for this alias/scope yet")}</p>
             ) : (
               selectedRollouts.map((rollout) => (
                 <div key={rollout.id} className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2 text-xs text-white/70">
@@ -2553,7 +3270,7 @@ function RuntimeControlPlanePanel({
                     <span className="text-white/40">{formatDateTime(rollout.createdAt)}</span>
                   </div>
                   <p className="mt-1 text-[11px] text-white/45">
-                    {scope} · bindings {rollout.bindingIds.length} · {rollout.note ?? "no note"}
+                    {scope === "workspace" ? text(locale, "워크스페이스", "workspace") : text(locale, "글로벌", "global")} · {text(locale, "바인딩", "bindings")} {rollout.bindingIds.length} · {rollout.note ?? text(locale, "메모 없음", "no note")}
                   </p>
                 </div>
               ))
@@ -2567,7 +3284,7 @@ function RuntimeControlPlanePanel({
               <div key={draft.id} className="rounded-2xl border border-white/10 bg-black/20 p-3">
                 <div className="grid gap-3 lg:grid-cols-4">
                   <label className="space-y-1 text-[11px] text-white/55">
-                    <span className="font-mono uppercase tracking-[0.18em]">Provider</span>
+                    <span className="font-mono uppercase tracking-[0.18em]">{text(locale, "프로바이더", "Provider")}</span>
                     <select
                       value={draft.provider}
                       onChange={(event) => {
@@ -2578,19 +3295,19 @@ function RuntimeControlPlanePanel({
                       className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
                     >
                       {PROVIDER_OPTIONS.map((provider) => (
-                        <option key={provider} value={provider} className="bg-slate-900">{provider}</option>
+                        <option key={provider} value={provider} className="bg-slate-900">{providerLabel(provider, locale)}</option>
                       ))}
                     </select>
                   </label>
                   <label className="space-y-1 text-[11px] text-white/55">
-                    <span className="font-mono uppercase tracking-[0.18em]">Model</span>
+                    <span className="font-mono uppercase tracking-[0.18em]">{text(locale, "모델", "Model")}</span>
                     <select
                       value={draft.modelId}
                       onChange={(event) => updateDraft(index, { modelId: event.target.value })}
                       className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
                     >
                       {availableModelIds.length === 0 ? (
-                        <option value="" className="bg-slate-900">no models</option>
+                        <option value="" className="bg-slate-900">{text(locale, "모델 없음", "no models")}</option>
                       ) : null}
                       {availableModelIds.map((modelId) => (
                         <option key={modelId} value={modelId} className="bg-slate-900">{modelId}</option>
@@ -2598,7 +3315,7 @@ function RuntimeControlPlanePanel({
                     </select>
                   </label>
                   <label className="space-y-1 text-[11px] text-white/55">
-                    <span className="font-mono uppercase tracking-[0.18em]">Weight</span>
+                    <span className="font-mono uppercase tracking-[0.18em]">{text(locale, "가중치", "Weight")}</span>
                     <input
                       type="number"
                       min={0}
@@ -2610,7 +3327,7 @@ function RuntimeControlPlanePanel({
                     />
                   </label>
                   <label className="space-y-1 text-[11px] text-white/55">
-                    <span className="font-mono uppercase tracking-[0.18em]">Canary %</span>
+                    <span className="font-mono uppercase tracking-[0.18em]">{text(locale, "카나리 %", "Canary %")}</span>
                     <input
                       type="number"
                       min={0}
@@ -2624,7 +3341,7 @@ function RuntimeControlPlanePanel({
                 </div>
                 <div className="mt-3 grid gap-3 lg:grid-cols-4">
                   <label className="space-y-1 text-[11px] text-white/55">
-                    <span className="font-mono uppercase tracking-[0.18em]">Fallback Rank</span>
+                    <span className="font-mono uppercase tracking-[0.18em]">{text(locale, "폴백 순위", "Fallback Rank")}</span>
                     <input
                       type="number"
                       min={1}
@@ -2636,7 +3353,7 @@ function RuntimeControlPlanePanel({
                     />
                   </label>
                   <label className="space-y-1 text-[11px] text-white/55">
-                    <span className="font-mono uppercase tracking-[0.18em]">Max Cost</span>
+                    <span className="font-mono uppercase tracking-[0.18em]">{text(locale, "최대 비용", "Max Cost")}</span>
                     <select
                       value={draft.maxCostClass ?? "none"}
                       onChange={(event) =>
@@ -2646,29 +3363,29 @@ function RuntimeControlPlanePanel({
                       }
                       className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
                     >
-                      <option value="none" className="bg-slate-900">none</option>
-                      <option value="free" className="bg-slate-900">free</option>
-                      <option value="low" className="bg-slate-900">low</option>
-                      <option value="standard" className="bg-slate-900">standard</option>
-                      <option value="premium" className="bg-slate-900">premium</option>
+                      <option value="none" className="bg-slate-900">{text(locale, "없음", "none")}</option>
+                      <option value="free" className="bg-slate-900">{text(locale, "무료", "free")}</option>
+                      <option value="low" className="bg-slate-900">{text(locale, "낮음", "low")}</option>
+                      <option value="standard" className="bg-slate-900">{text(locale, "표준", "standard")}</option>
+                      <option value="premium" className="bg-slate-900">{text(locale, "고급", "premium")}</option>
                     </select>
                   </label>
                   <div className="col-span-2 flex flex-wrap items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-white/65">
                     <label className="inline-flex items-center gap-2">
                       <input type="checkbox" checked={draft.isActive} onChange={(event) => updateDraft(index, { isActive: event.target.checked })} />
-                      active
+                      {text(locale, "활성", "active")}
                     </label>
                     <label className="inline-flex items-center gap-2">
                       <input type="checkbox" checked={draft.requiresStructuredOutput} onChange={(event) => updateDraft(index, { requiresStructuredOutput: event.target.checked })} />
-                      structured
+                      {text(locale, "구조화", "structured")}
                     </label>
                     <label className="inline-flex items-center gap-2">
                       <input type="checkbox" checked={draft.requiresToolUse} onChange={(event) => updateDraft(index, { requiresToolUse: event.target.checked })} />
-                      tool use
+                      {text(locale, "툴 사용", "tool use")}
                     </label>
                     <label className="inline-flex items-center gap-2">
                       <input type="checkbox" checked={draft.requiresLongContext} onChange={(event) => updateDraft(index, { requiresLongContext: event.target.checked })} />
-                      long context
+                      {text(locale, "긴 컨텍스트", "long context")}
                     </label>
                   </div>
                 </div>
@@ -2679,7 +3396,7 @@ function RuntimeControlPlanePanel({
                     disabled={drafts.length <= 1}
                     className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-white/70 disabled:cursor-not-allowed disabled:opacity-40"
                   >
-                    remove
+                    {text(locale, "제거", "remove")}
                   </button>
                 </div>
               </div>
@@ -2688,7 +3405,7 @@ function RuntimeControlPlanePanel({
         </div>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
           <div className="text-[11px] text-white/45">
-            수정은 additive rollout로 저장된다. global 편집도 backend 권한 검사를 그대로 탄다.
+            {text(locale, "수정은 additive rollout로 저장된다. global 편집도 backend 권한 검사를 그대로 탄다.", "Changes are saved as additive rollouts. Global edits still use backend permission checks.")}
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -2696,7 +3413,7 @@ function RuntimeControlPlanePanel({
               onClick={addDraft}
               className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] text-white/70"
             >
-              add binding
+              {text(locale, "바인딩 추가", "add binding")}
             </button>
             <button
               type="button"
@@ -2704,7 +3421,7 @@ function RuntimeControlPlanePanel({
               disabled={!workspaceId || !dirty || busyKey === effectiveBusyKey}
               className="rounded-lg border border-cyan-300/40 bg-cyan-400/10 px-3 py-1.5 text-[11px] text-cyan-100 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {busyKey === effectiveBusyKey ? "saving..." : "save bindings"}
+              {busyKey === effectiveBusyKey ? text(locale, "저장중...", "saving...") : text(locale, "바인딩 저장", "save bindings")}
             </button>
           </div>
         </div>
@@ -2714,6 +3431,7 @@ function RuntimeControlPlanePanel({
 }
 
 function NarrativeClusterInboxPanel({
+  locale,
   clusters,
   selectedClusterId,
   selectedClusterDetail,
@@ -2735,7 +3453,11 @@ function NarrativeClusterInboxPanel({
   onSelectEvent,
   onReviewStateChange,
   onNoteClick,
+  panelTitle,
+  panelOpen,
+  onTogglePanel,
 }: {
+  locale: "ko" | "en";
   clusters: IntelligenceNarrativeClusterRecord[];
   selectedClusterId: string | null;
   selectedClusterDetail: SelectedNarrativeClusterDetail | null;
@@ -2757,37 +3479,49 @@ function NarrativeClusterInboxPanel({
   onSelectEvent: (eventId: string) => void;
   onReviewStateChange: (clusterId: string, state: EventReviewState) => void;
   onNoteClick: (clusterId: string, eventId: string | null) => void;
+  panelTitle: string;
+  panelOpen: boolean;
+  onTogglePanel: () => void;
 }) {
   const activeCluster = selectedClusterDetail?.narrativeCluster ?? null;
   const latestClusterLedgerEntry = selectedClusterDetail?.ledgerEntries?.[0] ?? null;
+  const currentClusterTransition = activeCluster?.lastTransition
+    ? {
+        entryType: activeCluster.lastTransition.entry_type,
+        summary: activeCluster.lastTransition.summary,
+        scoreDelta: activeCluster.lastTransition.score_delta,
+        createdAt: activeCluster.lastTransition.created_at,
+      }
+    : latestClusterLedgerEntry;
   return (
-    <section className="rounded-3xl border border-white/10 bg-black/35 p-4 backdrop-blur-xl">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h2 className="text-sm font-mono uppercase tracking-[0.25em] text-white/70">Narrative Cluster Inbox</h2>
-        <span className="text-xs text-white/45">{clusters.length} clusters</span>
-      </div>
+    <CollapsiblePanel
+      title={panelTitle}
+      meta={`${clusters.length} clusters`}
+      open={panelOpen}
+      onToggle={onTogglePanel}
+    >
       <div className="mb-4 grid gap-3 md:grid-cols-2">
         <label className="space-y-1 text-[11px] text-white/55">
-          <span className="font-mono uppercase tracking-[0.18em]">State</span>
+          <span className="font-mono uppercase tracking-[0.18em]">{text(locale, "상태", "State")}</span>
           <select
             value={stateFilter}
             onChange={(event) => onStateFilterChange(event.target.value as "all" | "forming" | "recurring" | "diverging")}
             className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
           >
             {["all", "forming", "recurring", "diverging"].map((value) => (
-              <option key={value} value={value} className="bg-slate-900">{value}</option>
+              <option key={value} value={value} className="bg-slate-900">{value === "all" ? text(locale, "전체", "all") : narrativeStateLabel(value, locale)}</option>
             ))}
           </select>
         </label>
         <label className="space-y-1 text-[11px] text-white/55">
-          <span className="font-mono uppercase tracking-[0.18em]">Review</span>
+          <span className="font-mono uppercase tracking-[0.18em]">{text(locale, "검토", "Review")}</span>
           <select
             value={reviewFilter}
             onChange={(event) => onReviewFilterChange(event.target.value as "all" | EventReviewState)}
             className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none"
           >
             {["all", "watch", "review", "ignore"].map((value) => (
-              <option key={value} value={value} className="bg-slate-900">{value}</option>
+              <option key={value} value={value} className="bg-slate-900">{value === "all" ? text(locale, "전체", "all") : reviewStateLabel(value as EventReviewState, locale)}</option>
             ))}
           </select>
         </label>
@@ -2798,20 +3532,20 @@ function NarrativeClusterInboxPanel({
           onClick={() => onHotspotOnlyChange(!hotspotOnly)}
           className={`rounded-full border px-3 py-1 ${hotspotOnly ? "border-rose-300/40 bg-rose-500/10 text-rose-100" : "border-white/10 bg-white/[0.04] text-white/60"}`}
         >
-          hotspot only
+          {text(locale, "핫스팟만", "hotspot only")}
         </button>
         <button
           type="button"
           onClick={() => onBlockedOnlyChange(!blockedOnly)}
           className={`rounded-full border px-3 py-1 ${blockedOnly ? "border-amber-300/40 bg-amber-500/10 text-amber-100" : "border-white/10 bg-white/[0.04] text-white/60"}`}
         >
-          blocked only
+          {text(locale, "차단만", "blocked only")}
         </button>
       </div>
       <div className="grid gap-4 xl:grid-cols-[minmax(0,280px)_minmax(0,1fr)]">
         <div className="space-y-2">
           {clusters.length === 0 ? (
-            <p className="text-xs text-white/40">No narrative clusters</p>
+            <p className="text-xs text-white/40">{text(locale, "서사 클러스터가 없다.", "No narrative clusters")}</p>
           ) : (
             clusters.map((cluster) => {
               const active = cluster.id === selectedClusterId;
@@ -2824,17 +3558,23 @@ function NarrativeClusterInboxPanel({
                 >
                   <p className="text-sm text-white">{cluster.title}</p>
                   <p className="mt-1 text-[11px] text-white/45">
-                    priority {cluster.clusterPriorityScore} · {cluster.state} · review {cluster.reviewState}
+                    {text(locale, "우선순위", "priority")} {cluster.clusterPriorityScore} · {narrativeStateLabel(cluster.state, locale)} · {text(locale, "검토", "review")} {reviewStateLabel(cluster.reviewState, locale)}
                   </p>
                   <p className="mt-1 text-[11px] text-white/35">
-                    drift {cluster.driftScore.toFixed(2)} · contradiction {cluster.contradictionScore.toFixed(2)} · hotspot {cluster.hotspotEventCount} · blocked {cluster.recentExecutionBlockedCount}
+                    {text(locale, "드리프트", "drift")} {cluster.driftScore.toFixed(2)} · {text(locale, "반박", "contradiction")} {cluster.contradictionScore.toFixed(2)} · {text(locale, "핫스팟", "hotspot")} {cluster.hotspotEventCount} · {text(locale, "차단", "blocked")} {cluster.recentExecutionBlockedCount}
                   </p>
                   <p className="mt-1 text-[11px] text-white/35">
-                    recur trend {cluster.recurringStrengthTrend.toFixed(2)} · div trend {cluster.divergenceTrend.toFixed(2)} · decay {cluster.supportDecayScore.toFixed(2)} · accel {cluster.contradictionAcceleration.toFixed(2)}
+                    {text(locale, "반복 추세", "recur trend")} {cluster.recurringStrengthTrend.toFixed(2)} · {text(locale, "분기 추세", "div trend")} {cluster.divergenceTrend.toFixed(2)} · {text(locale, "감쇠", "decay")} {cluster.supportDecayScore.toFixed(2)} · {text(locale, "가속", "accel")} {cluster.contradictionAcceleration.toFixed(2)}
                   </p>
-                  <p className="mt-1 text-[11px] text-white/30">
-                    last transition {formatDateTime(cluster.lastLedgerAt)}
-                  </p>
+                  {cluster.lastTransition ? (
+                    <p className="mt-1 text-[11px] text-white/30">
+                      {temporalRelationLabel(cluster.lastTransition.entry_type, locale)} · {cluster.lastTransition.summary} · {formatDateTime(cluster.lastTransition.created_at)}
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-[11px] text-white/30">
+                      {text(locale, "최근 전이", "last transition")} {formatDateTime(cluster.lastLedgerAt)}
+                    </p>
+                  )}
                 </button>
               );
             })
@@ -2842,9 +3582,9 @@ function NarrativeClusterInboxPanel({
         </div>
         <div className="space-y-3">
           {!activeCluster ? (
-            <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-6 text-sm text-white/45">
-              cluster를 선택하면 timeline, ledger, recent event, graph hotspot을 볼 수 있다.
-            </div>
+              <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-6 text-sm text-white/45">
+              {text(locale, "cluster를 선택하면 timeline, ledger, recent event, graph hotspot을 볼 수 있다.", "Select a cluster to inspect its timeline, ledger, recent events, and graph hotspots.")}
+              </div>
           ) : (
             <>
               <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
@@ -2852,19 +3592,19 @@ function NarrativeClusterInboxPanel({
                   <div>
                     <p className="text-sm font-medium text-white">{activeCluster.title}</p>
                     <p className="mt-1 text-[11px] text-white/45">
-                      priority {activeCluster.clusterPriorityScore} · {activeCluster.state} · review {activeCluster.reviewState}
+                      {text(locale, "우선순위", "priority")} {activeCluster.clusterPriorityScore} · {narrativeStateLabel(activeCluster.state, locale)} · {text(locale, "검토", "review")} {reviewStateLabel(activeCluster.reviewState, locale)}
                     </p>
                     <p className="mt-1 text-[11px] text-white/35">
-                      drift {activeCluster.driftScore.toFixed(2)} · support {activeCluster.supportScore.toFixed(2)} · contradiction {activeCluster.contradictionScore.toFixed(2)} · time {activeCluster.timeCoherenceScore.toFixed(2)}
+                      {text(locale, "드리프트", "drift")} {activeCluster.driftScore.toFixed(2)} · {text(locale, "지지", "support")} {activeCluster.supportScore.toFixed(2)} · {text(locale, "반박", "contradiction")} {activeCluster.contradictionScore.toFixed(2)} · {text(locale, "시간", "time")} {activeCluster.timeCoherenceScore.toFixed(2)}
                     </p>
                     <p className="mt-1 text-[11px] text-white/35">
-                      events {activeCluster.eventCount} · recurring {activeCluster.recurringEventCount} · diverging {activeCluster.divergingEventCount} · blocked {activeCluster.recentExecutionBlockedCount}
+                      {text(locale, "이벤트", "events")} {activeCluster.eventCount} · {text(locale, "반복", "recurring")} {activeCluster.recurringEventCount} · {text(locale, "분기", "diverging")} {activeCluster.divergingEventCount} · {text(locale, "차단", "blocked")} {activeCluster.recentExecutionBlockedCount}
                     </p>
                     <p className="mt-1 text-[11px] text-white/35">
-                      recur trend {activeCluster.recurringStrengthTrend.toFixed(2)} · div trend {activeCluster.divergenceTrend.toFixed(2)} · support decay {activeCluster.supportDecayScore.toFixed(2)} · contradiction accel {activeCluster.contradictionAcceleration.toFixed(2)}
+                      {text(locale, "반복 추세", "recur trend")} {activeCluster.recurringStrengthTrend.toFixed(2)} · {text(locale, "분기 추세", "div trend")} {activeCluster.divergenceTrend.toFixed(2)} · {text(locale, "지지 감쇠", "support decay")} {activeCluster.supportDecayScore.toFixed(2)} · {text(locale, "반박 가속", "contradiction accel")} {activeCluster.contradictionAcceleration.toFixed(2)}
                     </p>
                     <p className="mt-1 text-[11px] text-white/35">
-                      last recurring {formatDateTime(activeCluster.lastRecurringAt)} · last diverging {formatDateTime(activeCluster.lastDivergingAt)}
+                      {text(locale, "최근 반복", "last recurring")} {formatDateTime(activeCluster.lastRecurringAt)} · {text(locale, "최근 분기", "last diverging")} {formatDateTime(activeCluster.lastDivergingAt)}
                     </p>
                   </div>
                   <div className="flex flex-wrap justify-end gap-2">
@@ -2879,7 +3619,7 @@ function NarrativeClusterInboxPanel({
                             : "border-white/10 bg-white/[0.04] text-white/65"
                         }`}
                       >
-                        {busyKey === `narrative-cluster-review:${activeCluster.id}:${state}` ? "..." : state}
+                        {busyKey === `narrative-cluster-review:${activeCluster.id}:${state}` ? "..." : reviewStateLabel(state, locale)}
                       </button>
                     ))}
                     <button
@@ -2887,53 +3627,59 @@ function NarrativeClusterInboxPanel({
                       onClick={() => onNoteClick(activeCluster.id, recentEvents[0]?.id ?? null)}
                       className="rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-white/70"
                     >
-                      {busyKey === `operator-note:create:narrative_cluster:${activeCluster.id}` ? "..." : "note"}
+                      {busyKey === `operator-note:create:narrative_cluster:${activeCluster.id}` ? "..." : text(locale, "메모", "note")}
                     </button>
                   </div>
                 </div>
               </div>
               <div className="grid gap-3 md:grid-cols-2">
                 <DetailBlock
-                  title="Cluster Timeline"
-                  items={selectedClusterTimeline.map((entry) => `${formatDateTime(entry.bucketStart)} · events ${entry.eventCount} · recurring ${entry.recurringScore.toFixed(2)} · drift ${entry.driftScore.toFixed(2)} · contradiction ${entry.contradictionScore.toFixed(2)} · hotspot ${entry.hotspotEventCount}`)}
+                  locale={locale}
+                  title={text(locale, "클러스터 타임라인", "Cluster Timeline")}
+                  items={selectedClusterTimeline.map((entry) => `${formatDateTime(entry.bucketStart)} · ${text(locale, "이벤트", "events")} ${entry.eventCount} · ${text(locale, "반복", "recurring")} ${entry.recurringScore.toFixed(2)} · ${text(locale, "드리프트", "drift")} ${entry.driftScore.toFixed(2)} · ${text(locale, "반박", "contradiction")} ${entry.contradictionScore.toFixed(2)} · ${text(locale, "핫스팟", "hotspot")} ${entry.hotspotEventCount}`)}
                 />
                 <DetailBlock
-                  title="Cluster Ledger"
-                  items={(selectedClusterDetail?.ledgerEntries ?? []).map((entry) => `${entry.entryType} · ${entry.summary} · Δ ${entry.scoreDelta.toFixed(2)} · ${formatDateTime(entry.createdAt)}`)}
+                  locale={locale}
+                  title={text(locale, "클러스터 원장", "Cluster Ledger")}
+                  items={(selectedClusterDetail?.ledgerEntries ?? []).map((entry) => `${temporalRelationLabel(entry.entryType, locale)} · ${entry.summary} · Δ ${entry.scoreDelta.toFixed(2)} · ${formatDateTime(entry.createdAt)}`)}
                 />
               </div>
               {selectedClusterTrendSummary ? (
                 <DetailBlock
-                  title="Trend Summary"
+                  locale={locale}
+                  title={text(locale, "추세 요약", "Trend Summary")}
                   items={[
-                    `recurring trend ${selectedClusterTrendSummary.recurring_strength_trend.toFixed(2)} · divergence trend ${selectedClusterTrendSummary.divergence_trend.toFixed(2)}`,
-                    `support decay ${selectedClusterTrendSummary.support_decay_score.toFixed(2)} · contradiction acceleration ${selectedClusterTrendSummary.contradiction_acceleration.toFixed(2)}`,
-                    `last recurring ${formatDateTime(selectedClusterTrendSummary.last_recurring_at)} · last diverging ${formatDateTime(selectedClusterTrendSummary.last_diverging_at)}`,
+                    `${text(locale, "반복 추세", "recurring trend")} ${selectedClusterTrendSummary.recurring_strength_trend.toFixed(2)} · ${text(locale, "분기 추세", "divergence trend")} ${selectedClusterTrendSummary.divergence_trend.toFixed(2)}`,
+                    `${text(locale, "지지 감쇠", "support decay")} ${selectedClusterTrendSummary.support_decay_score.toFixed(2)} · ${text(locale, "반박 가속", "contradiction acceleration")} ${selectedClusterTrendSummary.contradiction_acceleration.toFixed(2)}`,
+                    `${text(locale, "최근 반복", "last recurring")} ${formatDateTime(selectedClusterTrendSummary.last_recurring_at)} · ${text(locale, "최근 분기", "last diverging")} ${formatDateTime(selectedClusterTrendSummary.last_diverging_at)}`,
                   ]}
                 />
               ) : null}
-              {latestClusterLedgerEntry ? (
+              {currentClusterTransition ? (
                 <DetailBlock
-                  title="Current Transition"
+                  locale={locale}
+                  title={text(locale, "현재 전이", "Current Transition")}
                   items={[
-                    `${latestClusterLedgerEntry.entryType} · ${latestClusterLedgerEntry.summary}`,
-                    `delta ${latestClusterLedgerEntry.scoreDelta.toFixed(2)} · events ${latestClusterLedgerEntry.sourceEventIds.length} · ${formatDateTime(latestClusterLedgerEntry.createdAt)}`,
+                    `${temporalRelationLabel(currentClusterTransition.entryType, locale)} · ${currentClusterTransition.summary}`,
+                    `${text(locale, "변화", "delta")} ${currentClusterTransition.scoreDelta.toFixed(2)} · ${formatDateTime(currentClusterTransition.createdAt)}`,
                   ]}
                 />
               ) : null}
               <div className="grid gap-3 md:grid-cols-2">
                 <DetailBlock
-                  title="Recent Events"
-                  items={recentEvents.map((event) => `${event.title} · ${event.temporalNarrativeState ?? "new"} · graph +${event.graphSupportScore.toFixed(2)} / -${event.graphContradictionScore.toFixed(2)} / hot ${event.graphHotspotCount}`)}
+                  locale={locale}
+                  title={text(locale, "최근 이벤트", "Recent Events")}
+                  items={recentEvents.map((event) => `${event.title} · ${narrativeStateLabel(event.temporalNarrativeState ?? "new", locale)} · ${text(locale, "그래프", "graph")} +${event.graphSupportScore.toFixed(2)} / -${event.graphContradictionScore.toFixed(2)} / ${text(locale, "핫스팟", "hot")} ${event.graphHotspotCount}`)}
                 />
                 <DetailBlock
-                  title="Cluster Graph"
+                  locale={locale}
+                  title={text(locale, "클러스터 그래프", "Cluster Graph")}
                   items={
                     selectedClusterGraph
                       ? [
-                          `linked claims ${selectedClusterGraph.summary.linkedClaimCount} · edges ${selectedClusterGraph.summary.edgeCount}`,
-                          `support ${selectedClusterGraph.summary.graphSupportScore.toFixed(2)} · contradiction ${selectedClusterGraph.summary.graphContradictionScore.toFixed(2)} · hotspots ${selectedClusterGraph.summary.graphHotspotCount}`,
-                          ...selectedClusterGraph.hotspotClusters.slice(0, 4).map((cluster) => `${cluster.label} · hotspot ${cluster.hotspotScore.toFixed(2)} · members ${cluster.memberLinkedClaimIds.length}`),
+                          `${text(locale, "연결 클레임", "linked claims")} ${selectedClusterGraph.summary.linkedClaimCount} · ${text(locale, "엣지", "edges")} ${selectedClusterGraph.summary.edgeCount}`,
+                          `${text(locale, "지지", "support")} ${selectedClusterGraph.summary.graphSupportScore.toFixed(2)} · ${text(locale, "반박", "contradiction")} ${selectedClusterGraph.summary.graphContradictionScore.toFixed(2)} · ${text(locale, "핫스팟", "hotspots")} ${selectedClusterGraph.summary.graphHotspotCount}`,
+                          ...selectedClusterGraph.hotspotClusters.slice(0, 4).map((cluster) => `${cluster.label} · ${text(locale, "핫스팟", "hotspot")} ${cluster.hotspotScore.toFixed(2)} · ${text(locale, "멤버", "members")} ${cluster.memberLinkedClaimIds.length}`),
                         ]
                       : []
                   }
@@ -2941,7 +3687,7 @@ function NarrativeClusterInboxPanel({
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                 <div className="mb-3 flex items-center justify-between">
-                  <h3 className="text-xs font-mono uppercase tracking-[0.2em] text-white/60">Cluster Memberships</h3>
+                  <h3 className="text-xs font-mono uppercase tracking-[0.2em] text-white/60">{text(locale, "클러스터 멤버십", "Cluster Memberships")}</h3>
                   <span className="text-[11px] text-white/45">{selectedClusterDetail?.memberships.length ?? 0}</span>
                 </div>
                 <div className="space-y-2">
@@ -2954,7 +3700,7 @@ function NarrativeClusterInboxPanel({
                     >
                       <p className="text-white/85">{member.title}</p>
                       <p className="mt-1 text-[11px] text-white/45">
-                        {member.relation} · score {member.score.toFixed(2)} · days Δ {member.daysDelta ?? "—"} · time {member.timeCoherenceScore.toFixed(2)}
+                        {temporalRelationLabel(member.relation, locale)} · {text(locale, "점수", "score")} {member.score.toFixed(2)} · {text(locale, "일 차이", "days Δ")} {member.daysDelta ?? "—"} · {text(locale, "시간", "time")} {member.timeCoherenceScore.toFixed(2)}
                       </p>
                     </button>
                   ))}
@@ -2962,7 +3708,8 @@ function NarrativeClusterInboxPanel({
               </div>
               {notes.length > 0 ? (
                 <DetailBlock
-                  title="Cluster Notes"
+                  locale={locale}
+                  title={text(locale, "클러스터 메모", "Cluster Notes")}
                   items={notes.map((note) => `${formatDateTime(note.createdAt)} · ${note.note}`)}
                 />
               ) : null}
@@ -2970,22 +3717,24 @@ function NarrativeClusterInboxPanel({
           )}
         </div>
       </div>
-    </section>
+    </CollapsiblePanel>
   );
 }
 
 function TemporalNarrativeLedgerPanel({
+  locale,
   items,
   onSelectEvent,
 }: {
+  locale: "ko" | "en";
   items: IntelligenceTemporalNarrativeLedgerEntryRecord[];
   onSelectEvent: (eventId: string) => void;
 }) {
   return (
     <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-mono uppercase tracking-[0.2em] text-white/70">Temporal Narrative Ledger</h3>
-        <span className="text-[11px] text-white/45">{items.length} entries</span>
+        <h3 className="text-sm font-mono uppercase tracking-[0.2em] text-white/70">{text(locale, "시간축 서사 원장", "Temporal Narrative Ledger")}</h3>
+        <span className="text-[11px] text-white/45">{items.length} {text(locale, "항목", "entries")}</span>
       </div>
       {items.length === 0 ? (
         <p className="text-sm text-white/45">장기 반복 서사 원장 항목이 아직 없다.</p>
@@ -2999,15 +3748,15 @@ function TemporalNarrativeLedgerPanel({
               className="w-full rounded-2xl border border-white/10 bg-black/20 p-3 text-left hover:border-white/20"
             >
               <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono text-white/50">
-                <span>{item.relation}</span>
-                <span>score {item.score.toFixed(2)}</span>
-                <span>days Δ {item.daysDelta ?? "—"}</span>
-                <span>domain {item.topDomainId ?? "unknown"}</span>
-                <span>updated {formatDateTime(item.updatedAt)}</span>
+                <span>{temporalRelationLabel(item.relation, locale)}</span>
+                <span>{text(locale, "점수", "score")} {item.score.toFixed(2)}</span>
+                <span>{text(locale, "일 차이", "days Δ")} {item.daysDelta ?? "—"}</span>
+                <span>{text(locale, "도메인", "domain")} {domainLabel(item.topDomainId, locale)}</span>
+                <span>{text(locale, "업데이트", "updated")} {formatDateTime(item.updatedAt)}</span>
               </div>
               <p className="mt-2 text-sm font-medium text-white">{item.relatedEventTitle}</p>
               <p className="mt-2 text-[11px] text-white/45">
-                graph +{item.graphSupportScore.toFixed(2)} / -{item.graphContradictionScore.toFixed(2)} / hot {item.graphHotspotCount} · time {item.timeCoherenceScore.toFixed(2)}
+                {text(locale, "그래프", "graph")} +{item.graphSupportScore.toFixed(2)} / -{item.graphContradictionScore.toFixed(2)} / {text(locale, "핫스팟", "hot")} {item.graphHotspotCount} · {text(locale, "시간", "time")} {item.timeCoherenceScore.toFixed(2)}
               </p>
             </button>
           ))}
@@ -3018,11 +3767,13 @@ function TemporalNarrativeLedgerPanel({
 }
 
 function ClaimGraphPanel({
+  locale,
   graph,
   onNoteClick,
   onReviewStateChange,
   busyKey,
 }: {
+  locale: "ko" | "en";
   graph: SelectedEventGraph | null;
   onNoteClick: (linkedClaimId: string) => void;
   onReviewStateChange: (linkedClaimId: string, state: EventReviewState) => void;
@@ -3109,7 +3860,7 @@ function ClaimGraphPanel({
   if (!graph || !layout) {
     return (
       <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-        <h3 className="mb-3 text-xs font-mono uppercase tracking-[0.2em] text-white/60">Claim Graph</h3>
+        <h3 className="mb-3 text-xs font-mono uppercase tracking-[0.2em] text-white/60">{text(locale, "클레임 그래프", "Claim Graph")}</h3>
         <p className="text-xs text-white/40">그래프 데이터가 아직 없다.</p>
       </div>
     );
@@ -3119,18 +3870,18 @@ function ClaimGraphPanel({
     <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h3 className="text-xs font-mono uppercase tracking-[0.2em] text-white/60">Claim Graph</h3>
+          <h3 className="text-xs font-mono uppercase tracking-[0.2em] text-white/60">{text(locale, "클레임 그래프", "Claim Graph")}</h3>
           <p className="mt-1 text-[11px] text-white/40">
-            support {graph.summary.graphSupportScore.toFixed(2)} · contradiction {graph.summary.graphContradictionScore.toFixed(2)} · hotspots {graph.summary.graphHotspotCount}
+            {text(locale, "지지", "support")} {graph.summary.graphSupportScore.toFixed(2)} · {text(locale, "반박", "contradiction")} {graph.summary.graphContradictionScore.toFixed(2)} · {text(locale, "핫스팟", "hotspots")} {graph.summary.graphHotspotCount}
           </p>
           <p className="mt-1 text-[11px] text-white/35">
-            temporal {graph.summary.temporalNarrativeState ?? "new"} · recurring {(graph.summary.recurringNarrativeScore ?? 0).toFixed(2)} · related {graph.summary.relatedHistoricalEventCount ?? 0} · clusters {graph.summary.hotspotClusterCount ?? graph.hotspotClusters.length}
+            {text(locale, "시간축", "temporal")} {narrativeStateLabel(graph.summary.temporalNarrativeState ?? "new", locale)} · {text(locale, "반복", "recurring")} {(graph.summary.recurringNarrativeScore ?? 0).toFixed(2)} · {text(locale, "연결", "related")} {graph.summary.relatedHistoricalEventCount ?? 0} · {text(locale, "클러스터", "clusters")} {graph.summary.hotspotClusterCount ?? graph.hotspotClusters.length}
           </p>
         </div>
         <div className="flex flex-wrap gap-2 text-[10px] text-white/45">
-          <span className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2 py-0.5 text-emerald-100/80">support</span>
-          <span className="rounded-full border border-rose-400/20 bg-rose-500/10 px-2 py-0.5 text-rose-100/80">contradict</span>
-          <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-white/60">related</span>
+          <span className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2 py-0.5 text-emerald-100/80">{text(locale, "지지", "support")}</span>
+          <span className="rounded-full border border-rose-400/20 bg-rose-500/10 px-2 py-0.5 text-rose-100/80">{text(locale, "반박", "contradict")}</span>
+          <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-white/60">{text(locale, "관련", "related")}</span>
         </div>
       </div>
       <div className="grid gap-4 xl:grid-cols-[1.55fr_0.95fr]">
@@ -3207,27 +3958,27 @@ function ClaimGraphPanel({
           {selectedNode ? (
             <div className="space-y-3">
               <div>
-                <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/45">Selected Claim</p>
+                <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/45">{text(locale, "선택된 클레임", "Selected Claim")}</p>
                 <p className="mt-2 text-sm text-white/90">
                   {selectedNode.canonicalSubject} {selectedNode.canonicalPredicate} {selectedNode.canonicalObject}
                 </p>
                 <p className="mt-2 text-[11px] text-white/45">
-                  family {selectedNode.predicateFamily} · non-social {selectedNode.nonSocialSourceCount} · contradictions {selectedNode.contradictionCount}
+                  {text(locale, "패밀리", "family")} {selectedNode.predicateFamily} · {text(locale, "비소셜", "non-social")} {selectedNode.nonSocialSourceCount} · {text(locale, "반박", "contradictions")} {selectedNode.contradictionCount}
                 </p>
                 <p className="mt-1 text-[11px] text-white/35">
-                  bucket {formatDateTime(selectedNode.timeBucketStart)} ~ {formatDateTime(selectedNode.timeBucketEnd)}
+                  {text(locale, "버킷", "bucket")} {formatDateTime(selectedNode.timeBucketStart)} ~ {formatDateTime(selectedNode.timeBucketEnd)}
                 </p>
                 <p className="mt-1 text-[11px] text-white/35">
-                  support {formatDateTime(selectedNode.lastSupportedAt)} · contradict {formatDateTime(selectedNode.lastContradictedAt)}
+                  {text(locale, "지지", "support")} {formatDateTime(selectedNode.lastSupportedAt)} · {text(locale, "반박", "contradict")} {formatDateTime(selectedNode.lastContradictedAt)}
                 </p>
                 {selectedNode.reviewReason || selectedNode.reviewOwner || selectedNode.reviewResolvedAt ? (
                   <p className="mt-1 text-[11px] text-white/35">
-                    reason {selectedNode.reviewReason ?? "—"} · owner {selectedNode.reviewOwner ?? "—"} · resolved {formatDateTime(selectedNode.reviewResolvedAt)}
+                    {text(locale, "사유", "reason")} {selectedNode.reviewReason ?? "—"} · {text(locale, "담당", "owner")} {selectedNode.reviewOwner ?? "—"} · {text(locale, "해결", "resolved")} {formatDateTime(selectedNode.reviewResolvedAt)}
                   </p>
                 ) : null}
               </div>
               <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
-                <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/45">Connected Edges</p>
+                <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/45">{text(locale, "연결 엣지", "Connected Edges")}</p>
                 <div className="mt-2 space-y-2">
                   {graph.edges
                     .filter((edge) => edge.leftLinkedClaimId === selectedNode.id || edge.rightLinkedClaimId === selectedNode.id)
@@ -3237,7 +3988,7 @@ function ClaimGraphPanel({
                         edge.leftLinkedClaimId === selectedNode.id ? edge.rightLinkedClaimId : edge.leftLinkedClaimId;
                       return (
                         <div key={edge.id} className="rounded-lg border border-white/8 bg-black/20 px-3 py-2 text-[11px] text-white/65">
-                          {edge.relation} · strength {edge.edgeStrength.toFixed(2)} · neighbor {neighborId.slice(0, 8)} · signals {edge.evidence_signal_count}
+                          {graphRelationLabel(edge.relation, locale)} · {text(locale, "강도", "strength")} {edge.edgeStrength.toFixed(2)} · {text(locale, "이웃", "neighbor")} {neighborId.slice(0, 8)} · {text(locale, "신호", "signals")} {edge.evidence_signal_count}
                         </div>
                       );
                     })}
@@ -3255,7 +4006,7 @@ function ClaimGraphPanel({
                         : "border-white/10 bg-black/20 text-white/55"
                     }`}
                   >
-                    {busyKey === `linked-claim-review:${selectedNode.id}:${state}` ? "..." : state}
+                    {busyKey === `linked-claim-review:${selectedNode.id}:${state}` ? "..." : reviewStateLabel(state, locale)}
                   </button>
                 ))}
                 <button
@@ -3263,21 +4014,21 @@ function ClaimGraphPanel({
                   onClick={() => onNoteClick(selectedNode.id)}
                   className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-2.5 py-1 text-[11px] text-cyan-100"
                 >
-                  {busyKey === `operator-note:create:linked_claim:${selectedNode.id}` ? "..." : "메모"}
+                  {busyKey === `operator-note:create:linked_claim:${selectedNode.id}` ? "..." : text(locale, "메모", "Note")}
                 </button>
               </div>
             </div>
           ) : (
-            <p className="text-xs text-white/40">노드를 선택하면 claim detail을 본다.</p>
+            <p className="text-xs text-white/40">{text(locale, "노드를 선택하면 claim detail을 본다.", "Select a node to inspect claim detail.")}</p>
           )}
         </div>
       </div>
       <div className="mt-4 grid gap-3 lg:grid-cols-2">
         <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-          <h4 className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/45">Hotspot Clusters</h4>
+          <h4 className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/45">{text(locale, "핫스팟 클러스터", "Hotspot Clusters")}</h4>
           <div className="mt-3 space-y-2">
             {graph.hotspotClusters.length === 0 ? (
-              <p className="text-xs text-white/40">No contradiction hotspots</p>
+              <p className="text-xs text-white/40">{text(locale, "반박 핫스팟이 없다.", "No contradiction hotspots")}</p>
             ) : (
               graph.hotspotClusters.map((cluster) => (
                 <button
@@ -3288,10 +4039,10 @@ function ClaimGraphPanel({
                 >
                   <p className="text-white/85">{cluster.label}</p>
                   <p className="mt-1 text-[11px] text-white/45">
-                    hotspot {cluster.hotspotScore.toFixed(2)} · members {cluster.memberLinkedClaimIds.length}
+                    {text(locale, "핫스팟", "hotspot")} {cluster.hotspotScore.toFixed(2)} · {text(locale, "멤버", "members")} {cluster.memberLinkedClaimIds.length}
                   </p>
                   <p className="mt-1 text-[11px] text-white/35">
-                    contradict edges {cluster.contradictionEdgeCount} · support edges {cluster.supportEdgeCount}
+                    {text(locale, "반박 엣지", "contradict edges")} {cluster.contradictionEdgeCount} · {text(locale, "지지 엣지", "support edges")} {cluster.supportEdgeCount}
                   </p>
                 </button>
               ))
@@ -3299,19 +4050,19 @@ function ClaimGraphPanel({
           </div>
         </div>
         <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-          <h4 className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/45">Related Narratives</h4>
+          <h4 className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/45">{text(locale, "연결 서사", "Related Narratives")}</h4>
           <div className="mt-3 space-y-2">
             {graph.relatedHistoricalEvents.length === 0 ? (
-              <p className="text-xs text-white/40">No related historical events</p>
+              <p className="text-xs text-white/40">{text(locale, "연결된 과거 사건이 없다.", "No related historical events")}</p>
             ) : (
               graph.relatedHistoricalEvents.map((item) => (
                 <div key={item.eventId} className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-3 text-xs text-white/70">
                   <p className="text-white/85">{item.title}</p>
                   <p className="mt-1 text-[11px] text-white/45">
-                    {item.relation} · score {item.score.toFixed(2)} · {item.daysDelta ?? "—"}d ago
+                    {temporalRelationLabel(item.relation, locale)} · {text(locale, "점수", "score")} {item.score.toFixed(2)} · {item.daysDelta ?? "—"}{locale === "ko" ? "일 전" : "d ago"}
                   </p>
                   <p className="mt-1 text-[11px] text-white/35">
-                    graph +{item.graphSupportScore.toFixed(2)} / -{item.graphContradictionScore.toFixed(2)} / hot {item.graphHotspotCount} · time {item.timeCoherenceScore.toFixed(2)}
+                    {text(locale, "그래프", "graph")} +{item.graphSupportScore.toFixed(2)} / -{item.graphContradictionScore.toFixed(2)} / {text(locale, "핫스팟", "hot")} {item.graphHotspotCount} · {text(locale, "시간", "time")} {item.timeCoherenceScore.toFixed(2)}
                   </p>
                 </div>
               ))

@@ -200,6 +200,13 @@ function SidebarContent() {
   };
 
   const currentWorkspaceSummary = useMemo(() => {
+    if (pathname.startsWith("/intelligence")) {
+      return {
+        title: t("sidebar.item.intelligence.title"),
+        description: t("sidebar.item.intelligence.description"),
+      };
+    }
+
     if (activeWorkspacePreset) {
       const workspaceKey = workspaceKeyForPreset(activeWorkspacePreset);
       return {
@@ -239,7 +246,7 @@ function SidebarContent() {
       title: t("sidebar.customLayout"),
       description: labelByWidget[primaryWidget] ?? t("sidebar.noActiveWorkspace"),
     };
-  }, [activeWidgets, activeWorkspacePreset, focusedWidget, mountedWidgets, t]);
+  }, [activeWidgets, activeWorkspacePreset, focusedWidget, mountedWidgets, pathname, t]);
 
   return (
     <div
@@ -381,17 +388,32 @@ function SidebarContent() {
         <NavItem
           testId="sidebar-workspace-control"
           compact={compact}
-          icon={<BarChart3 size={18} />}
+          icon={<LayoutGrid size={18} />}
           label={t("sidebar.item.control.title")}
           description={t("sidebar.item.control.description")}
           actionHint={t("sidebar.item.control.hint")}
-          active={activeWorkspacePreset === "studio_intelligence"}
+          active={pathname !== "/intelligence" && activeWorkspacePreset === "studio_intelligence"}
           onClick={(event) => handleWorkspaceClick("studio_intelligence", event)}
           secondaryShortcut={() => openWorkspacePreset("studio_intelligence", "full")}
           secondaryAction={{
             icon: <LayoutGrid size={12} />,
             label: t("sidebar.tooltip.fullStack"),
             onClick: (event) => handleWorkspaceOpenFull("studio_intelligence", event),
+          }}
+          onTooltipChange={handleTooltipChange}
+        />
+        <NavItem
+          testId="sidebar-workspace-intelligence"
+          compact={compact}
+          icon={<BarChart3 size={18} />}
+          label={t("sidebar.item.intelligence.title")}
+          description={t("sidebar.item.intelligence.description")}
+          actionHint={t("sidebar.item.intelligence.hint")}
+          active={pathname === "/intelligence"}
+          onClick={() => {
+            if (pathname !== "/intelligence") {
+              router.push("/intelligence");
+            }
           }}
           onTooltipChange={handleTooltipChange}
         />
