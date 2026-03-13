@@ -6,6 +6,7 @@ import { getIntelligenceCatalogSyncWorkerStatus } from '../intelligence/catalog-
 import { ensureDefaultIntelligenceAliasBindings } from '../intelligence/runtime';
 import { getIntelligenceScannerWorkerStatus } from '../intelligence/scanner-worker';
 import { getIntelligenceSemanticWorkerStatus } from '../intelligence/semantic-worker';
+import { getIntelligenceStaleMaintenanceWorkerStatus } from '../intelligence/stale-maintenance-worker';
 import {
   buildIntelligenceGraphNeighborhoods,
   buildIntelligenceHotspotClusters,
@@ -15,10 +16,15 @@ import {
   computeIntelligenceOperatorPriorityScore,
   dispatchIntelligenceCouncilBridge,
   executeIntelligenceCandidate,
+  listSuspiciousIntelligenceEvents,
+  bulkRebuildIntelligenceEvents,
+  rebuildIntelligenceEvent,
 } from '../intelligence/service';
 import { ensureDefaultIntelligenceSources } from '../intelligence/sources';
 import type {
+  CapabilityAliasBindingRecord,
   IntelligenceCapabilityAlias,
+  IntelligenceNarrativeClusterLedgerEntryRecord,
   IntelligenceWorkspaceRole,
 } from '../store/types';
 
@@ -118,6 +124,17 @@ const FetchFailuresQuerySchema = z.object({
   workspace_id: z.string().uuid().optional(),
   source_id: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+const StaleEventsQuerySchema = z.object({
+  workspace_id: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(25),
+});
+
+const StaleEventsBulkRebuildSchema = z.object({
+  workspace_id: z.string().uuid().optional(),
+  event_ids: z.array(z.string().uuid()).max(50).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(10),
 });
 
 const ReviewStateSchema = z.object({
@@ -242,6 +259,90 @@ async function loadNarrativeClusterOr404(
   return cluster;
 }
 
+function summarizeAliasBindingRollout(input: {
+  scope: 'workspace' | 'global';
+  before: CapabilityAliasBindingRecord[];
+  after: CapabilityAliasBindingRecord[];
+}) {
+  const beforeRows = [...input.before].sort((left, right) => left.fallbackRank - right.fallbackRank);
+  const afterRows = [...input.after].sort((left, right) => left.fallbackRank - right.fallbackRank);
+  const maxLength = Math.max(beforeRows.length, afterRows.length);
+  let added = 0;
+  let removed = 0;
+  let changed = 0;
+  const detailRows: string[] = [];
+
+  for (let index = 0; index < maxLength; index += 1) {
+    const beforeRow = beforeRows[index] ?? null;
+    const afterRow = afterRows[index] ?? null;
+    if (!beforeRow && afterRow) {
+      added += 1;
+      if (detailRows.length < 3) {
+        detailRows.push(`+ ${afterRow.provider}/${afterRow.modelId}`);
+      }
+      continue;
+    }
+    if (beforeRow && !afterRow) {
+      removed += 1;
+      if (detailRows.length < 3) {
+        detailRows.push(`- ${beforeRow.provider}/${beforeRow.modelId}`);
+      }
+      continue;
+    }
+    if (!beforeRow || !afterRow) {
+      continue;
+    }
+    const changedFields: string[] = [];
+    if (beforeRow.provider !== afterRow.provider) changedFields.push('provider');
+    if (beforeRow.modelId !== afterRow.modelId) changedFields.push('model');
+    if (beforeRow.weight !== afterRow.weight) changedFields.push('weight');
+    if (beforeRow.fallbackRank !== afterRow.fallbackRank) changedFields.push('rank');
+    if (beforeRow.canaryPercent !== afterRow.canaryPercent) changedFields.push('canary');
+    if (beforeRow.isActive !== afterRow.isActive) changedFields.push('active');
+    if (beforeRow.requiresStructuredOutput !== afterRow.requiresStructuredOutput) changedFields.push('structured');
+    if (beforeRow.requiresToolUse !== afterRow.requiresToolUse) changedFields.push('tool');
+    if (beforeRow.requiresLongContext !== afterRow.requiresLongContext) changedFields.push('context');
+    if (beforeRow.maxCostClass !== afterRow.maxCostClass) changedFields.push('cost');
+    if (changedFields.length === 0) {
+      continue;
+    }
+    changed += 1;
+    if (detailRows.length < 3) {
+      detailRows.push(`~ ${afterRow.provider}/${afterRow.modelId} (${changedFields.join(', ')})`);
+    }
+  }
+
+  const suffix = detailRows.length > 0 ? ` · ${detailRows.join(' ; ')}` : '';
+  return `${input.scope} runtime binding update (+${added}/-${removed}/~${changed})${suffix}`;
+}
+
+function toNarrativeClusterLastTransition(
+  entry: IntelligenceNarrativeClusterLedgerEntryRecord | null,
+  cluster?: {
+    state: string;
+    updatedAt: string;
+    lastLedgerAt: string | null;
+  } | null,
+) {
+  if (!entry) {
+    if (!cluster) {
+      return null;
+    }
+    return {
+      entry_type: 'snapshot',
+      summary: `${cluster.state} cluster snapshot`,
+      score_delta: 0,
+      created_at: cluster.lastLedgerAt ?? cluster.updatedAt,
+    };
+  }
+  return {
+    entry_type: entry.entryType,
+    summary: entry.summary,
+    score_delta: entry.scoreDelta,
+    created_at: entry.createdAt,
+  };
+}
+
 export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext): Promise<void> {
   app.get('/api/v1/intelligence/workspaces', async (request, reply) => {
     const userId = ctx.resolveRequestUserId(request);
@@ -293,6 +394,7 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       sources,
       scanner_worker: getIntelligenceScannerWorkerStatus(),
       semantic_worker: getIntelligenceSemanticWorkerStatus(),
+      stale_maintenance_worker: getIntelligenceStaleMaintenanceWorkerStatus(),
     });
   });
 
@@ -419,6 +521,57 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
     });
   });
 
+  app.get('/api/v1/intelligence/maintenance/stale-events', async (request, reply) => {
+    const parsed = StaleEventsQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid stale event maintenance query', parsed.error.flatten());
+    }
+    const access = await resolveWorkspaceAccess(ctx, request, reply, {
+      workspaceId: parsed.data.workspace_id,
+    });
+    if (!access) return reply;
+    const events = await listSuspiciousIntelligenceEvents({
+      store: ctx.store,
+      workspaceId: access.workspaceId,
+      limit: parsed.data.limit,
+    });
+    return sendSuccess(reply, request, 200, {
+      workspace_id: access.workspaceId,
+      stale_events: events,
+    });
+  });
+
+  app.post('/api/v1/intelligence/maintenance/rebuild-stale-events', async (request, reply) => {
+    const parsed = StaleEventsBulkRebuildSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid stale event rebuild payload', parsed.error.flatten());
+    }
+    const access = await resolveWorkspaceAccess(ctx, request, reply, {
+      workspaceId: parsed.data.workspace_id,
+      requiredRole: 'admin',
+    });
+    if (!access) return reply;
+    try {
+      const result = await bulkRebuildIntelligenceEvents({
+        store: ctx.store,
+        providerRouter: ctx.providerRouter,
+        env: ctx.env,
+        workspaceId: access.workspaceId,
+        userId: access.userId,
+        eventIds: parsed.data.event_ids,
+        limit: parsed.data.limit,
+        notificationService: ctx.notificationService,
+      });
+      return sendSuccess(reply, request, 202, {
+        workspace_id: access.workspaceId,
+        result,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', message);
+    }
+  });
+
   app.get('/api/v1/intelligence/runs', async (request, reply) => {
     const parsed = RunsQuerySchema.safeParse(request.query ?? {});
     if (!parsed.success) {
@@ -455,6 +608,7 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       runs,
       scanner_worker: getIntelligenceScannerWorkerStatus(),
       semantic_worker: getIntelligenceSemanticWorkerStatus(),
+      stale_maintenance_worker: getIntelligenceStaleMaintenanceWorkerStatus(),
       model_sync_worker: getIntelligenceCatalogSyncWorkerStatus(),
       semantic_backlog: {
         pendingCount: pendingSignals.length,
@@ -634,6 +788,18 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       event,
       candidateEvents: events,
     });
+    const narrativeClusterLastTransition = narrativeCluster
+      ? toNarrativeClusterLastTransition(
+          (
+            await ctx.store.listIntelligenceNarrativeClusterLedgerEntries({
+              workspaceId: access.workspaceId,
+              clusterId: narrativeCluster.id,
+              limit: 1,
+            })
+          )[0] ?? null,
+          narrativeCluster,
+        )
+      : null;
     const enrichedEvent = {
       ...event,
       recurringNarrativeScore: temporal.recurringNarrativeScore,
@@ -655,7 +821,12 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       invalidation_entries: invalidationEntries,
       expected_signal_entries: expectedSignalEntries,
       outcome_entries: outcomeEntries,
-      narrative_cluster: narrativeCluster,
+      narrative_cluster: narrativeCluster
+        ? {
+            ...narrativeCluster,
+            last_transition: narrativeClusterLastTransition,
+          }
+        : null,
       narrative_cluster_members: narrativeClusterMembers,
       temporal_narrative_ledger: temporalNarrativeLedgerEntries,
       related_historical_events: temporal.relatedHistoricalEvents,
@@ -840,6 +1011,19 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       workspaceId: access.workspaceId,
       limit: parsed.data.limit,
     });
+    const latestLedgerEntries = await Promise.all(
+      clusters.map(async (cluster) => {
+        const entry = (
+          await ctx.store.listIntelligenceNarrativeClusterLedgerEntries({
+            workspaceId: access.workspaceId,
+            clusterId: cluster.id,
+            limit: 1,
+          })
+        )[0] ?? null;
+        return [cluster.id, toNarrativeClusterLastTransition(entry, cluster)] as const;
+      }),
+    );
+    const latestLedgerEntryByClusterId = new Map(latestLedgerEntries);
     const sorted = [...clusters].sort(
       (left, right) =>
         right.clusterPriorityScore - left.clusterPriorityScore ||
@@ -847,7 +1031,10 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
     );
     return sendSuccess(reply, request, 200, {
       workspace_id: access.workspaceId,
-      narrative_clusters: sorted,
+      narrative_clusters: sorted.map((cluster) => ({
+        ...cluster,
+        last_transition: latestLedgerEntryByClusterId.get(cluster.id) ?? null,
+      })),
     });
   });
 
@@ -924,7 +1111,10 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       .slice(0, 25);
     return sendSuccess(reply, request, 200, {
       workspace_id: access.workspaceId,
-      narrative_cluster: cluster,
+      narrative_cluster: {
+        ...cluster,
+        last_transition: toNarrativeClusterLastTransition(ledgerEntries[0] ?? null, cluster),
+      },
       memberships: memberSummaries,
       recent_events: recentEvents,
       ledger_entries: ledgerEntries,
@@ -1094,6 +1284,39 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
         processingStatus: signal.processingStatus,
       },
     });
+  });
+
+  app.post('/api/v1/intelligence/events/:eventId/rebuild', async (request, reply) => {
+    const parsed = WorkspaceScopedQuerySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid intelligence event rebuild payload', parsed.error.flatten());
+    }
+    const access = await resolveWorkspaceAccess(ctx, request, reply, {
+      workspaceId: parsed.data.workspace_id,
+      requiredRole: 'admin',
+    });
+    if (!access) return reply;
+    try {
+      const result = await rebuildIntelligenceEvent({
+        store: ctx.store,
+        providerRouter: ctx.providerRouter,
+        env: ctx.env,
+        workspaceId: access.workspaceId,
+        userId: access.userId,
+        eventId: (request.params as { eventId: string }).eventId,
+        notificationService: ctx.notificationService,
+      });
+      return sendSuccess(reply, request, 202, {
+        workspace_id: access.workspaceId,
+        result,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('not found')) {
+        return sendError(reply, request, 404, 'NOT_FOUND', message);
+      }
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', message);
+    }
   });
 
   app.post('/api/v1/intelligence/events/:eventId/review-state', async (request, reply) => {
@@ -1373,6 +1596,10 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
     });
     if (!access) return reply;
     const targetWorkspaceId = parsed.data.scope === 'global' ? null : access.workspaceId;
+    const previousBindings = await ctx.store.listIntelligenceAliasBindings({
+      workspaceId: targetWorkspaceId,
+      alias,
+    });
     const bindings = await ctx.store.replaceIntelligenceAliasBindings({
       alias,
       workspaceId: targetWorkspaceId,
@@ -1396,7 +1623,11 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       alias,
       bindingIds: bindings.map((row) => row.id),
       createdBy: access.userId,
-      note: `${parsed.data.scope} runtime binding update`,
+      note: summarizeAliasBindingRollout({
+        scope: parsed.data.scope,
+        before: previousBindings,
+        after: bindings,
+      }),
     });
     return sendSuccess(reply, request, 200, {
       workspace_id: access.workspaceId,

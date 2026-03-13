@@ -48,17 +48,33 @@ function canSatisfyRequirements(
   registryEntry: ModelRegistryEntryRecord | null,
   requirements: CapabilityRequirements
 ): boolean {
+  const inferred = inferIntelligenceModelMetadata({
+    provider: binding.provider,
+    modelId: binding.modelId,
+  });
+  const supportsStructuredOutput =
+    binding.requiresStructuredOutput ||
+    registryEntry?.supportsStructuredOutput === true ||
+    inferred.supportsStructuredOutput;
+  const supportsToolUse =
+    binding.requiresToolUse ||
+    registryEntry?.supportsToolUse === true ||
+    inferred.supportsToolUse;
+  const supportsLongContext =
+    binding.requiresLongContext ||
+    registryEntry?.supportsLongContext === true ||
+    inferred.supportsLongContext;
   if (!binding.isActive) return false;
-  if (requirements.structuredOutputRequired && !(binding.requiresStructuredOutput || registryEntry?.supportsStructuredOutput)) {
+  if (requirements.structuredOutputRequired && !supportsStructuredOutput) {
     return false;
   }
-  if (requirements.toolUseRequired && !(binding.requiresToolUse || registryEntry?.supportsToolUse)) {
+  if (requirements.toolUseRequired && !supportsToolUse) {
     return false;
   }
-  if (requirements.longContextRequired && !(binding.requiresLongContext || registryEntry?.supportsLongContext)) {
+  if (requirements.longContextRequired && !supportsLongContext) {
     return false;
   }
-  const bindingCost = binding.maxCostClass ?? registryEntry?.costClass ?? null;
+  const bindingCost = binding.maxCostClass ?? registryEntry?.costClass ?? inferred.costClass ?? null;
   if (requirements.maxCostClass && costRank(bindingCost) > costRank(requirements.maxCostClass)) {
     return false;
   }
@@ -118,6 +134,7 @@ export async function resolveCapabilityModel(input: {
   alias: IntelligenceCapabilityAlias;
   workspaceId?: string | null;
   requirements?: CapabilityRequirements;
+  providerRouter?: ProviderRouter | null;
 }): Promise<ResolvedCapabilityModel | null> {
   await ensureDefaultIntelligenceAliasBindings(input.store, input.env);
   const [workspaceBindings, globalBindings, registry, providerHealth] = await Promise.all([
@@ -143,6 +160,7 @@ export async function resolveCapabilityModel(input: {
   for (const binding of ordered) {
     const health = providerHealthByProvider.get(binding.provider);
     if (health && !health.available) continue;
+    if (input.providerRouter && !providerEnabled(input.providerRouter, binding.provider)) continue;
     const registryEntry = registryByKey.get(`${binding.provider}:${binding.modelId}`) ?? null;
     if (!canSatisfyRequirements(binding, registryEntry, requirements)) continue;
     return {
@@ -161,6 +179,8 @@ export function inferIntelligenceModelMetadata(input: {
   modelId: string;
 }): Omit<ModelRegistryEntryRecord, 'id' | 'createdAt' | 'updatedAt' | 'lastSeenAt'> {
   const model = input.modelId.toLowerCase();
+  const isUtilityLocalModel = /(embed|embedding|rerank|whisper|tts|transcribe|clip)/u.test(model);
+  const isGeneralLocalModel = input.provider === 'local' && !isUtilityLocalModel;
   const longContext =
     input.provider === 'gemini' ||
     model.includes('128k') ||
@@ -172,12 +192,15 @@ export function inferIntelligenceModelMetadata(input: {
     modelId: input.modelId,
     availability: 'active',
     contextWindow: longContext ? 1_000_000 : input.provider === 'openai' ? 128_000 : 200_000,
-    supportsStructuredOutput: input.provider !== 'local' || model.includes('json'),
-    supportsToolUse: input.provider !== 'local' || model.includes('tool'),
+    supportsStructuredOutput:
+      input.provider !== 'local' || model.includes('json') || isGeneralLocalModel,
+    supportsToolUse: input.provider !== 'local' || model.includes('tool') || model.includes('function'),
     supportsLongContext: longContext,
-    supportsReasoning: input.provider !== 'local' || model.includes('reason'),
+    supportsReasoning: input.provider !== 'local' || model.includes('reason') || isGeneralLocalModel,
     costClass:
-      model.includes('nano') || model.includes('lite')
+      isGeneralLocalModel
+        ? 'standard'
+        : model.includes('nano') || model.includes('lite')
         ? 'low'
         : model.includes('mini') || model.includes('flash')
           ? 'standard'

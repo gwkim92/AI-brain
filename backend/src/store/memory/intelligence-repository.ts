@@ -404,6 +404,15 @@ export function createMemoryIntelligenceRepository({
       );
     },
 
+    async listIntelligenceRawDocumentsByIds(input) {
+      const idSet = new Set(input.documentIds);
+      return sortByUpdated(
+        [...state.intelligenceRawDocuments.values()].filter(
+          (row) => row.workspaceId === input.workspaceId && idSet.has(row.id)
+        )
+      );
+    },
+
     async createIntelligenceSignal(input) {
       const row: SignalEnvelopeRecord = {
         id: randomUUID(),
@@ -437,6 +446,17 @@ export function createMemoryIntelligenceRepository({
           .filter((row) => (input.sourceId ? row.sourceId === input.sourceId : true))
           .filter((row) => (input.processingStatus ? row.processingStatus === input.processingStatus : true))
           .slice(0, input.limit)
+      );
+    },
+
+    async listIntelligenceSignalsByIds(
+      input: Parameters<IntelligenceRepositoryContract['listIntelligenceSignalsByIds']>[0],
+    ) {
+      const signalIdSet = new Set(input.signalIds);
+      return sortByUpdated(
+        [...state.intelligenceSignals.values()].filter(
+          (row) => row.workspaceId === input.workspaceId && signalIdSet.has(row.id),
+        ),
       );
     },
 
@@ -633,6 +653,43 @@ export function createMemoryIntelligenceRepository({
       );
     },
 
+    async deleteIntelligenceLinkedClaimsByIds(
+      input: Parameters<IntelligenceRepositoryContract['deleteIntelligenceLinkedClaimsByIds']>[0],
+    ) {
+      const linkedClaimIdSet = new Set(input.linkedClaimIds);
+      let deleted = 0;
+      for (const row of [...state.intelligenceLinkedClaims.values()]) {
+        if (row.workspaceId === input.workspaceId && linkedClaimIdSet.has(row.id)) {
+          state.intelligenceLinkedClaims.delete(row.id);
+          deleted += 1;
+        }
+      }
+      for (const row of [...state.intelligenceClaimLinks.values()]) {
+        if (row.workspaceId === input.workspaceId && linkedClaimIdSet.has(row.linkedClaimId)) {
+          state.intelligenceClaimLinks.delete(row.id);
+        }
+      }
+      for (const row of [...state.intelligenceLinkedClaimEdges.values()]) {
+        if (
+          row.workspaceId === input.workspaceId &&
+          (linkedClaimIdSet.has(row.leftLinkedClaimId) || linkedClaimIdSet.has(row.rightLinkedClaimId))
+        ) {
+          state.intelligenceLinkedClaimEdges.delete(row.id);
+        }
+      }
+      for (const row of [...state.intelligenceEventMemberships.values()]) {
+        if (row.workspaceId === input.workspaceId && linkedClaimIdSet.has(row.linkedClaimId)) {
+          state.intelligenceEventMemberships.delete(row.id);
+        }
+      }
+      for (const row of [...state.intelligenceHypothesisEvidenceLinks.values()]) {
+        if (row.workspaceId === input.workspaceId && row.linkedClaimId && linkedClaimIdSet.has(row.linkedClaimId)) {
+          state.intelligenceHypothesisEvidenceLinks.delete(row.id);
+        }
+      }
+      return deleted;
+    },
+
     async upsertIntelligenceEvent(input) {
       const current = state.intelligenceEvents.get(input.id);
       const now = nowIso();
@@ -686,6 +743,78 @@ export function createMemoryIntelligenceRepository({
       const row = state.intelligenceEvents.get(input.eventId);
       if (!row || row.workspaceId !== input.workspaceId) return null;
       return row;
+    },
+
+    async deleteIntelligenceEventById(
+      input: Parameters<IntelligenceRepositoryContract['deleteIntelligenceEventById']>[0],
+    ) {
+      const current = state.intelligenceEvents.get(input.eventId);
+      if (!current || current.workspaceId !== input.workspaceId) return false;
+      state.intelligenceEvents.delete(input.eventId);
+      for (const row of [...state.intelligenceClaimLinks.values()]) {
+        if (row.workspaceId === input.workspaceId && row.eventId === input.eventId) {
+          state.intelligenceClaimLinks.delete(row.id);
+        }
+      }
+      for (const row of [...state.intelligenceEventMemberships.values()]) {
+        if (row.workspaceId === input.workspaceId && row.eventId === input.eventId) {
+          state.intelligenceEventMemberships.delete(row.id);
+        }
+      }
+      for (const row of [...state.intelligenceHypothesisLedger.values()]) {
+        if (row.workspaceId === input.workspaceId && row.eventId === input.eventId) {
+          state.intelligenceHypothesisLedger.delete(row.id);
+        }
+      }
+      for (const row of [...state.intelligenceHypothesisEvidenceLinks.values()]) {
+        if (row.workspaceId === input.workspaceId && row.eventId === input.eventId) {
+          state.intelligenceHypothesisEvidenceLinks.delete(row.id);
+        }
+      }
+      for (const row of [...state.intelligenceInvalidationEntries.values()]) {
+        if (row.workspaceId === input.workspaceId && row.eventId === input.eventId) {
+          state.intelligenceInvalidationEntries.delete(row.id);
+        }
+      }
+      for (const row of [...state.intelligenceExpectedSignalEntries.values()]) {
+        if (row.workspaceId === input.workspaceId && row.eventId === input.eventId) {
+          state.intelligenceExpectedSignalEntries.delete(row.id);
+        }
+      }
+      for (const row of [...state.intelligenceOutcomeEntries.values()]) {
+        if (row.workspaceId === input.workspaceId && row.eventId === input.eventId) {
+          state.intelligenceOutcomeEntries.delete(row.id);
+        }
+      }
+      for (const row of [...state.intelligenceNarrativeClusterMemberships.values()]) {
+        if (row.workspaceId === input.workspaceId && row.eventId === input.eventId) {
+          state.intelligenceNarrativeClusterMemberships.delete(row.id);
+        }
+      }
+      for (const row of [...state.intelligenceTemporalNarrativeLedger.values()]) {
+        if (
+          row.workspaceId === input.workspaceId &&
+          (row.eventId === input.eventId || row.relatedEventId === input.eventId)
+        ) {
+          state.intelligenceTemporalNarrativeLedger.delete(row.id);
+        }
+      }
+      for (const row of [...state.intelligenceExecutionAudits.values()]) {
+        if (row.workspaceId === input.workspaceId && row.eventId === input.eventId) {
+          state.intelligenceExecutionAudits.delete(row.id);
+        }
+      }
+      for (const row of [...state.intelligenceBridgeDispatches.values()]) {
+        if (row.workspaceId === input.workspaceId && row.eventId === input.eventId) {
+          state.intelligenceBridgeDispatches.delete(row.id);
+        }
+      }
+      for (const row of [...state.intelligenceOperatorNotes.values()]) {
+        if (row.workspaceId === input.workspaceId && row.eventId === input.eventId) {
+          state.intelligenceOperatorNotes.delete(row.id);
+        }
+      }
+      return true;
     },
 
     async updateIntelligenceEventReviewState(input) {

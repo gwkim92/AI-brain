@@ -7,12 +7,46 @@ import { computeIntelligenceTemporalNarrativeProfile, runIntelligenceScannerPass
 
 const ENV_SNAPSHOT = { ...process.env };
 
+function createStructuredProviderRouter(outputText: string): ProviderRouter {
+  return {
+    listAvailability: vi.fn().mockReturnValue([
+      { provider: 'openai', enabled: true, reason: 'configured' },
+      { provider: 'gemini', enabled: false, reason: 'missing_api_key' },
+      { provider: 'anthropic', enabled: false, reason: 'missing_api_key' },
+      { provider: 'local', enabled: false, reason: 'disabled' },
+    ]),
+    generate: vi.fn().mockResolvedValue({
+      result: {
+        provider: 'openai',
+        model: 'gpt-4.1-mini',
+        outputText,
+      },
+      attempts: [],
+      usedFallback: false,
+    }),
+  } as unknown as ProviderRouter;
+}
+
+function createAvailableProviderRouter(
+  generate: ReturnType<typeof vi.fn>,
+): ProviderRouter {
+  return {
+    listAvailability: vi.fn().mockReturnValue([
+      { provider: 'openai', enabled: true, reason: 'configured' },
+      { provider: 'gemini', enabled: false, reason: 'missing_api_key' },
+      { provider: 'anthropic', enabled: false, reason: 'missing_api_key' },
+      { provider: 'local', enabled: false, reason: 'disabled' },
+    ]),
+    generate,
+  } as unknown as ProviderRouter;
+}
+
 describe('runIntelligenceScannerPass', () => {
   beforeEach(() => {
     process.env.NODE_ENV = 'test';
     process.env.STORE_BACKEND = 'memory';
     process.env.ALLOWED_ORIGINS = 'http://localhost:3000';
-    process.env.OPENAI_API_KEY = '';
+    process.env.OPENAI_API_KEY = 'test-openai-key';
     process.env.GEMINI_API_KEY = '';
     process.env.ANTHROPIC_API_KEY = '';
     process.env.LOCAL_LLM_ENABLED = 'false';
@@ -71,89 +105,81 @@ describe('runIntelligenceScannerPass', () => {
       )
     );
 
-    const providerRouter = {
-      generate: vi.fn().mockResolvedValue({
-        result: {
-          provider: 'openai',
-          model: 'gpt-4.1-mini',
-          outputText: JSON.stringify({
-            title: 'Hormuz LNG routing shock',
-            summary: 'Routing stress is spilling into freight, insurance, and policy expectations.',
-            event_family: 'geopolitical_flashpoint',
-            entities: ['Hormuz', 'LNG', 'Fed'],
-            semantic_claims: [
-              {
-                subject_entity: 'Hormuz',
-                predicate: 'raises',
-                object: 'routing risk',
-                evidence_span: 'routing shock',
-                time_scope: null,
-                uncertainty: 'medium',
-                stance: 'supporting',
-                claim_type: 'signal',
-              },
-            ],
-            metric_shocks: [],
-            domain_posteriors: [
-              {
-                domain_id: 'geopolitics_energy_lng',
-                score: 0.82,
-                evidence_features: ['routing risk'],
-                counter_features: [],
-              },
-            ],
-            primary_hypotheses: [
-              {
-                title: 'Energy routing stress may persist',
-                summary: 'The event points to durable energy and logistics repricing.',
-                confidence: 0.72,
-                rationale: 'Official source and clustered claims align on a cross-market signal.',
-              },
-            ],
-            counter_hypotheses: [
-              {
-                title: 'Headline noise remains possible',
-                summary: 'Follow-up confirmation may fail to materialize.',
-                confidence: 0.42,
-                rationale: 'Only the initial signal is visible so far.',
-              },
-            ],
-            invalidation_conditions: [
-              {
-                title: 'No follow-up filing',
-                description: 'No official follow-up appears.',
-                matcher_json: { type: 'official_follow_up_absent' },
-              },
-              {
-                title: 'No market reaction',
-                description: 'Related markets remain flat.',
-                matcher_json: { type: 'market_confirmation_absent' },
-              },
-            ],
-            expected_signals: [
-              {
-                signal_key: 'official_follow_up',
-                description: 'Official follow-up appears.',
-                due_at: null,
-              },
-              {
-                signal_key: 'market_confirmation',
-                description: 'Market confirmation appears.',
-                due_at: null,
-              },
-            ],
-            world_states: [
-              {
-                key: 'routing_risk',
-                value_json: { score: 0.8 },
-              },
-            ],
-          }),
-        },
-        attempts: [],
-        usedFallback: false,
+    const providerRouter = createStructuredProviderRouter(
+      JSON.stringify({
+        title: 'Hormuz LNG routing shock',
+        summary: 'Routing stress is spilling into freight, insurance, and policy expectations.',
+        event_family: 'geopolitical_flashpoint',
+        entities: ['Hormuz', 'LNG', 'Fed'],
+        semantic_claims: [
+          {
+            subject_entity: 'Hormuz',
+            predicate: 'raises',
+            object: 'routing risk',
+            evidence_span: 'routing shock',
+            time_scope: null,
+            uncertainty: 'medium',
+            stance: 'supporting',
+            claim_type: 'signal',
+          },
+        ],
+        metric_shocks: [],
+        domain_posteriors: [
+          {
+            domain_id: 'geopolitics_energy_lng',
+            score: 0.82,
+            evidence_features: ['routing risk'],
+            counter_features: [],
+          },
+        ],
+        primary_hypotheses: [
+          {
+            title: 'Energy routing stress may persist',
+            summary: 'The event points to durable energy and logistics repricing.',
+            confidence: 0.72,
+            rationale: 'Official source and clustered claims align on a cross-market signal.',
+          },
+        ],
+        counter_hypotheses: [
+          {
+            title: 'Headline noise remains possible',
+            summary: 'Follow-up confirmation may fail to materialize.',
+            confidence: 0.42,
+            rationale: 'Only the initial signal is visible so far.',
+          },
+        ],
+        invalidation_conditions: [
+          {
+            title: 'No follow-up filing',
+            description: 'No official follow-up appears.',
+            matcher_json: { type: 'official_follow_up_absent' },
+          },
+          {
+            title: 'No market reaction',
+            description: 'Related markets remain flat.',
+            matcher_json: { type: 'market_confirmation_absent' },
+          },
+        ],
+        expected_signals: [
+          {
+            signal_key: 'official_follow_up',
+            description: 'Official follow-up appears.',
+            due_at: null,
+          },
+          {
+            signal_key: 'market_confirmation',
+            description: 'Market confirmation appears.',
+            due_at: null,
+          },
+        ],
+        world_states: [
+          {
+            key: 'routing_risk',
+            value_json: { score: 0.8 },
+          },
+        ],
       }),
-    } as unknown as ProviderRouter;
+    );
 
     const result = await runIntelligenceScannerPass({
       store,
@@ -238,12 +264,8 @@ describe('runIntelligenceScannerPass', () => {
       ),
     );
 
-    const providerRouter = {
-      generate: vi.fn().mockResolvedValue({
-        result: {
-          provider: 'openai',
-          model: 'gpt-4.1-mini',
-          outputText: JSON.stringify({
+    const providerRouter = createStructuredProviderRouter(
+      JSON.stringify({
             title: 'Hormuz routing stress',
             summary: 'Routing stress is affecting LNG shipping confidence.',
             event_family: 'geopolitical_flashpoint',
@@ -316,11 +338,7 @@ describe('runIntelligenceScannerPass', () => {
               },
             ],
           }),
-        },
-        attempts: [],
-        usedFallback: false,
-      }),
-    } as unknown as ProviderRouter;
+    );
 
     const result = await runIntelligenceScannerPass({
       store,
@@ -482,8 +500,7 @@ describe('runIntelligenceScannerPass', () => {
       );
     });
 
-    const providerRouter = {
-      generate: vi.fn().mockImplementation(async ({ prompt }: { prompt?: string }) => {
+    const providerRouter = createAvailableProviderRouter(vi.fn().mockImplementation(async ({ prompt }: { prompt?: string }) => {
         const text = String(prompt ?? '');
         if (text.includes('Analyst disputes immediate market damage')) {
           return {
@@ -734,8 +751,7 @@ describe('runIntelligenceScannerPass', () => {
           attempts: [],
           usedFallback: false,
         };
-      }),
-    } as unknown as ProviderRouter;
+      }));
 
     const result = await runIntelligenceScannerPass({
       store,
@@ -869,8 +885,7 @@ describe('runIntelligenceScannerPass', () => {
       ),
     );
 
-    const providerRouter = {
-      generate: vi.fn().mockImplementation(async ({ prompt }: { prompt?: string }) => {
+    const providerRouter = createAvailableProviderRouter(vi.fn().mockImplementation(async ({ prompt }: { prompt?: string }) => {
         const text = String(prompt ?? '');
         if (text.includes('Classify whether an incoming claim should be linked')) {
           if (text.includes('INCOMING_OBJECT: insurance pressure') && text.includes('CANONICAL_OBJECT: routing risk')) {
@@ -1212,8 +1227,7 @@ describe('runIntelligenceScannerPass', () => {
           attempts: [],
           usedFallback: false,
         };
-      }),
-    } as unknown as ProviderRouter;
+      }));
 
     await runIntelligenceScannerPass({
       store,

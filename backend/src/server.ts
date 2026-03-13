@@ -25,6 +25,7 @@ import { startAiTraceCleanupWorker } from './observability/ai-trace-worker';
 import { startIntelligenceCatalogSyncWorker } from './intelligence/catalog-sync-worker';
 import { startIntelligenceScannerWorker } from './intelligence/scanner-worker';
 import { startIntelligenceSemanticWorker } from './intelligence/semantic-worker';
+import { startIntelligenceStaleMaintenanceWorker } from './intelligence/stale-maintenance-worker';
 import { startRadarScannerWorker } from './radar/scanner-worker';
 import { registerRoutes } from './routes';
 import { createStore } from './store';
@@ -296,6 +297,17 @@ export async function buildServer() {
   });
   app.addHook('onClose', async () => {
     intelligenceSemanticWorker.stop();
+  });
+
+  const intelligenceStaleMaintenanceWorker = startIntelligenceStaleMaintenanceWorker({
+    store,
+    env,
+    providerRouter,
+    notificationService,
+    logger: app.log,
+  });
+  app.addHook('onClose', async () => {
+    intelligenceStaleMaintenanceWorker.stop();
   });
 
   const intelligenceCatalogSyncWorker = startIntelligenceCatalogSyncWorker({

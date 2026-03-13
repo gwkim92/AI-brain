@@ -66,13 +66,16 @@ type WorkspaceScopedStore = Pick<
   | 'completeIntelligenceScanRun'
   | 'createIntelligenceFetchFailure'
   | 'listIntelligenceRawDocuments'
+  | 'listIntelligenceRawDocumentsByIds'
   | 'findIntelligenceRawDocumentByFingerprint'
   | 'createIntelligenceRawDocument'
   | 'createIntelligenceSignal'
   | 'listIntelligenceSignals'
+  | 'listIntelligenceSignalsByIds'
   | 'updateIntelligenceSignalProcessing'
   | 'createIntelligenceLinkedClaim'
   | 'listIntelligenceLinkedClaims'
+  | 'deleteIntelligenceLinkedClaimsByIds'
   | 'createIntelligenceLinkedClaimEdge'
   | 'listIntelligenceLinkedClaimEdges'
   | 'createIntelligenceClaimLink'
@@ -81,6 +84,7 @@ type WorkspaceScopedStore = Pick<
   | 'listIntelligenceEventMemberships'
   | 'listIntelligenceEvents'
   | 'upsertIntelligenceEvent'
+  | 'deleteIntelligenceEventById'
   | 'listIntelligenceModelRegistryEntries'
   | 'upsertIntelligenceModelRegistryEntries'
   | 'replaceIntelligenceProviderHealth'
@@ -156,6 +160,43 @@ export type IntelligenceScannerEvaluation = {
   event: IntelligenceEventClusterRecord;
   created: boolean;
   autoExecuted: boolean;
+};
+
+export type IntelligenceStaleEventPreview = {
+  eventId: string;
+  title: string;
+  topDomainId: IntelligenceDomainId | null;
+  staleScore: number;
+  reasons: string[];
+  linkedClaimCount: number;
+  genericPredicateRatio: number;
+  nonSocialCorroborationCount: number;
+  edgeCount: number;
+  graphSupportScore: number;
+  graphContradictionScore: number;
+  linkedClaimHealthScore: number;
+  updatedAt: string;
+};
+
+export type IntelligenceEventRebuildResult = {
+  workspaceId: string;
+  previousEventId: string;
+  rebuiltEventId: string | null;
+  requeuedSignalIds: string[];
+  deletedLinkedClaimIds: string[];
+  semanticSummary: IntelligenceSemanticSummary;
+};
+
+export type IntelligenceBulkEventRebuildResult = {
+  workspaceId: string;
+  attemptedEventIds: string[];
+  rebuiltCount: number;
+  failedCount: number;
+  results: IntelligenceEventRebuildResult[];
+  failures: Array<{
+    eventId: string;
+    message: string;
+  }>;
 };
 
 export function computeIntelligenceOperatorPriorityScore(event: Pick<
@@ -317,6 +358,16 @@ function entityOverlap(left: string[], right: string[]): number {
     if (rightSet.has(item)) overlap += 1;
   }
   return overlap;
+}
+
+function isEventScopedLinkedClaim(input: {
+  linkedClaim: Pick<LinkedClaimRecord, 'supportingSignalIds'>;
+  signalIdSet: Set<string>;
+}): boolean {
+  return (
+    input.linkedClaim.supportingSignalIds.length > 0 &&
+    input.linkedClaim.supportingSignalIds.every((signalId) => input.signalIdSet.has(signalId))
+  );
 }
 
 function normalizeClaimPart(value: string | null | undefined): string {
@@ -1801,6 +1852,69 @@ async function syncNarrativeClusterForEvent(input: {
   });
 
   return { cluster: persistedCluster, memberships };
+}
+
+async function reconcileNarrativeClusterAfterEventRemoval(input: {
+  store: WorkspaceScopedStore;
+  workspaceId: string;
+  clusterId: string;
+}): Promise<IntelligenceNarrativeClusterRecord | null> {
+  const cluster = await input.store.getIntelligenceNarrativeClusterById({
+    workspaceId: input.workspaceId,
+    clusterId: input.clusterId,
+  });
+  if (!cluster) return null;
+
+  const memberships = await loadClusterMemberships({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    clusterId: cluster.id,
+  });
+  if (memberships.length === 0) {
+    await input.store.deleteIntelligenceNarrativeCluster({
+      workspaceId: input.workspaceId,
+      clusterId: cluster.id,
+    });
+    return null;
+  }
+
+  const memberEvents = await hydrateNarrativeClusterMemberEvents({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    memberships,
+    candidateEventsById: new Map(),
+  });
+  if (memberEvents.length === 0) {
+    await input.store.deleteIntelligenceNarrativeCluster({
+      workspaceId: input.workspaceId,
+      clusterId: cluster.id,
+    });
+    return null;
+  }
+
+  const defaultEvent =
+    memberEvents
+      .slice()
+      .sort((left, right) => Date.parse(eventAnchorIso(right) ?? '') - Date.parse(eventAnchorIso(left) ?? ''))[0] ??
+    memberEvents[0]!;
+  const latestRecurringScore = Math.max(...memberEvents.map((row) => row.recurringNarrativeScore ?? 0), 0);
+  const repairedCluster = await upsertNarrativeClusterSnapshot({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    baseCluster: cluster,
+    memberships,
+    memberEvents,
+    defaultEvent,
+    latestRecurringScore,
+    lastLedgerAt: cluster.lastLedgerAt,
+  });
+  await syncNarrativeClusterTimeline({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    clusterId: repairedCluster.id,
+    memberEvents,
+  });
+  return repairedCluster;
 }
 
 export function buildIntelligenceHotspotClusters(input: {
@@ -3328,7 +3442,7 @@ async function syncLinkedClaimsForEvent(input: {
       (matched?.nonSocialSourceCount ?? 0) +
       (signalIsNonSocial && !(matched?.supportingSignalIds ?? []).includes(input.signal.id) ? 1 : 0);
     const linkedClaim = await input.store.createIntelligenceLinkedClaim({
-      id: matched?.id,
+      id: matched?.id ?? randomUUID(),
       workspaceId: input.workspaceId,
       claimFingerprint: matched?.claimFingerprint ?? buildClaimFingerprint(claim, signalObservedAt),
       canonicalSubject: matched?.canonicalSubject ?? normalizeClaimPart(claim.subjectEntity),
@@ -3578,14 +3692,27 @@ export async function runIntelligenceSemanticPass(input: {
   workspaceId: string;
   userId: string;
   signalBatch: number;
+  signalIds?: string[];
   notificationService?: NotificationService;
 }): Promise<IntelligenceSemanticSummary> {
-  const [sources, documents, signals, existingEvents] = await Promise.all([
+  const [sources, signals, existingEvents] = await Promise.all([
     input.store.listIntelligenceSources({ workspaceId: input.workspaceId, limit: 200 }),
-    input.store.listIntelligenceRawDocuments({ workspaceId: input.workspaceId, limit: 400 }),
-    input.store.listIntelligenceSignals({ workspaceId: input.workspaceId, limit: Math.max(1, input.signalBatch), processingStatus: 'pending' }),
+    input.signalIds && input.signalIds.length > 0
+      ? input.store.listIntelligenceSignalsByIds({
+          workspaceId: input.workspaceId,
+          signalIds: input.signalIds,
+        })
+      : input.store.listIntelligenceSignals({
+          workspaceId: input.workspaceId,
+          limit: Math.max(1, input.signalBatch),
+          processingStatus: 'pending',
+        }),
     input.store.listIntelligenceEvents({ workspaceId: input.workspaceId, limit: 200 }),
   ]);
+  const documents = await input.store.listIntelligenceRawDocumentsByIds({
+    workspaceId: input.workspaceId,
+    documentIds: mergeUniqueStrings(signals.map((signal) => signal.documentId)),
+  });
   const sourceById = new Map(sources.map((row) => [row.id, row] as const));
   const documentById = new Map(documents.map((row) => [row.id, row] as const));
   let clusteredEventCount = 0;
@@ -3859,6 +3986,255 @@ export async function runIntelligenceScannerPass(input: {
     failedCount: scanSummary.failedCount + semanticSummary.failedCount,
     failedSources: scanSummary.failedSources,
     sourceIds: scanSummary.sourceIds,
+  };
+}
+
+export async function listSuspiciousIntelligenceEvents(input: {
+  store: WorkspaceScopedStore;
+  workspaceId: string;
+  limit: number;
+}): Promise<IntelligenceStaleEventPreview[]> {
+  const events = await input.store.listIntelligenceEvents({
+    workspaceId: input.workspaceId,
+    limit: Math.max(input.limit * 3, 150),
+  });
+  const previews: IntelligenceStaleEventPreview[] = [];
+
+  for (const event of events) {
+    const [linkedClaims, edges] = await Promise.all([
+      input.store.listIntelligenceLinkedClaims({
+        workspaceId: input.workspaceId,
+        eventId: event.id,
+        limit: 200,
+      }),
+      input.store.listIntelligenceLinkedClaimEdges({
+        workspaceId: input.workspaceId,
+        eventId: event.id,
+        limit: 200,
+      }),
+    ]);
+    const genericPredicateCount = linkedClaims.filter((row) => row.canonicalPredicate === 'signals').length;
+    const genericPredicateRatio = linkedClaims.length > 0 ? genericPredicateCount / linkedClaims.length : 0;
+    const reasons: string[] = [];
+    let staleScore = 0;
+    if (event.graphSupportScore === 0 && event.graphContradictionScore === 0 && edges.length === 0) {
+      reasons.push('zero_graph_scores');
+      staleScore += 5;
+    }
+    if (genericPredicateRatio >= 0.6 && linkedClaims.length > 0) {
+      reasons.push('generic_predicate_ratio');
+      staleScore += 4;
+    }
+    if (linkedClaims.length >= 10) {
+      reasons.push('inflated_claim_count');
+      staleScore += 2;
+    }
+    if (event.nonSocialCorroborationCount < 1) {
+      reasons.push('missing_non_social_corroboration');
+      staleScore += 1;
+    }
+    if (event.linkedClaimHealthScore < 0.42) {
+      reasons.push('linked_claim_health_too_low');
+      staleScore += 2;
+    }
+    if (reasons.length === 0) continue;
+    previews.push({
+      eventId: event.id,
+      title: event.title,
+      topDomainId: event.topDomainId,
+      staleScore,
+      reasons,
+      linkedClaimCount: linkedClaims.length,
+      genericPredicateRatio: Number(genericPredicateRatio.toFixed(3)),
+      nonSocialCorroborationCount: event.nonSocialCorroborationCount,
+      edgeCount: edges.length,
+      graphSupportScore: event.graphSupportScore,
+      graphContradictionScore: event.graphContradictionScore,
+      linkedClaimHealthScore: event.linkedClaimHealthScore,
+      updatedAt: event.updatedAt,
+    });
+  }
+
+  return previews
+    .sort((left, right) => right.staleScore - left.staleScore || Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+    .slice(0, input.limit);
+}
+
+async function selectRebuiltEvent(input: {
+  store: WorkspaceScopedStore;
+  workspaceId: string;
+  eventIds: string[];
+  signalIds: string[];
+}): Promise<IntelligenceEventClusterRecord | null> {
+  const signalIdSet = new Set(input.signalIds);
+  let best: { event: IntelligenceEventClusterRecord; overlap: number } | null = null;
+  for (const eventId of input.eventIds) {
+    const event = await input.store.getIntelligenceEventById({
+      workspaceId: input.workspaceId,
+      eventId,
+    });
+    if (!event) continue;
+    const overlap = event.signalIds.filter((signalId) => signalIdSet.has(signalId)).length;
+    if (!best || overlap > best.overlap) {
+      best = { event, overlap };
+    }
+  }
+  return best?.event ?? null;
+}
+
+export async function rebuildIntelligenceEvent(input: {
+  store: WorkspaceScopedStore;
+  providerRouter: ProviderRouter;
+  env: AppEnv;
+  workspaceId: string;
+  userId: string;
+  eventId: string;
+  notificationService?: NotificationService;
+}): Promise<IntelligenceEventRebuildResult> {
+  const event = await input.store.getIntelligenceEventById({
+    workspaceId: input.workspaceId,
+    eventId: input.eventId,
+  });
+  if (!event) {
+    throw new Error('intelligence event not found');
+  }
+  const signalIds = mergeUniqueStrings(event.signalIds);
+  if (signalIds.length === 0) {
+    throw new Error('intelligence event has no signals to rebuild');
+  }
+
+  const [signals, linkedClaims, narrativeMembership] = await Promise.all([
+    input.store.listIntelligenceSignalsByIds({
+      workspaceId: input.workspaceId,
+      signalIds,
+    }),
+    input.store.listIntelligenceLinkedClaims({
+      workspaceId: input.workspaceId,
+      eventId: event.id,
+      limit: 200,
+    }),
+    input.store.listIntelligenceNarrativeClusterMemberships({
+      workspaceId: input.workspaceId,
+      eventId: event.id,
+      limit: 1,
+    }),
+  ]);
+  const signalIdSet = new Set(signalIds);
+  const deletableLinkedClaimIds = linkedClaims
+    .filter((linkedClaim) => isEventScopedLinkedClaim({
+      linkedClaim,
+      signalIdSet,
+    }))
+    .map((linkedClaim) => linkedClaim.id);
+
+  const previousClusterId = narrativeMembership[0]?.clusterId ?? null;
+  await input.store.deleteIntelligenceEventById({
+    workspaceId: input.workspaceId,
+    eventId: event.id,
+  });
+  if (deletableLinkedClaimIds.length > 0) {
+    await input.store.deleteIntelligenceLinkedClaimsByIds({
+      workspaceId: input.workspaceId,
+      linkedClaimIds: deletableLinkedClaimIds,
+    });
+  }
+  if (previousClusterId) {
+    await reconcileNarrativeClusterAfterEventRemoval({
+      store: input.store,
+      workspaceId: input.workspaceId,
+      clusterId: previousClusterId,
+    });
+  }
+
+  for (const signalId of signalIds) {
+    await input.store.updateIntelligenceSignalProcessing({
+      workspaceId: input.workspaceId,
+      signalId,
+      processingStatus: 'pending',
+      linkedEventId: null,
+      processingError: null,
+      processedAt: null,
+    });
+  }
+
+  const semanticSummary = await runIntelligenceSemanticPass({
+    store: input.store,
+    providerRouter: input.providerRouter,
+    env: input.env,
+    workspaceId: input.workspaceId,
+    userId: input.userId,
+    signalBatch: signalIds.length,
+    signalIds,
+    notificationService: input.notificationService,
+  });
+  const rebuiltEvent = await selectRebuiltEvent({
+    store: input.store,
+    workspaceId: input.workspaceId,
+    eventIds: semanticSummary.eventIds,
+    signalIds,
+  });
+
+  return {
+    workspaceId: input.workspaceId,
+    previousEventId: event.id,
+    rebuiltEventId: rebuiltEvent?.id ?? null,
+    requeuedSignalIds: signals.map((signal) => signal.id),
+    deletedLinkedClaimIds: deletableLinkedClaimIds,
+    semanticSummary,
+  };
+}
+
+export async function bulkRebuildIntelligenceEvents(input: {
+  store: WorkspaceScopedStore;
+  providerRouter: ProviderRouter;
+  env: AppEnv;
+  workspaceId: string;
+  userId: string;
+  eventIds?: string[];
+  limit?: number;
+  notificationService?: NotificationService;
+}): Promise<IntelligenceBulkEventRebuildResult> {
+  const attemptedEventIds =
+    input.eventIds && input.eventIds.length > 0
+      ? mergeUniqueStrings(input.eventIds)
+      : (
+          await listSuspiciousIntelligenceEvents({
+            store: input.store,
+            workspaceId: input.workspaceId,
+            limit: input.limit ?? 10,
+          })
+        ).map((event) => event.eventId);
+
+  const results: IntelligenceEventRebuildResult[] = [];
+  const failures: Array<{ eventId: string; message: string }> = [];
+
+  for (const eventId of attemptedEventIds) {
+    try {
+      const result = await rebuildIntelligenceEvent({
+        store: input.store,
+        providerRouter: input.providerRouter,
+        env: input.env,
+        workspaceId: input.workspaceId,
+        userId: input.userId,
+        eventId,
+        notificationService: input.notificationService,
+      });
+      results.push(result);
+    } catch (error) {
+      failures.push({
+        eventId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return {
+    workspaceId: input.workspaceId,
+    attemptedEventIds,
+    rebuiltCount: results.length,
+    failedCount: failures.length,
+    results,
+    failures,
   };
 }
 

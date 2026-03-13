@@ -9,6 +9,12 @@ const ENV_SNAPSHOT = { ...process.env };
 describe('Intelligence routes', () => {
   function createStructuredProviderRouter() {
     return {
+      listAvailability: vi.fn().mockReturnValue([
+        { provider: 'openai', enabled: true, reason: 'configured' },
+        { provider: 'gemini', enabled: false, reason: 'missing_api_key' },
+        { provider: 'anthropic', enabled: false, reason: 'missing_api_key' },
+        { provider: 'local', enabled: false, reason: 'disabled' },
+      ]),
       generate: vi.fn().mockImplementation(async ({ prompt }: { prompt?: string }) => {
         const text = String(prompt ?? '');
         const contradictory = text.includes('disputes') || text.includes('pushes back');
@@ -104,7 +110,7 @@ describe('Intelligence routes', () => {
     process.env.ALLOWED_ORIGINS = 'http://localhost:3000';
     process.env.PORT = '4011';
     process.env.LOCAL_LLM_ENABLED = 'false';
-    process.env.OPENAI_API_KEY = '';
+    process.env.OPENAI_API_KEY = 'test-openai-key';
     process.env.GEMINI_API_KEY = '';
     process.env.ANTHROPIC_API_KEY = '';
     process.env.AUTH_REQUIRED = 'false';
@@ -214,11 +220,14 @@ describe('Intelligence routes', () => {
       data: {
         binding_scope: 'workspace' | 'global';
         bindings: Array<{ workspaceId: string | null; modelId: string }>;
+        rollout: { note: string | null };
       };
     };
     expect(updateBody.data.binding_scope).toBe('workspace');
     expect(updateBody.data.bindings[0]?.workspaceId).toBe(workspaceId);
     expect(updateBody.data.bindings[0]?.modelId).toBe('gpt-5-mini');
+    expect(updateBody.data.rollout.note).toContain('workspace runtime binding update');
+    expect(updateBody.data.rollout.note).toContain('+');
 
     const globalUpdateResponse = await app.inject({
       method: 'POST',
@@ -248,11 +257,13 @@ describe('Intelligence routes', () => {
       data: {
         binding_scope: 'workspace' | 'global';
         bindings: Array<{ workspaceId: string | null; provider: string }>;
+        rollout: { note: string | null };
       };
     };
     expect(globalUpdateBody.data.binding_scope).toBe('global');
     expect(globalUpdateBody.data.bindings[0]?.workspaceId).toBeNull();
     expect(globalUpdateBody.data.bindings[0]?.provider).toBe('gemini');
+    expect(globalUpdateBody.data.rollout.note).toContain('global runtime binding update');
 
     await app.close();
   });
@@ -862,6 +873,11 @@ describe('Intelligence routes', () => {
           clusterPriorityScore: number;
           recentExecutionBlockedCount: number;
           lastLedgerAt: string | null;
+          last_transition?: {
+            entry_type: string;
+            summary: string;
+            created_at: string;
+          } | null;
         }>;
       };
     };
@@ -870,6 +886,8 @@ describe('Intelligence routes', () => {
 
     const clusterId = refreshedDetailBody.data.narrative_cluster?.id;
     expect(clusterId).toBeTruthy();
+    const listedCluster = clusterListBody.data.narrative_clusters.find((row) => row.id === clusterId);
+    expect(listedCluster?.last_transition?.entry_type).toBeTruthy();
 
     const clusterDetailResponse = await app.inject({
       method: 'GET',
@@ -879,7 +897,14 @@ describe('Intelligence routes', () => {
     expect(clusterDetailResponse.statusCode).toBe(200);
     const clusterDetailBody = clusterDetailResponse.json() as {
       data: {
-        narrative_cluster: { id: string; clusterPriorityScore: number };
+        narrative_cluster: {
+          id: string;
+          clusterPriorityScore: number;
+          last_transition?: {
+            entry_type: string;
+            summary: string;
+          } | null;
+        };
         memberships: Array<{ eventId: string }>;
         recent_events: Array<{ id: string }>;
         ledger_entries: Array<{ entryType: string }>;
@@ -891,6 +916,7 @@ describe('Intelligence routes', () => {
     expect(clusterDetailBody.data.recent_events.length).toBeGreaterThan(0);
     expect(Array.isArray(clusterDetailBody.data.ledger_entries)).toBe(true);
     expect(clusterDetailBody.data.operator_notes.some((row) => row.scope === 'narrative_cluster')).toBe(true);
+    expect(clusterDetailBody.data.narrative_cluster.last_transition?.summary).toBeTruthy();
 
     const clusterTimelineResponse = await app.inject({
       method: 'GET',
@@ -1056,6 +1082,252 @@ describe('Intelligence routes', () => {
       limit: 10,
     });
     expect(retriedSignal.some((row) => row.id === signal.id)).toBe(true);
+
+    await app.close();
+  });
+
+  it('previews suspicious stale events and cleanly rebuilds them through maintenance routes', async () => {
+    const { app, store, env, providerRouter } = await buildServer();
+    const headers = {
+      'x-user-id': 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      'x-user-role': 'admin',
+    };
+
+    providerRouter.listAvailability = createStructuredProviderRouter().listAvailability as ProviderRouter['listAvailability'];
+    providerRouter.generate = createStructuredProviderRouter().generate as ProviderRouter['generate'];
+
+    const workspace = await store.getOrCreateIntelligenceWorkspace({ userId: headers['x-user-id'] });
+    const source = await store.createIntelligenceSource({
+      workspaceId: workspace.id,
+      name: 'Stale maintenance feed',
+      kind: 'json',
+      url: 'https://example.com/stale-maintenance.json',
+      sourceType: 'policy',
+      sourceTier: 'tier_0',
+      pollMinutes: 5,
+      parserConfigJson: {
+        itemsPath: 'items',
+        titleField: 'title',
+        summaryField: 'summary',
+        urlField: 'url',
+        publishedAtField: 'published_at',
+      },
+      entityHints: ['Hormuz', 'LNG'],
+      metricHints: ['freight'],
+    });
+
+    await runIntelligenceScannerPass({
+      store,
+      providerRouter,
+      env,
+      workspaceId: workspace.id,
+      fetchTimeoutMs: 2_000,
+      sourceBatch: 10,
+      fetchImpl: vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            items: [
+              {
+                title: 'Official Hormuz routing stress',
+                summary: 'An official routing update points to renewed pressure.',
+                url: 'https://example.com/stale-maintenance-live',
+                published_at: '2026-03-12T01:00:00.000Z',
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: {
+              'content-type': 'application/json',
+            },
+          },
+        ),
+      ),
+    });
+
+    const templateEvent = (await store.listIntelligenceEvents({ workspaceId: workspace.id, limit: 10 }))[0];
+    expect(templateEvent).toBeTruthy();
+
+    const staleDocument = await store.createIntelligenceRawDocument({
+      workspaceId: workspace.id,
+      sourceId: source.id,
+      sourceUrl: source.url,
+      canonicalUrl: `${source.url}/stale`,
+      title: 'Weird stale transport memo',
+      summary: 'A stale fallback event survived earlier heuristic extraction.',
+      rawText: 'Official routing memo for Hormuz and LNG shipping pressure.',
+      rawHtml: '<p>Official routing memo for Hormuz and LNG shipping pressure.</p>',
+      publishedAt: '2026-03-12T03:00:00.000Z',
+      observedAt: '2026-03-12T03:05:00.000Z',
+      language: 'en',
+      sourceType: source.sourceType,
+      sourceTier: source.sourceTier,
+      documentFingerprint: 'stale-maintenance-doc',
+      metadataJson: {},
+    });
+    const staleSignal = await store.createIntelligenceSignal({
+      workspaceId: workspace.id,
+      sourceId: source.id,
+      documentId: staleDocument.id,
+      sourceType: source.sourceType,
+      sourceTier: source.sourceTier,
+      url: staleDocument.canonicalUrl,
+      publishedAt: staleDocument.publishedAt,
+      observedAt: staleDocument.observedAt,
+      language: staleDocument.language,
+      rawText: staleDocument.rawText,
+      rawMetrics: {},
+      entityHints: ['Hormuz', 'LNG'],
+      trustHint: 'official',
+      processingStatus: 'processed',
+      linkedEventId: null,
+      processingError: null,
+      processedAt: '2026-03-12T03:06:00.000Z',
+    });
+
+    const staleEventId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const staleEvent = await store.upsertIntelligenceEvent({
+      ...templateEvent!,
+      id: staleEventId,
+      title: 'Weird stale fallback event',
+      summary: 'Legacy fallback output survived and should be rebuilt.',
+      signalIds: [staleSignal.id],
+      documentIds: [staleDocument.id],
+      linkedClaimCount: 3,
+      contradictionCount: 0,
+      nonSocialCorroborationCount: 0,
+      linkedClaimHealthScore: 0.18,
+      timeCoherenceScore: 0.74,
+      graphSupportScore: 0,
+      graphContradictionScore: 0,
+      graphHotspotCount: 0,
+      semanticClaims: [],
+      topDomainId: 'shipping_supply_chain',
+      reviewReason: null,
+      reviewOwner: null,
+      reviewUpdatedAt: null,
+      reviewUpdatedBy: null,
+      reviewResolvedAt: null,
+      executionCandidates: [],
+      outcomes: [],
+      createdAt: '2026-03-12T03:06:00.000Z',
+      updatedAt: '2026-03-12T03:06:00.000Z',
+    });
+    await store.updateIntelligenceSignalProcessing({
+      workspaceId: workspace.id,
+      signalId: staleSignal.id,
+      processingStatus: 'processed',
+      linkedEventId: staleEvent.id,
+      processingError: null,
+      processedAt: '2026-03-12T03:06:00.000Z',
+    });
+
+    const staleLinkedClaims = await Promise.all(
+      Array.from({ length: 3 }, (_, index) =>
+        store.createIntelligenceLinkedClaim({
+          workspaceId: workspace.id,
+          claimFingerprint: `stale-maintenance-claim-${index}`,
+          canonicalSubject: 'hormuz',
+          canonicalPredicate: 'signals',
+          canonicalObject: `fallback-${index}`,
+          predicateFamily: 'general',
+          timeScope: null,
+          timeBucketStart: '2026-03-12T00:00:00.000Z',
+          timeBucketEnd: '2026-03-12T23:59:59.000Z',
+          stanceDistribution: { supporting: 1, neutral: 0, contradicting: 0 },
+          sourceCount: 1,
+          contradictionCount: 0,
+          nonSocialSourceCount: 0,
+          supportingSignalIds: [staleSignal.id],
+          lastSupportedAt: '2026-03-12T03:06:00.000Z',
+          lastContradictedAt: null,
+        }),
+      ),
+    );
+    await store.replaceIntelligenceEventMemberships({
+      workspaceId: workspace.id,
+      eventId: staleEvent.id,
+      memberships: staleLinkedClaims.map((linkedClaim) => ({
+        workspaceId: workspace.id,
+        eventId: staleEvent.id,
+        linkedClaimId: linkedClaim.id,
+        role: 'core' as const,
+      })),
+    });
+
+    const previewResponse = await app.inject({
+      method: 'GET',
+      url: `/api/v1/intelligence/maintenance/stale-events?workspace_id=${workspace.id}&limit=20`,
+      headers,
+    });
+    expect(previewResponse.statusCode).toBe(200);
+    const previewBody = previewResponse.json() as {
+      data: {
+        stale_events: Array<{ eventId: string; reasons: string[] }>;
+      };
+    };
+    expect(previewBody.data.stale_events.some((row) => row.eventId === staleEventId)).toBe(true);
+    expect(previewBody.data.stale_events.find((row) => row.eventId === staleEventId)?.reasons).toContain('generic_predicate_ratio');
+
+    const rebuildResponse = await app.inject({
+      method: 'POST',
+      url: `/api/v1/intelligence/events/${staleEventId}/rebuild`,
+      headers,
+      payload: {
+        workspace_id: workspace.id,
+      },
+    });
+    expect(rebuildResponse.statusCode).toBe(202);
+    const rebuildBody = rebuildResponse.json() as {
+      data: {
+        result: {
+          previousEventId: string;
+          rebuiltEventId: string | null;
+          requeuedSignalIds: string[];
+          deletedLinkedClaimIds: string[];
+        };
+      };
+    };
+    expect(rebuildBody.data.result.previousEventId).toBe(staleEventId);
+    expect(rebuildBody.data.result.rebuiltEventId).toBeTruthy();
+    expect(rebuildBody.data.result.requeuedSignalIds).toContain(staleSignal.id);
+    expect(rebuildBody.data.result.deletedLinkedClaimIds.length).toBe(3);
+
+    const rebuiltEventId = rebuildBody.data.result.rebuiltEventId!;
+    const rebuiltDetailResponse = await app.inject({
+      method: 'GET',
+      url: `/api/v1/intelligence/events/${rebuiltEventId}?workspace_id=${workspace.id}`,
+      headers,
+    });
+    expect(rebuiltDetailResponse.statusCode).toBe(200);
+    const rebuiltDetailBody = rebuiltDetailResponse.json() as {
+      data: {
+        event: {
+          topDomainId: string | null;
+          nonSocialCorroborationCount: number;
+          linkedClaimHealthScore: number;
+        };
+        linked_claims: Array<{ canonicalPredicate: string }>;
+      };
+    };
+    expect(rebuiltDetailBody.data.linked_claims.length).toBeGreaterThan(0);
+    expect(rebuiltDetailBody.data.linked_claims.every((row) => row.canonicalPredicate !== 'signals')).toBe(true);
+    expect(rebuiltDetailBody.data.event.topDomainId).toBe('geopolitics_energy_lng');
+    expect(rebuiltDetailBody.data.event.nonSocialCorroborationCount).toBeGreaterThanOrEqual(1);
+    expect(rebuiltDetailBody.data.event.linkedClaimHealthScore).toBeGreaterThan(0.18);
+
+    const previewAfterResponse = await app.inject({
+      method: 'GET',
+      url: `/api/v1/intelligence/maintenance/stale-events?workspace_id=${workspace.id}&limit=20`,
+      headers,
+    });
+    expect(previewAfterResponse.statusCode).toBe(200);
+    const previewAfterBody = previewAfterResponse.json() as {
+      data: {
+        stale_events: Array<{ eventId: string }>;
+      };
+    };
+    expect(previewAfterBody.data.stale_events.some((row) => row.eventId === staleEventId)).toBe(false);
 
     await app.close();
   });

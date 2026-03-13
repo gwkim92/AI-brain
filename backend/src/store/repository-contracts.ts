@@ -217,11 +217,14 @@ export const INTELLIGENCE_REPOSITORY_METHOD_KEYS = [
   'findIntelligenceRawDocumentByFingerprint',
   'createIntelligenceRawDocument',
   'listIntelligenceRawDocuments',
+  'listIntelligenceRawDocumentsByIds',
   'createIntelligenceSignal',
   'listIntelligenceSignals',
+  'listIntelligenceSignalsByIds',
   'updateIntelligenceSignalProcessing',
   'createIntelligenceLinkedClaim',
   'listIntelligenceLinkedClaims',
+  'deleteIntelligenceLinkedClaimsByIds',
   'updateIntelligenceLinkedClaimReviewState',
   'createIntelligenceClaimLink',
   'listIntelligenceClaimLinks',
@@ -232,6 +235,7 @@ export const INTELLIGENCE_REPOSITORY_METHOD_KEYS = [
   'upsertIntelligenceEvent',
   'listIntelligenceEvents',
   'getIntelligenceEventById',
+  'deleteIntelligenceEventById',
   'updateIntelligenceEventReviewState',
   'createIntelligenceOperatorNote',
   'listIntelligenceOperatorNotes',
@@ -496,11 +500,14 @@ export type IntelligenceRepositoryContract = Pick<
   | 'findIntelligenceRawDocumentByFingerprint'
   | 'createIntelligenceRawDocument'
   | 'listIntelligenceRawDocuments'
+  | 'listIntelligenceRawDocumentsByIds'
   | 'createIntelligenceSignal'
   | 'listIntelligenceSignals'
+  | 'listIntelligenceSignalsByIds'
   | 'updateIntelligenceSignalProcessing'
   | 'createIntelligenceLinkedClaim'
   | 'listIntelligenceLinkedClaims'
+  | 'deleteIntelligenceLinkedClaimsByIds'
   | 'updateIntelligenceLinkedClaimReviewState'
   | 'createIntelligenceLinkedClaimEdge'
   | 'listIntelligenceLinkedClaimEdges'
@@ -511,6 +518,7 @@ export type IntelligenceRepositoryContract = Pick<
   | 'upsertIntelligenceEvent'
   | 'listIntelligenceEvents'
   | 'getIntelligenceEventById'
+  | 'deleteIntelligenceEventById'
   | 'updateIntelligenceEventReviewState'
   | 'createIntelligenceOperatorNote'
   | 'listIntelligenceOperatorNotes'

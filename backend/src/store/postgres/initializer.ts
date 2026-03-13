@@ -278,15 +278,21 @@ export async function initializePostgresStore({
         WHERE t.relname = 'jarvis_sessions'
           AND c.conname = 'jarvis_sessions_intent_check'
       ) THEN
-        ALTER TABLE jarvis_sessions DROP CONSTRAINT jarvis_sessions_intent_check;
+        ALTER TABLE jarvis_sessions DROP CONSTRAINT IF EXISTS jarvis_sessions_intent_check;
+      END IF;
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        WHERE t.relname = 'jarvis_sessions'
+          AND c.conname = 'jarvis_sessions_intent_check'
+      ) THEN
+        ALTER TABLE jarvis_sessions
+        ADD CONSTRAINT jarvis_sessions_intent_check
+        CHECK (intent IN ('general', 'code', 'research', 'finance', 'news', 'council'));
       END IF;
     END
     $$;
-  `);
-  await pool.query(`
-    ALTER TABLE IF EXISTS jarvis_sessions
-    ADD CONSTRAINT jarvis_sessions_intent_check
-    CHECK (intent IN ('general', 'code', 'research', 'finance', 'news', 'council'))
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS memory_notes (
@@ -888,7 +894,7 @@ export async function initializePostgresStore({
         WHERE t.relname = 'mission_steps'
           AND c.conname = 'mission_steps_step_type_check'
       ) THEN
-        ALTER TABLE mission_steps DROP CONSTRAINT mission_steps_step_type_check;
+        ALTER TABLE mission_steps DROP CONSTRAINT IF EXISTS mission_steps_step_type_check;
       END IF;
     END
     $$;

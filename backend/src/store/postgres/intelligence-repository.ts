@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 
 import type { IntelligenceRepositoryContract } from '../repository-contracts';
@@ -1110,6 +1111,17 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
       return rows.map(mapRawDocumentRow);
     },
 
+    async listIntelligenceRawDocumentsByIds(input) {
+      if (input.documentIds.length === 0) return [];
+      const { rows } = await pool.query<IntelligenceRawDocumentRow>(
+        `SELECT * FROM intelligence_raw_documents
+         WHERE workspace_id = $1
+           AND id = ANY($2::uuid[])`,
+        [input.workspaceId, input.documentIds]
+      );
+      return rows.map(mapRawDocumentRow);
+    },
+
     async createIntelligenceSignal(input) {
       const { rows } = await pool.query<IntelligenceSignalRow>(
         `INSERT INTO intelligence_signals (
@@ -1159,6 +1171,20 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
          ORDER BY created_at DESC
          LIMIT $${params.length}`,
         params
+      );
+      return rows.map(mapSignalRow);
+    },
+
+    async listIntelligenceSignalsByIds(
+      input: Parameters<IntelligenceRepositoryContract['listIntelligenceSignalsByIds']>[0],
+    ) {
+      if (input.signalIds.length === 0) return [];
+      const { rows } = await pool.query<IntelligenceSignalRow>(
+        `SELECT * FROM intelligence_signals
+         WHERE workspace_id = $1
+           AND id = ANY($2::uuid[])
+         ORDER BY created_at DESC`,
+        [input.workspaceId, input.signalIds],
       );
       return rows.map(mapSignalRow);
     },
@@ -1247,7 +1273,7 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
            updated_at = now()
          RETURNING *`,
         [
-          input.id ?? null,
+          input.id ?? randomUUID(),
           input.workspaceId,
           input.claimFingerprint,
           input.canonicalSubject,
@@ -1296,6 +1322,19 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
       return rows.map(mapLinkedClaimRow);
     },
 
+    async deleteIntelligenceLinkedClaimsByIds(
+      input: Parameters<IntelligenceRepositoryContract['deleteIntelligenceLinkedClaimsByIds']>[0],
+    ) {
+      if (input.linkedClaimIds.length === 0) return 0;
+      const result = await pool.query(
+        `DELETE FROM intelligence_linked_claims
+         WHERE workspace_id = $1
+           AND id = ANY($2::uuid[])`,
+        [input.workspaceId, input.linkedClaimIds],
+      );
+      return result.rowCount ?? 0;
+    },
+
     async updateIntelligenceLinkedClaimReviewState(input) {
       const { rows } = await pool.query<IntelligenceLinkedClaimRow>(
         `UPDATE intelligence_linked_claims
@@ -1328,7 +1367,7 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
          RETURNING *`,
         [
-          input.id ?? null,
+          input.id ?? randomUUID(),
           input.workspaceId,
           input.eventId,
           input.linkedClaimId,
@@ -1382,7 +1421,7 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
            updated_at = now()
          RETURNING *`,
         [
-          input.id ?? null,
+          input.id ?? randomUUID(),
           input.workspaceId,
           leftLinkedClaimId,
           rightLinkedClaimId,
@@ -1441,7 +1480,7 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
            ) VALUES ($1,$2,$3,$4,$5)
            RETURNING *`,
           [
-            membership.id ?? null,
+            membership.id ?? randomUUID(),
             input.workspaceId,
             input.eventId,
             membership.linkedClaimId,
@@ -1603,6 +1642,17 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
       return rows[0] ? mapEventRow(rows[0]) : null;
     },
 
+    async deleteIntelligenceEventById(
+      input: Parameters<IntelligenceRepositoryContract['deleteIntelligenceEventById']>[0],
+    ) {
+      const result = await pool.query(
+        `DELETE FROM intelligence_events
+         WHERE workspace_id = $1 AND id = $2`,
+        [input.workspaceId, input.eventId],
+      );
+      return (result.rowCount ?? 0) > 0;
+    },
+
     async updateIntelligenceEventReviewState(input) {
       const { rows } = await pool.query<IntelligenceEventRow>(
         `UPDATE intelligence_events
@@ -1644,7 +1694,7 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
         )
         SELECT * FROM inserted`,
         [
-          input.id ?? null,
+          input.id ?? randomUUID(),
           input.workspaceId,
           input.eventId,
           input.userId,
@@ -1686,7 +1736,7 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::timestamptz,$15,$16::timestamptz)
          RETURNING *`,
         [
-          input.id ?? null,
+          input.id ?? randomUUID(),
           input.workspaceId,
           input.eventId,
           input.hypothesisId,
@@ -1749,7 +1799,7 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
          RETURNING *`,
         [
-          input.id ?? null,
+          input.id ?? randomUUID(),
           input.workspaceId,
           input.eventId,
           input.hypothesisId,
@@ -1786,7 +1836,7 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
            ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7)
            RETURNING *`,
           [
-            entry.id ?? null,
+            entry.id ?? randomUUID(),
             input.workspaceId,
             input.eventId,
             entry.title,
@@ -1824,7 +1874,7 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
            ) VALUES ($1,$2,$3,$4,$5,$6,$7)
            RETURNING *`,
           [
-            entry.id ?? null,
+            entry.id ?? randomUUID(),
             input.workspaceId,
             input.eventId,
             entry.signalKey,
@@ -1858,7 +1908,7 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
            summary = EXCLUDED.summary
          RETURNING *`,
         [
-          input.id ?? null,
+          input.id ?? randomUUID(),
           input.workspaceId,
           input.eventId,
           input.status,
@@ -1890,7 +1940,7 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
            last_ledger_at, last_event_at, last_recurring_at, last_diverging_at
          ) VALUES (
            $1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,
-           $25,$26,$27,$28::timestamptz,$29,$30::timestamptz,$31::timestamptz,$32::timestamptz,$33::timestamptz
+           $25,$26,$27,$28::timestamptz,$29,$30::timestamptz,$31::timestamptz,$32::timestamptz,$33::timestamptz,$34::timestamptz
          )
          ON CONFLICT (workspace_id, cluster_key) DO UPDATE SET
            title = EXCLUDED.title,
@@ -1927,7 +1977,7 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
            updated_at = now()
          RETURNING *`,
         [
-          input.id ?? null,
+          input.id ?? randomUUID(),
           input.workspaceId,
           input.clusterKey,
           input.title,
@@ -2035,7 +2085,7 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
            updated_at = now()
          RETURNING *`,
         [
-          input.id ?? null,
+          input.id ?? randomUUID(),
           input.workspaceId,
           input.clusterId,
           input.eventId,
@@ -2085,7 +2135,7 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
            RETURNING *`,
           [
-            entry.id ?? null,
+            entry.id ?? randomUUID(),
             input.workspaceId,
             input.eventId,
             entry.relatedEventId,
@@ -2122,7 +2172,7 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
          ) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
          RETURNING *`,
         [
-          input.id ?? null,
+          input.id ?? randomUUID(),
           input.workspaceId,
           input.clusterId,
           input.entryType,
@@ -2165,7 +2215,7 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
            ) VALUES ($1,$2,$3,$4::timestamptz,$5,$6,$7,$8,$9,$10,$11)
            RETURNING *`,
           [
-            entry.id ?? null,
+            entry.id ?? randomUUID(),
             input.workspaceId,
             input.clusterId,
             entry.bucketStart,
@@ -2200,7 +2250,7 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
          RETURNING *`,
         [
-          input.id ?? null,
+          input.id ?? randomUUID(),
           input.workspaceId,
           input.eventId,
           input.candidateId,

@@ -3287,12 +3287,20 @@ export type JarvisStore = {
     workspaceId: string;
     limit: number;
   }) => Promise<RawDocumentRecord[]>;
+  listIntelligenceRawDocumentsByIds: (input: {
+    workspaceId: string;
+    documentIds: string[];
+  }) => Promise<RawDocumentRecord[]>;
   createIntelligenceSignal: (input: CreateSignalEnvelopeInput) => Promise<SignalEnvelopeRecord>;
   listIntelligenceSignals: (input: {
     workspaceId: string;
     sourceId?: string;
     processingStatus?: IntelligenceSignalProcessingStatus;
     limit: number;
+  }) => Promise<SignalEnvelopeRecord[]>;
+  listIntelligenceSignalsByIds: (input: {
+    workspaceId: string;
+    signalIds: string[];
   }) => Promise<SignalEnvelopeRecord[]>;
   updateIntelligenceSignalProcessing: (input: UpdateIntelligenceSignalProcessingInput) => Promise<SignalEnvelopeRecord | null>;
   createIntelligenceLinkedClaim: (input: CreateLinkedClaimInput) => Promise<LinkedClaimRecord>;
@@ -3301,6 +3309,10 @@ export type JarvisStore = {
     eventId?: string;
     limit: number;
   }) => Promise<LinkedClaimRecord[]>;
+  deleteIntelligenceLinkedClaimsByIds: (input: {
+    workspaceId: string;
+    linkedClaimIds: string[];
+  }) => Promise<number>;
   updateIntelligenceLinkedClaimReviewState: (
     input: UpdateIntelligenceLinkedClaimReviewStateInput
   ) => Promise<LinkedClaimRecord | null>;
@@ -3337,6 +3349,10 @@ export type JarvisStore = {
     workspaceId: string;
     eventId: string;
   }) => Promise<IntelligenceEventClusterRecord | null>;
+  deleteIntelligenceEventById: (input: {
+    workspaceId: string;
+    eventId: string;
+  }) => Promise<boolean>;
   updateIntelligenceEventReviewState: (input: UpdateIntelligenceEventReviewStateInput) => Promise<IntelligenceEventClusterRecord | null>;
   createIntelligenceOperatorNote: (input: CreateOperatorNoteInput) => Promise<OperatorNoteRecord>;
   listIntelligenceOperatorNotes: (input: {
