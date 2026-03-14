@@ -118,4 +118,90 @@ describe('fetchIntelligenceSource', () => {
     expect(result.documents.some((document) => document.canonicalUrl.includes('/search'))).toBe(false);
     expect(result.fetchMeta.searchCandidateCount).toBe(2);
   });
+
+  it('keeps document fingerprints stable when the same canonical url is re-observed with a different published time', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('/search')) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                title: 'Institutional AI vs. Individual AI',
+                url: 'https://www.a16z.news/p/institutional-ai-vs-individual-ai',
+                published_at: '2026-03-12T14:10:13.000Z',
+              },
+            ],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (String(url).endsWith('/robots.txt')) {
+        return new Response('User-agent: *\nAllow: /\n', { status: 200 });
+      }
+      return new Response('<html><title>Institutional AI vs. Individual AI</title><body>essay</body></html>', {
+        status: 200,
+      });
+    });
+    const secondFetchImpl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('/search')) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                title: 'Institutional AI vs. Individual AI',
+                url: 'https://www.a16z.news/p/institutional-ai-vs-individual-ai',
+                published_at: '2026-03-14T01:05:43.000Z',
+              },
+            ],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (String(url).endsWith('/robots.txt')) {
+        return new Response('User-agent: *\nAllow: /\n', { status: 200 });
+      }
+      return new Response('<html><title>Institutional AI vs. Individual AI</title><body>essay</body></html>', {
+        status: 200,
+      });
+    });
+
+    const source = makeSource({
+      kind: 'search',
+      url: 'https://example.com/search?q=ai',
+      sourceType: 'search_result',
+      parserConfigJson: {
+        itemsPath: 'items',
+        urlField: 'url',
+        titleField: 'title',
+        publishedAtField: 'published_at',
+      },
+      crawlPolicy: {
+        allowDomains: ['www.a16z.news'],
+        denyDomains: [],
+        respectRobots: true,
+        maxDepth: 1,
+        maxPagesPerRun: 5,
+        revisitCooldownMinutes: 60,
+        perDomainRateLimitPerMinute: 6,
+      },
+    });
+
+    const first = await fetchIntelligenceSource({
+      source,
+      timeoutMs: 2_000,
+      fetchImpl,
+      browserFetchImpl: null,
+    });
+    const second = await fetchIntelligenceSource({
+      source,
+      timeoutMs: 2_000,
+      fetchImpl: secondFetchImpl,
+      browserFetchImpl: null,
+    });
+
+    expect(first.documents).toHaveLength(1);
+    expect(second.documents).toHaveLength(1);
+    expect(first.documents[0]?.canonicalUrl).toBe(second.documents[0]?.canonicalUrl);
+    expect(first.documents[0]?.documentFingerprint).toBe(second.documents[0]?.documentFingerprint);
+  });
 });

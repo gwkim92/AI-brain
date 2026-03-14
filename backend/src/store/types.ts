@@ -1705,6 +1705,8 @@ export type IntelligenceBridgeStatus = 'pending' | 'dispatched' | 'failed';
 export type IntelligenceCostClass = 'free' | 'low' | 'standard' | 'premium';
 export type IntelligenceLatencyClass = 'fast' | 'balanced' | 'slow';
 export type IntelligenceSignalProcessingStatus = 'pending' | 'processing' | 'processed' | 'failed';
+export type IntelligenceSignalPromotionState = 'pending_validation' | 'quarantined' | 'attached' | 'promoted';
+export type IntelligenceEventLifecycleState = 'provisional' | 'canonical';
 export type IntelligenceDeliberationStatus = 'idle' | 'completed' | 'failed';
 export type EventReviewState = 'watch' | 'review' | 'ignore';
 
@@ -1778,6 +1780,13 @@ export type IntelligenceWorkspaceRecord = {
   slug: string;
   createdAt: string;
   updatedAt: string;
+};
+
+export type ResetIntelligenceDerivedWorkspaceStateResult = {
+  workspaceId: string;
+  deletedEventCount: number;
+  deletedClusterCount: number;
+  deletedLinkedClaimCount: number;
 };
 
 export type IntelligenceWorkspaceMemberRecord = {
@@ -1920,6 +1929,7 @@ export type RawDocumentRecord = {
   sourceId: string | null;
   sourceUrl: string;
   canonicalUrl: string;
+  documentIdentityKey: string;
   title: string;
   summary: string;
   rawText: string;
@@ -1939,6 +1949,7 @@ export type CreateRawDocumentInput = {
   sourceId?: string | null;
   sourceUrl: string;
   canonicalUrl: string;
+  documentIdentityKey?: string;
   title: string;
   summary?: string;
   rawText: string;
@@ -1968,6 +1979,9 @@ export type SignalEnvelopeRecord = {
   entityHints: string[];
   trustHint: string | null;
   processingStatus: IntelligenceSignalProcessingStatus;
+  promotionState: IntelligenceSignalPromotionState;
+  promotionReasons: string[];
+  processingLeaseId: string | null;
   linkedEventId: string | null;
   processingError: string | null;
   processedAt: string | null;
@@ -1989,6 +2003,9 @@ export type CreateSignalEnvelopeInput = {
   entityHints?: string[];
   trustHint?: string | null;
   processingStatus?: IntelligenceSignalProcessingStatus;
+  promotionState?: IntelligenceSignalPromotionState;
+  promotionReasons?: string[];
+  processingLeaseId?: string | null;
   linkedEventId?: string | null;
   processingError?: string | null;
   processedAt?: string | null;
@@ -1998,6 +2015,11 @@ export type UpdateIntelligenceSignalProcessingInput = {
   workspaceId: string;
   signalId: string;
   processingStatus: IntelligenceSignalProcessingStatus;
+  expectedCurrentStatus?: IntelligenceSignalProcessingStatus;
+  expectedCurrentLeaseId?: string | null;
+  promotionState?: IntelligenceSignalPromotionState;
+  promotionReasons?: string[];
+  processingLeaseId?: string | null;
   linkedEventId?: string | null;
   processingError?: string | null;
   processedAt?: string | null;
@@ -2370,12 +2392,33 @@ export type SignalRetryResult = {
   processingStatus: IntelligenceSignalProcessingStatus;
 };
 
+export type IntelligenceQualityState = 'healthy' | 'suspect';
+
+export type IntelligenceQualitySummary = {
+  state: IntelligenceQualityState;
+  score: number;
+  reasons: string[];
+};
+
+export type IntelligenceSemanticValidation = {
+  confidence: number;
+  usedFallback: boolean;
+  genericClaimRatio: number;
+  hintOnlyEntityRatio: number;
+  topDomainScore: number;
+  topDomainMargin: number;
+  titleDriftScore: number;
+  reasons: string[];
+};
+
 export type IntelligenceEventClusterRecord = {
   id: string;
   workspaceId: string;
   title: string;
   summary: string;
   eventFamily: IntelligenceEventFamily;
+  lifecycleState: IntelligenceEventLifecycleState;
+  validationReasons: string[];
   signalIds: string[];
   documentIds: string[];
   entities: string[];
@@ -2420,13 +2463,16 @@ export type IntelligenceEventClusterRecord = {
   temporalNarrativeState?: IntelligenceTemporalNarrativeState;
   narrativeClusterId?: string | null;
   narrativeClusterState?: IntelligenceNarrativeClusterState | null;
+  quality?: IntelligenceQualitySummary;
   createdAt: string;
   updatedAt: string;
 };
 
-export type UpsertIntelligenceEventInput = Omit<IntelligenceEventClusterRecord, 'createdAt' | 'updatedAt'> & {
+export type UpsertIntelligenceEventInput = Omit<IntelligenceEventClusterRecord, 'createdAt' | 'updatedAt' | 'lifecycleState' | 'validationReasons'> & {
   createdAt?: string;
   updatedAt?: string;
+  lifecycleState?: IntelligenceEventLifecycleState;
+  validationReasons?: string[];
 };
 
 export type IntelligenceEventGraphSummary = {
@@ -2526,6 +2572,7 @@ export type IntelligenceNarrativeClusterRecord = {
   lastEventAt: string | null;
   lastRecurringAt: string | null;
   lastDivergingAt: string | null;
+  quality?: IntelligenceQualitySummary;
   createdAt: string;
   updatedAt: string;
 };
@@ -3282,7 +3329,18 @@ export type JarvisStore = {
     workspaceId: string;
     documentFingerprint: string;
   }) => Promise<RawDocumentRecord | null>;
+  findIntelligenceRawDocumentByIdentityKey: (input: {
+    workspaceId: string;
+    documentIdentityKey: string;
+  }) => Promise<RawDocumentRecord | null>;
   createIntelligenceRawDocument: (input: CreateRawDocumentInput) => Promise<RawDocumentRecord>;
+  updateIntelligenceRawDocumentObservation: (input: {
+    workspaceId: string;
+    documentId: string;
+    observedAt?: string | null;
+    publishedAt?: string | null;
+    metadataJson?: Record<string, unknown>;
+  }) => Promise<RawDocumentRecord | null>;
   listIntelligenceRawDocuments: (input: {
     workspaceId: string;
     limit: number;
@@ -3353,6 +3411,9 @@ export type JarvisStore = {
     workspaceId: string;
     eventId: string;
   }) => Promise<boolean>;
+  resetIntelligenceDerivedWorkspaceState: (input: {
+    workspaceId: string;
+  }) => Promise<ResetIntelligenceDerivedWorkspaceStateResult>;
   updateIntelligenceEventReviewState: (input: UpdateIntelligenceEventReviewStateInput) => Promise<IntelligenceEventClusterRecord | null>;
   createIntelligenceOperatorNote: (input: CreateOperatorNoteInput) => Promise<OperatorNoteRecord>;
   listIntelligenceOperatorNotes: (input: {

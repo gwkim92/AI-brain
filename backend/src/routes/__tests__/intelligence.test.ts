@@ -268,6 +268,73 @@ describe('Intelligence routes', () => {
     await app.close();
   });
 
+  it('prefers the legacy default-user intelligence workspace for bootstrap admin sessions', async () => {
+    process.env.AUTH_REQUIRED = 'true';
+    process.env.AUTH_TOKEN = '';
+    process.env.ADMIN_BOOTSTRAP_EMAIL = 'admin@jarvis.local';
+    process.env.ADMIN_BOOTSTRAP_PASSWORD = 'Admin!234567';
+    process.env.ADMIN_BOOTSTRAP_DISPLAY_NAME = 'Jarvis Admin';
+
+    const { app, store, env } = await buildServer();
+    const legacyWorkspace = await store.getOrCreateIntelligenceWorkspace({ userId: env.DEFAULT_USER_ID });
+    const adminUser = await store.findAuthUserByEmail(env.ADMIN_BOOTSTRAP_EMAIL);
+    expect(adminUser?.id).toBeTruthy();
+    expect(adminUser?.id).not.toBe(env.DEFAULT_USER_ID);
+    const duplicateWorkspace = await store.createIntelligenceWorkspace({
+      userId: adminUser!.id,
+      name: legacyWorkspace.name,
+    });
+    expect(duplicateWorkspace.ownerUserId).toBe(adminUser!.id);
+
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      payload: {
+        email: env.ADMIN_BOOTSTRAP_EMAIL,
+        password: env.ADMIN_BOOTSTRAP_PASSWORD,
+      },
+    });
+    expect(login.statusCode).toBe(200);
+    const loginBody = login.json() as {
+      data: {
+        token: string;
+      };
+    };
+    const authHeaders = {
+      authorization: `Bearer ${loginBody.data.token}`,
+    };
+
+    const workspacesResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/intelligence/workspaces',
+      headers: authHeaders,
+    });
+    expect(workspacesResponse.statusCode).toBe(200);
+    const workspacesBody = workspacesResponse.json() as {
+      data: {
+        workspaces: Array<{ id: string }>;
+      };
+    };
+    expect(workspacesBody.data.workspaces.map((workspace) => workspace.id)).toEqual([legacyWorkspace.id]);
+
+    const sourcesResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/intelligence/sources',
+      headers: authHeaders,
+    });
+    expect(sourcesResponse.statusCode).toBe(200);
+    const sourcesBody = sourcesResponse.json() as {
+      data: {
+        workspace_id: string;
+        workspaces: Array<{ id: string }>;
+      };
+    };
+    expect(sourcesBody.data.workspace_id).toBe(legacyWorkspace.id);
+    expect(sourcesBody.data.workspaces.map((workspace) => workspace.id)).toEqual([legacyWorkspace.id]);
+
+    await app.close();
+  });
+
   it('creates and toggles an intelligence source inside the workspace namespace', async () => {
     const { app } = await buildServer();
     const headers = {
@@ -558,6 +625,7 @@ describe('Intelligence routes', () => {
           nonSocialCorroborationCount?: number;
           linkedClaimHealthScore?: number;
           timeCoherenceScore?: number;
+          quality?: { state: string; score: number; reasons: string[] };
         };
         review_state: string;
         linked_claims: Array<{
@@ -573,7 +641,7 @@ describe('Intelligence routes', () => {
         invalidation_entries: Array<{ id: string }>;
         expected_signal_entries: Array<{ status: string }>;
         outcome_entries: Array<{ summary: string }>;
-        narrative_cluster: { id: string; eventCount: number; driftScore: number; reviewState: string } | null;
+        narrative_cluster: { id: string; eventCount: number; driftScore: number; reviewState: string; quality?: { state: string; score: number; reasons: string[] } } | null;
         narrative_cluster_members: Array<{ eventId: string; relation: string; score: number }>;
         temporal_narrative_ledger: Array<{ relatedEventId: string; relation: string; score: number }>;
       };
@@ -584,6 +652,7 @@ describe('Intelligence routes', () => {
     expect(detailBody.data.event.nonSocialCorroborationCount).toBeGreaterThanOrEqual(1);
     expect(detailBody.data.event.linkedClaimHealthScore).toBeGreaterThan(0);
     expect(detailBody.data.event.timeCoherenceScore).toBeGreaterThan(0);
+    expect(detailBody.data.event.quality?.state).toBeTruthy();
     expect(detailBody.data.review_state).toBe('review');
     expect(detailBody.data.linked_claims.length).toBeGreaterThan(0);
     expect(detailBody.data.linked_claims[0]?.predicateFamily).toBeTruthy();
@@ -598,6 +667,7 @@ describe('Intelligence routes', () => {
     expect(detailBody.data.outcome_entries.length).toBeGreaterThan(0);
     expect(detailBody.data.narrative_cluster).toBeTruthy();
     expect(detailBody.data.narrative_cluster?.driftScore).toBeGreaterThanOrEqual(0);
+    expect(detailBody.data.narrative_cluster?.quality?.state).toBeTruthy();
     expect(Array.isArray(detailBody.data.narrative_cluster_members)).toBe(true);
     expect(Array.isArray(detailBody.data.temporal_narrative_ledger)).toBe(true);
 
@@ -873,6 +943,7 @@ describe('Intelligence routes', () => {
           clusterPriorityScore: number;
           recentExecutionBlockedCount: number;
           lastLedgerAt: string | null;
+          quality?: { state: string; score: number; reasons: string[] };
           last_transition?: {
             entry_type: string;
             summary: string;
@@ -883,6 +954,7 @@ describe('Intelligence routes', () => {
     };
     expect(clusterListBody.data.narrative_clusters.length).toBeGreaterThan(0);
     expect(clusterListBody.data.narrative_clusters[0]?.clusterPriorityScore).toBeGreaterThanOrEqual(0);
+    expect(clusterListBody.data.narrative_clusters[0]?.quality?.state).toBeTruthy();
 
     const clusterId = refreshedDetailBody.data.narrative_cluster?.id;
     expect(clusterId).toBeTruthy();
@@ -900,6 +972,7 @@ describe('Intelligence routes', () => {
         narrative_cluster: {
           id: string;
           clusterPriorityScore: number;
+          quality?: { state: string; score: number; reasons: string[] };
           last_transition?: {
             entry_type: string;
             summary: string;
@@ -917,6 +990,7 @@ describe('Intelligence routes', () => {
     expect(Array.isArray(clusterDetailBody.data.ledger_entries)).toBe(true);
     expect(clusterDetailBody.data.operator_notes.some((row) => row.scope === 'narrative_cluster')).toBe(true);
     expect(clusterDetailBody.data.narrative_cluster.last_transition?.summary).toBeTruthy();
+    expect(clusterDetailBody.data.narrative_cluster.quality?.state).toBeTruthy();
 
     const clusterTimelineResponse = await app.inject({
       method: 'GET',
@@ -1328,6 +1402,240 @@ describe('Intelligence routes', () => {
       };
     };
     expect(previewAfterBody.data.stale_events.some((row) => row.eventId === staleEventId)).toBe(false);
+
+    await app.close();
+  });
+
+  it('resets derived workspace state and requeues signals through workspace maintenance rebuild', async () => {
+    const semanticWorker = await import('../../intelligence/semantic-worker');
+    vi.spyOn(semanticWorker, 'getIntelligenceSemanticWorkerStatus').mockReturnValue({
+      enabled: true,
+      inflight: false,
+      lastRun: null,
+      history: [],
+    });
+
+    const { app, store } = await buildServer();
+    const headers = {
+      'x-user-id': '12121212-1212-4121-8121-121212121212',
+      'x-user-role': 'admin',
+    };
+
+    const workspace = await store.getOrCreateIntelligenceWorkspace({ userId: headers['x-user-id'] });
+    const source = await store.createIntelligenceSource({
+      workspaceId: workspace.id,
+      name: 'Workspace rebuild feed',
+      kind: 'json',
+      url: 'https://example.com/rebuild-feed.json',
+      sourceType: 'policy',
+      sourceTier: 'tier_0',
+      pollMinutes: 5,
+    });
+    const rawDocument = await store.createIntelligenceRawDocument({
+      workspaceId: workspace.id,
+      sourceId: source.id,
+      sourceUrl: source.url,
+      canonicalUrl: `${source.url}/doc`,
+      title: 'Workspace rebuild document',
+      summary: 'Derived state should be reset without deleting this raw document.',
+      rawText: 'Policy update mentions a structured rebuild workflow for intelligence processing.',
+      rawHtml: null,
+      publishedAt: '2026-03-12T01:00:00.000Z',
+      observedAt: '2026-03-12T01:01:00.000Z',
+      language: 'en',
+      sourceType: source.sourceType,
+      sourceTier: source.sourceTier,
+      documentFingerprint: 'workspace-rebuild-doc',
+      metadataJson: {},
+    });
+    const signal = await store.createIntelligenceSignal({
+      workspaceId: workspace.id,
+      sourceId: source.id,
+      documentId: rawDocument.id,
+      sourceType: source.sourceType,
+      sourceTier: source.sourceTier,
+      url: rawDocument.canonicalUrl,
+      publishedAt: rawDocument.publishedAt,
+      observedAt: rawDocument.observedAt,
+      language: rawDocument.language,
+      rawText: rawDocument.rawText,
+      rawMetrics: {},
+      entityHints: ['Policy'],
+      trustHint: 'official',
+      processingStatus: 'processed',
+      linkedEventId: 'event-rebuild-1',
+      processingError: null,
+      processedAt: '2026-03-12T01:02:00.000Z',
+    });
+    const linkedClaim = await store.createIntelligenceLinkedClaim({
+      workspaceId: workspace.id,
+      claimFingerprint: 'workspace-rebuild-claim',
+      canonicalSubject: 'policy',
+      canonicalPredicate: 'mentions',
+      canonicalObject: 'rebuild workflow',
+      predicateFamily: 'signal',
+      timeScope: null,
+      timeBucketStart: '2026-03-12T00:00:00.000Z',
+      timeBucketEnd: '2026-03-12T23:59:59.000Z',
+      stanceDistribution: { supporting: 1, neutral: 0, contradicting: 0 },
+      sourceCount: 1,
+      contradictionCount: 0,
+      nonSocialSourceCount: 1,
+      supportingSignalIds: [signal.id],
+      lastSupportedAt: '2026-03-12T01:02:00.000Z',
+      lastContradictedAt: null,
+    });
+    const event = await store.upsertIntelligenceEvent({
+      id: 'event-rebuild-1',
+      workspaceId: workspace.id,
+      title: 'Workspace rebuild event',
+      summary: 'A derived event that should be deleted by hard reset.',
+      eventFamily: 'policy_change',
+      signalIds: [signal.id],
+      documentIds: [rawDocument.id],
+      entities: ['Policy'],
+      linkedClaimCount: 1,
+      contradictionCount: 0,
+      nonSocialCorroborationCount: 1,
+      linkedClaimHealthScore: 0.61,
+      timeCoherenceScore: 0.72,
+      graphSupportScore: 0.33,
+      graphContradictionScore: 0.1,
+      graphHotspotCount: 0,
+      semanticClaims: [],
+      metricShocks: [],
+      sourceMix: {},
+      corroborationScore: 0.44,
+      noveltyScore: 0.31,
+      structuralityScore: 0.42,
+      actionabilityScore: 0.38,
+      riskBand: 'medium',
+      topDomainId: 'policy_regulation_platform_ai',
+      timeWindowStart: rawDocument.publishedAt,
+      timeWindowEnd: rawDocument.publishedAt,
+      domainPosteriors: [],
+      worldStates: [],
+      primaryHypotheses: [],
+      counterHypotheses: [],
+      invalidationConditions: [],
+      expectedSignals: [],
+      deliberationStatus: 'idle',
+      reviewState: 'watch',
+      reviewReason: null,
+      reviewOwner: null,
+      reviewUpdatedAt: null,
+      reviewUpdatedBy: null,
+      reviewResolvedAt: null,
+      deliberations: [],
+      executionCandidates: [],
+      outcomes: [],
+      operatorNoteCount: 0,
+    });
+    const cluster = await store.upsertIntelligenceNarrativeCluster({
+      workspaceId: workspace.id,
+      title: event.title,
+      clusterKey: 'policy_change::policy_regulation_platform_ai::policy',
+      eventFamily: event.eventFamily,
+      topDomainId: event.topDomainId,
+      anchorEntities: ['Policy'],
+      state: 'forming',
+      eventCount: 1,
+      recurringEventCount: 0,
+      divergingEventCount: 0,
+      supportiveHistoryCount: 0,
+      hotspotEventCount: 0,
+      latestRecurringScore: 0,
+      driftScore: 0.12,
+      supportScore: 0.33,
+      contradictionScore: 0.1,
+      timeCoherenceScore: 0.72,
+      recurringStrengthTrend: 0,
+      divergenceTrend: 0,
+      supportDecayScore: 0,
+      contradictionAcceleration: 0,
+      clusterPriorityScore: 4,
+      recentExecutionBlockedCount: 0,
+      reviewState: 'watch',
+      reviewReason: null,
+      reviewOwner: null,
+      reviewUpdatedAt: null,
+      reviewUpdatedBy: null,
+      reviewResolvedAt: null,
+      lastLedgerAt: null,
+      lastEventAt: rawDocument.publishedAt,
+      lastRecurringAt: null,
+      lastDivergingAt: null,
+    });
+    await store.replaceIntelligenceEventMemberships({
+      workspaceId: workspace.id,
+      eventId: event.id,
+      memberships: [
+        {
+          workspaceId: workspace.id,
+          eventId: event.id,
+          linkedClaimId: linkedClaim.id,
+          role: 'core',
+        },
+      ],
+    });
+    await store.upsertIntelligenceNarrativeClusterMembership({
+      workspaceId: workspace.id,
+      clusterId: cluster.id,
+      eventId: event.id,
+      relation: 'origin',
+      score: 0.8,
+      daysDelta: null,
+      isLatest: true,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/intelligence/maintenance/rebuild-workspace',
+      headers,
+      payload: {
+        workspace_id: workspace.id,
+        mode: 'hard_reset',
+      },
+    });
+    expect(response.statusCode).toBe(202);
+    const body = response.json() as {
+      data: {
+        result: {
+          mode: string;
+          executionMode: string;
+          queuedSignalCount: number;
+          deletedEventCount: number;
+          deletedClusterCount: number;
+          deletedLinkedClaimCount: number;
+        };
+      };
+    };
+    expect(body.data.result.mode).toBe('hard_reset');
+    expect(body.data.result.executionMode).toBe('worker');
+    expect(body.data.result.queuedSignalCount).toBeGreaterThanOrEqual(1);
+    expect(body.data.result.deletedEventCount).toBeGreaterThanOrEqual(1);
+    expect(body.data.result.deletedClusterCount).toBeGreaterThanOrEqual(1);
+    expect(body.data.result.deletedLinkedClaimCount).toBeGreaterThanOrEqual(1);
+
+    const eventsAfter = await store.listIntelligenceEvents({ workspaceId: workspace.id, limit: 10 });
+    const clustersAfter = await store.listIntelligenceNarrativeClusters({ workspaceId: workspace.id, limit: 10 });
+    const linkedClaimsAfter = await store.listIntelligenceLinkedClaims({ workspaceId: workspace.id, limit: 10 });
+    const rawDocumentsAfter = await store.listIntelligenceRawDocumentsByIds({
+      workspaceId: workspace.id,
+      documentIds: [rawDocument.id],
+    });
+    const signalsAfter = await store.listIntelligenceSignals({
+      workspaceId: workspace.id,
+      limit: 10,
+    });
+
+    expect(eventsAfter).toHaveLength(0);
+    expect(clustersAfter).toHaveLength(0);
+    expect(linkedClaimsAfter).toHaveLength(0);
+    expect(rawDocumentsAfter).toHaveLength(1);
+    expect(signalsAfter[0]?.processingStatus).toBe('pending');
+    expect(signalsAfter[0]?.linkedEventId).toBeNull();
+    expect(signalsAfter[0]?.processedAt).toBeNull();
 
     await app.close();
   });

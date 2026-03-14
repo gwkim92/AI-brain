@@ -5,7 +5,7 @@ import type { ProviderRouter } from '../providers/router';
 import type { JarvisStore } from '../store/types';
 import { startWorkerSupervisor } from '../workers/supervisor';
 
-import { runIntelligenceSemanticPass } from './service';
+import { cleanupOrphanIntelligenceEvents, runIntelligenceSemanticPass } from './service';
 
 type LoggerLike = {
   info: (obj: Record<string, unknown>, msg?: string) => void;
@@ -82,12 +82,16 @@ export function startIntelligenceSemanticWorker(input: {
   }
 
   const pollMs = Math.max(1_000, input.env.INTELLIGENCE_SEMANTIC_WORKER_POLL_MS);
-  const signalBatch = Math.max(1, input.env.INTELLIGENCE_SEMANTIC_WORKER_BATCH);
+  const configuredSignalBatch = Math.max(1, input.env.INTELLIGENCE_SEMANTIC_WORKER_BATCH);
+  // Semantic extraction is sequential and may touch multiple workspaces in one pass.
+  // Large batches plus a fixed 120s timeout repeatedly abort rebuilds before any useful progress lands.
+  const signalBatch = Math.min(configuredSignalBatch, 10);
+  const timeoutMs = Math.max(60_000, pollMs, signalBatch * 60_000 * 2);
   const logger = input.logger;
   const supervisor = startWorkerSupervisor<IntelligenceSemanticWorkerRun>({
     enabled,
     pollMs,
-    timeoutMs: Math.max(10_000, pollMs),
+    timeoutMs,
     historyLimit: 20,
     runOnce: async (startedAt) => {
       const allSources = await input.store.listAllIntelligenceSources({ limit: 500, enabled: true });
@@ -114,6 +118,26 @@ export function startIntelligenceSemanticWorker(input: {
         executionCount += result.executionCount;
         failedCount += result.failedCount;
         failedSignalIds.push(...result.failedSignalIds);
+        if (result.processedSignalCount > 0 || result.failedCount > 0) {
+          const [pendingSignals, processingSignals] = await Promise.all([
+            input.store.listIntelligenceSignals({
+              workspaceId,
+              processingStatus: 'pending',
+              limit: 1,
+            }),
+            input.store.listIntelligenceSignals({
+              workspaceId,
+              processingStatus: 'processing',
+              limit: 1,
+            }),
+          ]);
+          if (pendingSignals.length === 0 && processingSignals.length === 0) {
+            await cleanupOrphanIntelligenceEvents({
+              store: input.store,
+              workspaceId,
+            });
+          }
+        }
       }
       const finishedAt = new Date();
       return {

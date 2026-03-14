@@ -230,6 +230,7 @@ function mapRawDocumentRow(row: IntelligenceRawDocumentRow): RawDocumentRecord {
     sourceId: row.source_id,
     sourceUrl: row.source_url,
     canonicalUrl: row.canonical_url,
+    documentIdentityKey: row.document_identity_key,
     title: row.title,
     summary: row.summary,
     rawText: row.raw_text,
@@ -262,6 +263,9 @@ function mapSignalRow(row: IntelligenceSignalRow): SignalEnvelopeRecord {
     entityHints: normalizeStringArray(row.entity_hints_json),
     trustHint: row.trust_hint,
     processingStatus: row.processing_status,
+    promotionState: row.promotion_state,
+    promotionReasons: normalizeStringArray(row.promotion_reasons_json),
+    processingLeaseId: row.processing_lease_id,
     linkedEventId: row.linked_event_id,
     processingError: row.processing_error,
     processedAt: toIso(row.processed_at),
@@ -366,6 +370,8 @@ function mapEventRow(row: IntelligenceEventRow): IntelligenceEventClusterRecord 
     title: row.title,
     summary: row.summary,
     eventFamily: row.event_family,
+    lifecycleState: row.lifecycle_state,
+    validationReasons: normalizeStringArray(row.validation_reasons_json),
     signalIds: normalizeStringArray(row.signal_ids_json),
     documentIds: normalizeStringArray(row.document_ids_json),
     entities: normalizeStringArray(row.entities_json),
@@ -1072,18 +1078,29 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
       return rows[0] ? mapRawDocumentRow(rows[0]) : null;
     },
 
+    async findIntelligenceRawDocumentByIdentityKey(input) {
+      const { rows } = await pool.query<IntelligenceRawDocumentRow>(
+        `SELECT * FROM intelligence_raw_documents
+         WHERE workspace_id = $1 AND document_identity_key = $2
+         LIMIT 1`,
+        [input.workspaceId, input.documentIdentityKey],
+      );
+      return rows[0] ? mapRawDocumentRow(rows[0]) : null;
+    },
+
     async createIntelligenceRawDocument(input) {
       const { rows } = await pool.query<IntelligenceRawDocumentRow>(
         `INSERT INTO intelligence_raw_documents (
-           workspace_id, source_id, source_url, canonical_url, title, summary, raw_text, raw_html,
+           workspace_id, source_id, source_url, canonical_url, document_identity_key, title, summary, raw_text, raw_html,
            published_at, observed_at, language, source_type, source_tier, document_fingerprint, metadata_json
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::timestamptz,$10::timestamptz,$11,$12,$13,$14,$15::jsonb)
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::timestamptz,$11::timestamptz,$12,$13,$14,$15,$16::jsonb)
          RETURNING *`,
         [
           input.workspaceId,
           input.sourceId ?? null,
           input.sourceUrl,
           input.canonicalUrl,
+          input.documentIdentityKey ?? input.canonicalUrl ?? `${input.sourceUrl}::${input.title.trim().toLowerCase()}`,
           input.title,
           input.summary ?? '',
           input.rawText,
@@ -1098,6 +1115,38 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
         ]
       );
       return mapRawDocumentRow(rows[0]!);
+    },
+
+    async updateIntelligenceRawDocumentObservation(input) {
+      const { rows } = await pool.query<IntelligenceRawDocumentRow>(
+        `UPDATE intelligence_raw_documents
+         SET observed_at = CASE
+               WHEN $3::boolean THEN $4::timestamptz
+               ELSE observed_at
+             END,
+             published_at = CASE
+               WHEN $5::boolean THEN $6::timestamptz
+               ELSE published_at
+             END,
+             metadata_json = CASE
+               WHEN $7::boolean THEN COALESCE(metadata_json, '{}'::jsonb) || $8::jsonb
+               ELSE metadata_json
+             END
+         WHERE workspace_id = $1
+           AND id = $2
+         RETURNING *`,
+        [
+          input.workspaceId,
+          input.documentId,
+          typeof input.observedAt !== 'undefined',
+          input.observedAt ?? null,
+          typeof input.publishedAt !== 'undefined',
+          input.publishedAt ?? null,
+          typeof input.metadataJson !== 'undefined',
+          JSON.stringify(input.metadataJson ?? {}),
+        ],
+      );
+      return rows[0] ? mapRawDocumentRow(rows[0]) : null;
     },
 
     async listIntelligenceRawDocuments(input) {
@@ -1127,8 +1176,8 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
         `INSERT INTO intelligence_signals (
            workspace_id, source_id, document_id, linked_event_id, source_type, source_tier, url,
            published_at, observed_at, language, raw_text, raw_metrics_json, entity_hints_json, trust_hint,
-           processing_status, processing_error, processed_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::timestamptz,$9::timestamptz,$10,$11,$12::jsonb,$13::jsonb,$14,$15,$16,$17::timestamptz)
+           processing_status, promotion_state, promotion_reasons_json, processing_lease_id, processing_error, processed_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::timestamptz,$9::timestamptz,$10,$11,$12::jsonb,$13::jsonb,$14,$15,$16,$17::jsonb,$18::uuid,$19,$20::timestamptz)
          RETURNING *`,
         [
           input.workspaceId,
@@ -1146,6 +1195,9 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
           JSON.stringify(input.entityHints ?? []),
           input.trustHint ?? null,
           input.processingStatus ?? 'pending',
+          input.promotionState ?? 'pending_validation',
+          JSON.stringify(input.promotionReasons ?? []),
+          input.processingLeaseId ?? null,
           input.processingError ?? null,
           input.processedAt ?? null,
         ]
@@ -1204,8 +1256,23 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
              processed_at = CASE
                WHEN $8::boolean THEN $9::timestamptz
                ELSE processed_at
+             END,
+             promotion_state = CASE
+               WHEN $10::boolean THEN $11::text
+               ELSE promotion_state
+             END,
+             promotion_reasons_json = CASE
+               WHEN $12::boolean THEN $13::jsonb
+               ELSE promotion_reasons_json
+             END,
+             processing_lease_id = CASE
+               WHEN $14::boolean THEN $15::uuid
+               ELSE processing_lease_id
              END
-         WHERE workspace_id = $1 AND id = $2
+         WHERE workspace_id = $1
+           AND id = $2
+           AND ($16::text IS NULL OR processing_status = $16)
+           AND ($17::uuid IS NULL OR processing_lease_id = $17::uuid)
          RETURNING *`,
         [
           input.workspaceId,
@@ -1217,6 +1284,14 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
           typeof input.processingError === 'undefined' ? null : input.processingError,
           typeof input.processedAt !== 'undefined',
           typeof input.processedAt === 'undefined' ? null : input.processedAt,
+          typeof input.promotionState !== 'undefined',
+          typeof input.promotionState === 'undefined' ? null : input.promotionState,
+          typeof input.promotionReasons !== 'undefined',
+          typeof input.promotionReasons === 'undefined' ? null : JSON.stringify(input.promotionReasons ?? []),
+          typeof input.processingLeaseId !== 'undefined',
+          typeof input.processingLeaseId === 'undefined' ? null : input.processingLeaseId,
+          input.expectedCurrentStatus ?? null,
+          input.expectedCurrentLeaseId ?? null,
         ]
       );
       return rows[0] ? mapSignalRow(rows[0]) : null;
@@ -1505,7 +1580,7 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
     async upsertIntelligenceEvent(input) {
       const { rows } = await pool.query<IntelligenceEventRow>(
          `INSERT INTO intelligence_events (
-           id, workspace_id, title, summary, event_family, signal_ids_json, document_ids_json, entities_json,
+           id, workspace_id, title, summary, event_family, lifecycle_state, validation_reasons_json, signal_ids_json, document_ids_json, entities_json,
            linked_claim_count, contradiction_count, non_social_corroboration_count, linked_claim_health_score, time_coherence_score,
            graph_support_score, graph_contradiction_score, graph_hotspot_count,
            semantic_claims_json, metric_shocks_json, source_mix_json, corroboration_score, novelty_score,
@@ -1514,8 +1589,8 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
            invalidation_conditions_json, expected_signals_json, deliberation_status, review_state, review_reason, review_owner, review_updated_at, review_updated_by, review_resolved_at,
            deliberations_json, execution_candidates_json, outcomes_json, operator_note_count
          ) VALUES (
-           $1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb,$18::jsonb,$19::jsonb,$20,$21,$22,$23,$24,$25,$26::timestamptz,$27::timestamptz,
-           $28::jsonb,$29::jsonb,$30::jsonb,$31::jsonb,$32::jsonb,$33::jsonb,$34,$35,$36,$37,$38::timestamptz,$39,$40::timestamptz,$41::jsonb,$42::jsonb,$43::jsonb,$44
+           $1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,$19::jsonb,$20::jsonb,$21,$22,$23,$24,$25,$26,$27::timestamptz,$28::timestamptz,
+           $29::jsonb,$30::jsonb,$31::jsonb,$32::jsonb,$33::jsonb,$34::jsonb,$35,$36,$37,$38,$39::timestamptz,$40,$41::timestamptz,$42::jsonb,$43::jsonb,$44::jsonb,$45
          )
          ON CONFLICT (id)
          DO UPDATE SET
@@ -1523,6 +1598,8 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
            title = EXCLUDED.title,
            summary = EXCLUDED.summary,
            event_family = EXCLUDED.event_family,
+           lifecycle_state = EXCLUDED.lifecycle_state,
+           validation_reasons_json = EXCLUDED.validation_reasons_json,
            signal_ids_json = EXCLUDED.signal_ids_json,
            document_ids_json = EXCLUDED.document_ids_json,
            entities_json = EXCLUDED.entities_json,
@@ -1570,6 +1647,8 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
           input.title,
           input.summary,
           input.eventFamily,
+          input.lifecycleState ?? 'canonical',
+          JSON.stringify(input.validationReasons ?? []),
           JSON.stringify(input.signalIds),
           JSON.stringify(input.documentIds),
           JSON.stringify(input.entities),
@@ -1651,6 +1730,62 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
         [input.workspaceId, input.eventId],
       );
       return (result.rowCount ?? 0) > 0;
+    },
+
+    async resetIntelligenceDerivedWorkspaceState(input) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const countRows = await Promise.all([
+          client.query<{ count: string }>(
+            `SELECT COUNT(*)::text AS count
+             FROM intelligence_events
+             WHERE workspace_id = $1`,
+            [input.workspaceId],
+          ),
+          client.query<{ count: string }>(
+            `SELECT COUNT(*)::text AS count
+             FROM intelligence_narrative_clusters
+             WHERE workspace_id = $1`,
+            [input.workspaceId],
+          ),
+          client.query<{ count: string }>(
+            `SELECT COUNT(*)::text AS count
+             FROM intelligence_linked_claims
+             WHERE workspace_id = $1`,
+            [input.workspaceId],
+          ),
+        ]);
+
+        await client.query(
+          `DELETE FROM intelligence_events
+           WHERE workspace_id = $1`,
+          [input.workspaceId],
+        );
+        await client.query(
+          `DELETE FROM intelligence_narrative_clusters
+           WHERE workspace_id = $1`,
+          [input.workspaceId],
+        );
+        await client.query(
+          `DELETE FROM intelligence_linked_claims
+           WHERE workspace_id = $1`,
+          [input.workspaceId],
+        );
+
+        await client.query('COMMIT');
+        return {
+          workspaceId: input.workspaceId,
+          deletedEventCount: Number(countRows[0].rows[0]?.count ?? 0),
+          deletedClusterCount: Number(countRows[1].rows[0]?.count ?? 0),
+          deletedLinkedClaimCount: Number(countRows[2].rows[0]?.count ?? 0),
+        };
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
     },
 
     async updateIntelligenceEventReviewState(input) {
@@ -2132,7 +2267,15 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
           `INSERT INTO intelligence_temporal_narrative_ledger (
              id, workspace_id, event_id, related_event_id, related_event_title, relation, score, days_delta,
              top_domain_id, graph_support_score, graph_contradiction_score, graph_hotspot_count, time_coherence_score
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+           )
+           SELECT $1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6,$7,$8,$9,$10,$11,$12,$13
+           WHERE $4::uuid <> $3::uuid
+             AND EXISTS (
+               SELECT 1
+               FROM intelligence_events related
+               WHERE related.workspace_id = $2::uuid
+                 AND related.id = $4::uuid
+             )
            RETURNING *`,
           [
             entry.id ?? randomUUID(),
@@ -2150,7 +2293,9 @@ export function createPostgresIntelligenceRepository({ pool }: PostgresIntellige
             entry.timeCoherenceScore,
           ],
         );
-        rows.push(mapTemporalNarrativeLedgerEntryRow(result.rows[0]!));
+        if (result.rows[0]) {
+          rows.push(mapTemporalNarrativeLedgerEntryRow(result.rows[0]));
+        }
       }
       return rows;
     },

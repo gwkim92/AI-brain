@@ -12,6 +12,7 @@ import { fetchRadarFeed } from '../radar/feed-fetchers';
 export type IntelligenceFetchedDocument = {
   sourceUrl: string;
   canonicalUrl: string;
+  documentIdentityKey: string;
   title: string;
   summary: string;
   rawText: string;
@@ -91,11 +92,28 @@ function canonicalizeUrl(input: string): string {
 function fingerprintDocument(input: {
   canonicalUrl: string;
   title: string;
-  publishedAt: string | null;
 }): string {
   return createHash('sha1')
-    .update(`${input.canonicalUrl}|${input.title}|${input.publishedAt ?? ''}`)
+    // Search/community sources often replay the same canonical article with a newer observed/published time.
+    // Fingerprints must stay stable across those re-observations.
+    .update(`${input.canonicalUrl}|${input.title}`)
     .digest('hex');
+}
+
+function normalizeIdentityPart(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s\-_]+/g, ' ')
+    .replace(/[^\p{L}\p{N}\s./:]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildDocumentIdentityKey(input: { canonicalUrl: string; sourceUrl: string; title: string }): string {
+  const canonicalUrl = input.canonicalUrl.trim();
+  if (canonicalUrl.length > 0) return canonicalUrl;
+  return `${input.sourceUrl.trim()}|${normalizeIdentityPart(input.title)}`;
 }
 
 function getSourceHost(source: IntelligenceSourceRecord, url = source.url): string | null {
@@ -186,6 +204,11 @@ function mapRadarDocuments(source: IntelligenceSourceRecord, fetched: Awaited<Re
     return {
       sourceUrl: item.sourceUrl,
       canonicalUrl,
+      documentIdentityKey: buildDocumentIdentityKey({
+        canonicalUrl,
+        sourceUrl: item.sourceUrl,
+        title: item.title,
+      }),
       title: item.title,
       summary: item.summary ?? '',
       rawText: `${item.title}\n\n${item.summary ?? ''}`.trim(),
@@ -199,7 +222,7 @@ function mapRadarDocuments(source: IntelligenceSourceRecord, fetched: Awaited<Re
       rawMetrics: { ...(item.rawMetrics ?? {}) },
       trustHint: item.trustHint ?? null,
       metadataJson: { fetched_from: source.kind },
-      documentFingerprint: fingerprintDocument({ canonicalUrl, title: item.title, publishedAt: item.publishedAt ?? null }),
+      documentFingerprint: fingerprintDocument({ canonicalUrl, title: item.title }),
     };
   });
 }
@@ -329,6 +352,11 @@ async function fetchHtmlDocument(input: {
       document: {
         sourceUrl: input.url,
         canonicalUrl,
+        documentIdentityKey: buildDocumentIdentityKey({
+          canonicalUrl,
+          sourceUrl: input.url,
+          title,
+        }),
         title,
         summary,
         rawText,
@@ -342,7 +370,7 @@ async function fetchHtmlDocument(input: {
         rawMetrics: {},
         trustHint: source.sourceTier,
         metadataJson: { fetched_from: source.kind, status_code: browserResult.statusCode, used_headless: true },
-        documentFingerprint: fingerprintDocument({ canonicalUrl, title, publishedAt: null }),
+        documentFingerprint: fingerprintDocument({ canonicalUrl, title }),
       },
       statusCode: browserResult.statusCode,
       usedHeadless: true,
@@ -362,6 +390,11 @@ async function fetchHtmlDocument(input: {
       document: {
         sourceUrl: input.url,
         canonicalUrl,
+        documentIdentityKey: buildDocumentIdentityKey({
+          canonicalUrl,
+          sourceUrl: input.url,
+          title,
+        }),
         title,
         summary,
         rawText,
@@ -375,7 +408,7 @@ async function fetchHtmlDocument(input: {
         rawMetrics: {},
         trustHint: source.sourceTier,
         metadataJson: { fetched_from: source.kind, status_code: response.status, used_headless: false },
-        documentFingerprint: fingerprintDocument({ canonicalUrl, title, publishedAt: null }),
+        documentFingerprint: fingerprintDocument({ canonicalUrl, title }),
       },
       statusCode: response.status,
       usedHeadless: false,

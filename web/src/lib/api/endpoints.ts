@@ -128,6 +128,7 @@ import type {
   IntelligenceHotspotCluster,
   IntelligenceExpectedSignalEntryRecord,
   IntelligenceFetchFailureRecord,
+  IntelligenceIdentityCollisionRecord,
   IntelligenceInvalidationEntryRecord,
   IntelligenceModelRegistryEntry,
   IntelligenceOutcomeEntryRecord,
@@ -137,6 +138,8 @@ import type {
   IntelligenceNarrativeClusterTrendSummary,
   IntelligenceNarrativeClusterGraphSummary,
   IntelligenceNarrativeClusterRecord,
+  IntelligenceProvisionalEventRecord,
+  IntelligenceQuarantinedSignalRecord,
   IntelligenceRelatedHistoricalEventSummary,
   IntelligenceTemporalNarrativeLedgerEntryRecord,
   IntelligenceSignalRetryResult,
@@ -153,6 +156,7 @@ import type {
   IntelligenceSemanticWorkerRun,
   IntelligenceBulkEventRebuildResult,
   IntelligenceEventRebuildResult,
+  IntelligenceWorkspaceRebuildResult,
   IntelligenceWorkspaceRecord,
   IntelligenceScannerWorkerRun,
   IntelligenceCatalogSyncRun,
@@ -420,6 +424,17 @@ export async function listIntelligenceStaleEvents(query: {
   return apiRequest("/api/v1/intelligence/maintenance/stale-events", { method: "GET", query });
 }
 
+export async function listIntelligenceQuarantine(query: {
+  workspace_id?: string;
+} = {}): Promise<{
+  workspace_id: string;
+  quarantined_signals: IntelligenceQuarantinedSignalRecord[];
+  provisional_events: IntelligenceProvisionalEventRecord[];
+  identity_collisions: IntelligenceIdentityCollisionRecord[];
+}> {
+  return apiRequest("/api/v1/intelligence/quarantine", { method: "GET", query });
+}
+
 export async function retryIntelligenceSignal(signalId: string, payload: {
   workspace_id?: string;
 }): Promise<{ workspace_id: string; result: IntelligenceSignalRetryResult }> {
@@ -444,6 +459,16 @@ export async function bulkRebuildIntelligenceEvents(payload: {
   limit?: number;
 }): Promise<{ workspace_id: string; result: IntelligenceBulkEventRebuildResult }> {
   return apiRequest("/api/v1/intelligence/maintenance/rebuild-stale-events", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function rebuildIntelligenceWorkspace(payload: {
+  workspace_id?: string;
+  mode?: "hard_reset";
+}): Promise<{ workspace_id: string; result: IntelligenceWorkspaceRebuildResult }> {
+  return apiRequest("/api/v1/intelligence/maintenance/rebuild-workspace", {
     method: "POST",
     body: JSON.stringify(payload),
   });

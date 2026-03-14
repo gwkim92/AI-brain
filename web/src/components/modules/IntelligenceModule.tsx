@@ -484,12 +484,12 @@ function genericStatusLabel(value: string | null | undefined, locale: "ko" | "en
   return row ? row[locale] : value;
 }
 
-function readBlockedReason(candidate: IntelligenceEventClusterRecord["executionCandidates"][number]): string | null {
+export function readBlockedReason(candidate: IntelligenceEventClusterRecord["executionCandidates"][number]): string | null {
   const blockedReason = candidate.resultJson?.blocked_reason;
   return typeof blockedReason === "string" && blockedReason.length > 0 ? blockedReason : null;
 }
 
-type RuntimeSnapshot = {
+export type RuntimeSnapshot = {
   scannerWorker: IntelligenceWorkerStatus<IntelligenceScannerWorkerRun> | null;
   semanticWorker: IntelligenceWorkerStatus<IntelligenceSemanticWorkerRun> | null;
   staleMaintenanceWorker: IntelligenceWorkerStatus<IntelligenceStaleMaintenanceWorkerRun> | null;
@@ -535,7 +535,7 @@ type SelectedHypothesisDetail = {
   outcomeEntries: IntelligenceOutcomeEntryRecord[];
 };
 
-type SelectedEventGraph = {
+export type SelectedEventGraph = {
   summary: IntelligenceEventGraphSummary;
   nodes: LinkedClaimRecord[];
   edges: Array<LinkedClaimEdgeRecord & { evidence_signal_count: number }>;
@@ -553,7 +553,7 @@ type SelectedNarrativeClusterDetail = {
   operatorNotes: OperatorNoteRecord[];
 };
 
-type SelectedNarrativeClusterGraph = {
+export type SelectedNarrativeClusterGraph = {
   summary: IntelligenceNarrativeClusterGraphSummary;
   nodes: LinkedClaimRecord[];
   edges: Array<LinkedClaimEdgeRecord & { evidence_signal_count: number }>;
@@ -2574,7 +2574,7 @@ function MiniMetric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function DetailBlock({ title, items, locale }: { title: string; items: string[]; locale?: "ko" | "en" }) {
+export function DetailBlock({ title, items, locale }: { title: string; items: string[]; locale?: "ko" | "en" }) {
   const [open, setOpen] = useState(true);
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
@@ -3015,7 +3015,7 @@ function summarizeRuntimeBindingChanges(
   return { added, removed, changed, unchanged, rows };
 }
 
-function RuntimeControlPlanePanel({
+export function RuntimeControlPlanePanel({
   locale,
   runtime,
   workspaceId,
@@ -3766,7 +3766,7 @@ function TemporalNarrativeLedgerPanel({
   );
 }
 
-function ClaimGraphPanel({
+export function ClaimGraphPanel({
   locale,
   graph,
   onNoteClick,

@@ -7,7 +7,7 @@ import { MarkdownLite } from "@/components/ui/MarkdownLite";
 import { useHUD } from "@/components/providers/HUDProvider";
 import { useLocale } from "@/components/providers/LocaleProvider";
 import { ApiRequestError } from "@/lib/api/client";
-import { findSkills, getSkillResource, listSkills, useSkill } from "@/lib/api/endpoints";
+import { findSkills, getSkillResource, listSkills, useSkill as executeSkill } from "@/lib/api/endpoints";
 import type {
   SkillFindResult,
   SkillRecord,
@@ -129,7 +129,7 @@ export function SkillsModule() {
     setExecuting(true);
     setError(null);
     try {
-      const result = await useSkill({
+      const result = await executeSkill({
         skill_id: selectedSkill.id,
         prompt: prompt.trim(),
         execute,

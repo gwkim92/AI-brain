@@ -814,7 +814,9 @@ export async function executeWatcherRun(input: {
         watcher.kind === 'market' ||
         watcher.kind === 'war_region'
           ? 'news'
-          : 'default'
+          : 'default',
+      intent: resolveWatcherIntent({ kind: watcher.kind, researchProfile: null }),
+      taskType: watcher.kind,
     });
     const currentWorldModel = buildWorldModelBlockFromExtraction({
       extraction: artifact.worldModelExtraction,

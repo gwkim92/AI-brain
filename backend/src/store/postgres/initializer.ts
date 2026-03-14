@@ -1229,6 +1229,10 @@ export async function initializePostgresStore({
     )
   `);
   await pool.query(`
+    ALTER TABLE tech_radar_scores
+    ADD COLUMN IF NOT EXISTS event_id TEXT REFERENCES radar_event_candidates(id) ON DELETE SET NULL
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS upgrade_proposals (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       radar_score_id UUID NOT NULL REFERENCES tech_radar_scores(id) ON DELETE RESTRICT,
@@ -1307,6 +1311,10 @@ export async function initializePostgresStore({
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_radar_scores_item_id_evaluated_at
     ON tech_radar_scores(radar_item_id, evaluated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_radar_scores_event_id_evaluated_at
+    ON tech_radar_scores(event_id, evaluated_at DESC)
   `);
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_radar_event_candidates_decision_updated_at
@@ -1471,6 +1479,7 @@ export async function initializePostgresStore({
       source_id UUID REFERENCES intelligence_sources(id) ON DELETE SET NULL,
       source_url TEXT NOT NULL,
       canonical_url TEXT NOT NULL,
+      document_identity_key TEXT NOT NULL DEFAULT '',
       title TEXT NOT NULL,
       summary TEXT NOT NULL DEFAULT '',
       raw_text TEXT NOT NULL,
@@ -1485,6 +1494,15 @@ export async function initializePostgresStore({
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE (workspace_id, document_fingerprint)
     )
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_raw_documents
+    ADD COLUMN IF NOT EXISTS document_identity_key TEXT NOT NULL DEFAULT ''
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_intelligence_raw_documents_identity
+    ON intelligence_raw_documents(workspace_id, document_identity_key)
+    WHERE document_identity_key <> ''
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS intelligence_signals (
@@ -1504,6 +1522,9 @@ export async function initializePostgresStore({
       entity_hints_json JSONB NOT NULL DEFAULT '[]'::jsonb,
       trust_hint TEXT,
       processing_status TEXT NOT NULL DEFAULT 'pending',
+      promotion_state TEXT NOT NULL DEFAULT 'pending_validation',
+      promotion_reasons_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      processing_lease_id UUID,
       processing_error TEXT,
       processed_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -1589,7 +1610,19 @@ export async function initializePostgresStore({
   `);
   await pool.query(`
     ALTER TABLE intelligence_signals
+    ADD COLUMN IF NOT EXISTS processing_lease_id UUID
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_signals
     ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_signals
+    ADD COLUMN IF NOT EXISTS promotion_state TEXT NOT NULL DEFAULT 'pending_validation'
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_signals
+    ADD COLUMN IF NOT EXISTS promotion_reasons_json JSONB NOT NULL DEFAULT '[]'::jsonb
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS intelligence_events (
@@ -1598,6 +1631,8 @@ export async function initializePostgresStore({
       title TEXT NOT NULL,
       summary TEXT NOT NULL,
       event_family TEXT NOT NULL,
+      lifecycle_state TEXT NOT NULL DEFAULT 'canonical',
+      validation_reasons_json JSONB NOT NULL DEFAULT '[]'::jsonb,
       signal_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
       document_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
       entities_json JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -1674,6 +1709,14 @@ export async function initializePostgresStore({
   await pool.query(`
     ALTER TABLE intelligence_events
     ADD COLUMN IF NOT EXISTS operator_note_count INTEGER NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_events
+    ADD COLUMN IF NOT EXISTS lifecycle_state TEXT NOT NULL DEFAULT 'canonical'
+  `);
+  await pool.query(`
+    ALTER TABLE intelligence_events
+    ADD COLUMN IF NOT EXISTS validation_reasons_json JSONB NOT NULL DEFAULT '[]'::jsonb
   `);
   await pool.query(`
     ALTER TABLE intelligence_events

@@ -121,6 +121,9 @@ export function resolveResearchProfile(input: ResearchProfileRouteInput): Resear
   const hasBroadNewsSignal = BROAD_NEWS_PATTERN.test(haystack);
   const hasTopicNewsSignal = TOPIC_NEWS_PATTERN.test(haystack);
 
+  if (taskType === 'repo') {
+    return buildDecision('repo_research', 0.98, ['repo_task_type_signal'], 'repo_first', 'repo_brief');
+  }
   if (REPO_PATTERN.test(haystack)) {
     return buildDecision('repo_research', 0.96, ['repo_signal'], 'repo_first', 'repo_brief');
   }

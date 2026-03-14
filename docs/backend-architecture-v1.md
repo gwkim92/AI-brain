@@ -11,6 +11,7 @@
 주의:
 - `docs/db-schema-v1.sql`은 reference snapshot이다.
 - 실제 운영 스키마 정본과 `db:init` 경로는 `/Users/woody/ai/brain/backend/src/store/postgres/initializer.ts`를 따른다.
+- 현재 구현의 런타임 요청 경로는 Next BFF가 아니라 `web -> backend direct API`다. 아래 BFF 관련 설명은 초기 의도 문맥으로 읽고, 실제 호출 경로는 `/Users/woody/ai/brain/web/src/lib/api/client.ts`를 기준으로 본다.
 
 ## 1) 목표
 이 백엔드는 다음 6가지를 동시에 만족해야 한다.

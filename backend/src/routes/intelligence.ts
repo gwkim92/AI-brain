@@ -11,6 +11,8 @@ import {
   buildIntelligenceGraphNeighborhoods,
   buildIntelligenceHotspotClusters,
   computeIntelligenceTemporalNarrativeProfile,
+  computeIntelligenceEventQuality,
+  computeIntelligenceNarrativeClusterQuality,
   bridgeIntelligenceEventToAction,
   bridgeIntelligenceEventToBrief,
   computeIntelligenceOperatorPriorityScore,
@@ -18,12 +20,14 @@ import {
   executeIntelligenceCandidate,
   listSuspiciousIntelligenceEvents,
   bulkRebuildIntelligenceEvents,
+  rebuildIntelligenceWorkspace,
   rebuildIntelligenceEvent,
 } from '../intelligence/service';
 import { ensureDefaultIntelligenceSources } from '../intelligence/sources';
 import type {
   CapabilityAliasBindingRecord,
   IntelligenceCapabilityAlias,
+  IntelligenceEventClusterRecord,
   IntelligenceNarrativeClusterLedgerEntryRecord,
   IntelligenceWorkspaceRole,
 } from '../store/types';
@@ -137,6 +141,11 @@ const StaleEventsBulkRebuildSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(10),
 });
 
+const WorkspaceRebuildSchema = z.object({
+  workspace_id: z.string().uuid().optional(),
+  mode: z.literal('hard_reset').default('hard_reset'),
+});
+
 const ReviewStateSchema = z.object({
   workspace_id: z.string().uuid().optional(),
   review_state: z.enum(['watch', 'review', 'ignore']),
@@ -198,20 +207,24 @@ async function resolveWorkspaceAccess(
     workspaceId?: string;
     requiredRole?: IntelligenceWorkspaceRole;
   }
-): Promise<{ workspaceId: string; userId: string } | null> {
-  const userId = ctx.resolveRequestUserId(request);
-  const workspaces = await ctx.store.listIntelligenceWorkspaces({ userId });
+): Promise<{ workspaceId: string; userId: string; workspaces: Awaited<ReturnType<RouteContext['store']['listIntelligenceWorkspaces']>> } | null> {
+  const scope = await resolveIntelligenceWorkspaceScope(ctx, request);
+  const workspaces = scope.workspaces;
   const workspace = input.workspaceId
     ? workspaces.find((row) => row.id === input.workspaceId) ?? null
-    : workspaces[0] ?? await ctx.store.getOrCreateIntelligenceWorkspace({ userId });
+    : workspaces[0] ?? await ctx.store.getOrCreateIntelligenceWorkspace({ userId: scope.defaultWorkspaceUserId });
   if (!workspace) {
     sendError(reply, request, 404, 'NOT_FOUND', 'intelligence workspace not found');
     return null;
   }
-  const membership = await ctx.store.getIntelligenceWorkspaceMembership({
-    workspaceId: workspace.id,
-    userId,
-  });
+  let membership: Awaited<ReturnType<RouteContext['store']['getIntelligenceWorkspaceMembership']>> = null;
+  for (const candidateUserId of scope.accessibleUserIds) {
+    membership = await ctx.store.getIntelligenceWorkspaceMembership({
+      workspaceId: workspace.id,
+      userId: candidateUserId,
+    });
+    if (membership) break;
+  }
   if (!membership) {
     sendError(reply, request, 403, 'FORBIDDEN', 'workspace membership required');
     return null;
@@ -222,7 +235,60 @@ async function resolveWorkspaceAccess(
   }
   return {
     workspaceId: workspace.id,
-    userId,
+    userId: scope.actorUserId,
+    workspaces,
+  };
+}
+
+async function resolveIntelligenceWorkspaceScope(
+  ctx: RouteContext,
+  request: FastifyRequest,
+): Promise<{
+  actorUserId: string;
+  accessibleUserIds: string[];
+  defaultWorkspaceUserId: string;
+  workspaces: Awaited<ReturnType<RouteContext['store']['listIntelligenceWorkspaces']>>;
+}> {
+  const actorUserId = ctx.resolveRequestUserId(request);
+  const accessibleUserIds = [actorUserId];
+  const auth = ctx.getRequestAuthContext(request);
+  let bootstrapAdminSession = false;
+  if (auth?.authType === 'session' && actorUserId !== ctx.env.DEFAULT_USER_ID) {
+    const user = await ctx.store.getAuthUserById(actorUserId);
+    const bootstrapEmail = ctx.env.ADMIN_BOOTSTRAP_EMAIL.trim().toLowerCase();
+    if (user?.email.trim().toLowerCase() === bootstrapEmail) {
+      bootstrapAdminSession = true;
+      accessibleUserIds.unshift(ctx.env.DEFAULT_USER_ID);
+    }
+  }
+
+  const workspaces: Awaited<ReturnType<RouteContext['store']['listIntelligenceWorkspaces']>> = [];
+  const seen = new Set<string>();
+  const legacyWorkspaceNames = new Set<string>();
+  for (const userId of accessibleUserIds) {
+    const rows = await ctx.store.listIntelligenceWorkspaces({ userId });
+    for (const workspace of rows) {
+      if (
+        bootstrapAdminSession &&
+        workspace.ownerUserId === actorUserId &&
+        legacyWorkspaceNames.has(workspace.name.trim().toLowerCase())
+      ) {
+        continue;
+      }
+      if (seen.has(workspace.id)) continue;
+      seen.add(workspace.id);
+      workspaces.push(workspace);
+      if (workspace.ownerUserId === ctx.env.DEFAULT_USER_ID) {
+        legacyWorkspaceNames.add(workspace.name.trim().toLowerCase());
+      }
+    }
+  }
+
+  return {
+    actorUserId,
+    accessibleUserIds,
+    defaultWorkspaceUserId: accessibleUserIds[0] ?? actorUserId,
+    workspaces,
   };
 }
 
@@ -257,6 +323,112 @@ async function loadNarrativeClusterOr404(
     return null;
   }
   return cluster;
+}
+
+function buildClusterCollisionKey(input: {
+  title: string;
+  eventFamily: string;
+  topDomainId: string | null;
+}): string {
+  return [
+    input.eventFamily,
+    input.topDomainId ?? 'unknown',
+    input.title.trim().toLowerCase().replace(/[^a-z0-9]+/gu, ' ').trim(),
+  ].join('::');
+}
+
+async function buildEventQualityMap(
+  ctx: RouteContext,
+  workspaceId: string,
+  events: Awaited<ReturnType<RouteContext['store']['listIntelligenceEvents']>>,
+) {
+  const documentIds = [...new Set(events.flatMap((event) => event.documentIds))];
+  const documents = documentIds.length
+    ? await ctx.store.listIntelligenceRawDocumentsByIds({
+        workspaceId,
+        documentIds,
+      })
+    : [];
+  const documentsById = new Map(documents.map((document) => [document.id, document] as const));
+  const qualityEntries = await Promise.all(
+    events.map(async (event) => {
+      const eventDocuments = event.documentIds
+        .map((documentId) => documentsById.get(documentId) ?? null)
+        .filter((row): row is NonNullable<typeof row> => row !== null);
+      const linkedClaims = await ctx.store.listIntelligenceLinkedClaims({
+        workspaceId,
+        eventId: event.id,
+        limit: 120,
+      });
+      return [
+        event.id,
+        computeIntelligenceEventQuality({
+          event,
+          documents: eventDocuments,
+          linkedClaims,
+        }),
+      ] as const;
+    }),
+  );
+  return new Map(qualityEntries);
+}
+
+function buildClusterQualityMap(input: {
+  clusters: Awaited<ReturnType<RouteContext['store']['listIntelligenceNarrativeClusters']>>;
+  events: Awaited<ReturnType<RouteContext['store']['listIntelligenceEvents']>>;
+  memberships: Awaited<ReturnType<RouteContext['store']['listIntelligenceNarrativeClusterMemberships']>>;
+}) {
+  const eventsById = new Map(input.events.map((event) => [event.id, event] as const));
+  const duplicateTitleCounts = new Map<string, number>();
+  for (const cluster of input.clusters) {
+    const key = buildClusterCollisionKey(cluster);
+    duplicateTitleCounts.set(key, (duplicateTitleCounts.get(key) ?? 0) + 1);
+  }
+  return new Map(
+    input.clusters.map((cluster) => {
+      const memberEvents = input.memberships
+        .filter((membership) => membership.clusterId === cluster.id)
+        .map((membership) => eventsById.get(membership.eventId) ?? null)
+        .filter((row): row is NonNullable<typeof row> => row !== null);
+      return [
+        cluster.id,
+        computeIntelligenceNarrativeClusterQuality({
+          cluster,
+          memberEvents,
+          duplicateTitleCount: duplicateTitleCounts.get(buildClusterCollisionKey(cluster)) ?? 0,
+        }),
+      ] as const;
+    }),
+  );
+}
+
+function filterCanonicalEvents<T extends Pick<IntelligenceEventClusterRecord, 'lifecycleState'>>(events: T[]): T[] {
+  return events.filter((event) => event.lifecycleState === 'canonical');
+}
+
+function formatQuarantineReason(reason: string): string {
+  switch (reason) {
+    case 'used_fallback':
+      return '모델 추출이 fallback에 의존해서 canonical 승격을 막았다.';
+    case 'generic_claims_only':
+      return '비-generic claim이 없어 사건 해석이 너무 약하다.';
+    case 'low_top_domain_score':
+      return '상위 domain 점수가 낮아 사건 분류 확신이 부족하다.';
+    case 'weak_top_domain_margin':
+      return 'domain 간 점수 차가 좁아 분류가 모호하다.';
+    case 'hint_only_entities':
+      return '엔티티가 본문보다 힌트에 과하게 의존한다.';
+    case 'title_drift':
+      return '추출 제목이 원문 제목과 너무 멀다.';
+    case 'restricted_source_requires_corroboration':
+      return 'forum/search/social 신호라 corroboration 전까지 provisional로 유지한다.';
+    case 'awaiting_corroboration_for_promotion':
+      return '보강 신호가 더 필요해 아직 canonical로 승격하지 않았다.';
+    case 'exact_canonical_url_match':
+      return '기존 canonical 문서와 exact URL이 일치해 기존 사건에 붙였다.';
+    default:
+      return reason.replaceAll('_', ' ');
+  }
 }
 
 function summarizeAliasBindingRollout(input: {
@@ -345,10 +517,10 @@ function toNarrativeClusterLastTransition(
 
 export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext): Promise<void> {
   app.get('/api/v1/intelligence/workspaces', async (request, reply) => {
-    const userId = ctx.resolveRequestUserId(request);
-    const workspaces = await ctx.store.listIntelligenceWorkspaces({ userId });
+    const scope = await resolveIntelligenceWorkspaceScope(ctx, request);
+    const workspaces = scope.workspaces;
     if (workspaces.length === 0) {
-      const workspace = await ctx.store.getOrCreateIntelligenceWorkspace({ userId });
+      const workspace = await ctx.store.getOrCreateIntelligenceWorkspace({ userId: scope.defaultWorkspaceUserId });
       return sendSuccess(reply, request, 200, { workspaces: [workspace] });
     }
     return sendSuccess(reply, request, 200, { workspaces });
@@ -386,7 +558,7 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
     });
     const [sources, workspaces] = await Promise.all([
       ctx.store.listIntelligenceSources({ workspaceId: access.workspaceId, limit: 200 }),
-      ctx.store.listIntelligenceWorkspaces({ userId: access.userId }),
+      Promise.resolve(access.workspaces),
     ]);
     return sendSuccess(reply, request, 200, {
       workspace_id: access.workspaceId,
@@ -572,6 +744,37 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
     }
   });
 
+  app.post('/api/v1/intelligence/maintenance/rebuild-workspace', async (request, reply) => {
+    const parsed = WorkspaceRebuildSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid workspace rebuild payload', parsed.error.flatten());
+    }
+    const access = await resolveWorkspaceAccess(ctx, request, reply, {
+      workspaceId: parsed.data.workspace_id,
+      requiredRole: 'admin',
+    });
+    if (!access) return reply;
+    try {
+      const executionMode = getIntelligenceSemanticWorkerStatus().enabled ? 'worker' : 'background_loop';
+      const result = await rebuildIntelligenceWorkspace({
+        store: ctx.store,
+        providerRouter: ctx.providerRouter,
+        env: ctx.env,
+        workspaceId: access.workspaceId,
+        userId: access.userId,
+        executionMode,
+        notificationService: ctx.notificationService,
+      });
+      return sendSuccess(reply, request, 202, {
+        workspace_id: access.workspaceId,
+        result,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', message);
+    }
+  });
+
   app.get('/api/v1/intelligence/runs', async (request, reply) => {
     const parsed = RunsQuerySchema.safeParse(request.query ?? {});
     if (!parsed.success) {
@@ -643,12 +846,19 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
         limit: 200,
       }),
     ]);
+    const canonicalEvents = filterCanonicalEvents(events);
     const clusterById = new Map(clusters.map((row) => [row.id, row] as const));
-    const clusterMembershipByEventId = new Map(clusterMemberships.map((row) => [row.eventId, row] as const));
-    const enrichedEvents = events.map((event) => {
+    const canonicalEventIds = new Set(canonicalEvents.map((event) => event.id));
+    const clusterMembershipByEventId = new Map(
+      clusterMemberships
+        .filter((row) => canonicalEventIds.has(row.eventId))
+        .map((row) => [row.eventId, row] as const),
+    );
+    const eventQualityById = await buildEventQualityMap(ctx, access.workspaceId, canonicalEvents);
+    const enrichedEvents = canonicalEvents.map((event) => {
       const temporal = computeIntelligenceTemporalNarrativeProfile({
         event,
-        candidateEvents: events,
+        candidateEvents: canonicalEvents,
       });
       const clusterMembership = clusterMembershipByEventId.get(event.id) ?? null;
       const cluster = clusterMembership ? clusterById.get(clusterMembership.clusterId) ?? null : null;
@@ -659,6 +869,7 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
         temporalNarrativeState: temporal.temporalNarrativeState,
         narrativeClusterId: cluster?.id ?? null,
         narrativeClusterState: cluster?.state ?? null,
+        quality: eventQualityById.get(event.id),
       };
     });
     return sendSuccess(reply, request, 200, {
@@ -681,6 +892,12 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
     if (!access) return reply;
     const event = await loadEventOr404(ctx, request, reply, access.workspaceId, (request.params as { eventId: string }).eventId);
     if (!event) return reply;
+    if (event.lifecycleState !== 'canonical') {
+      return sendError(reply, request, 404, 'NOT_FOUND', 'canonical intelligence event not found');
+    }
+    if (event.lifecycleState !== 'canonical') {
+      return sendError(reply, request, 404, 'NOT_FOUND', 'canonical intelligence event not found');
+    }
     const [
       events,
       bridges,
@@ -692,6 +909,7 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       expectedSignalEntries,
       outcomeEntries,
       temporalNarrativeLedgerEntries,
+      documents,
     ] = await Promise.all([
       ctx.store.listIntelligenceEvents({
         workspaceId: access.workspaceId,
@@ -738,7 +956,12 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
         workspaceId: access.workspaceId,
         eventId: event.id,
       }),
+      ctx.store.listIntelligenceRawDocumentsByIds({
+        workspaceId: access.workspaceId,
+        documentIds: event.documentIds,
+      }),
     ]);
+    const canonicalEvents = filterCanonicalEvents(events);
     const narrativeClusterMembership = (
       await ctx.store.listIntelligenceNarrativeClusterMemberships({
         workspaceId: access.workspaceId,
@@ -761,7 +984,7 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       : [];
     const narrativeClusterMembers = clusterMemberships
       .map((membership) => {
-        const memberEvent = events.find((row) => row.id === membership.eventId);
+        const memberEvent = canonicalEvents.find((row) => row.id === membership.eventId);
         if (!memberEvent) return null;
         return {
           membershipId: membership.id,
@@ -786,7 +1009,12 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       });
     const temporal = computeIntelligenceTemporalNarrativeProfile({
       event,
-      candidateEvents: events,
+      candidateEvents: canonicalEvents,
+    });
+    const eventQuality = computeIntelligenceEventQuality({
+      event,
+      documents,
+      linkedClaims,
     });
     const narrativeClusterLastTransition = narrativeCluster
       ? toNarrativeClusterLastTransition(
@@ -805,7 +1033,16 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       recurringNarrativeScore: temporal.recurringNarrativeScore,
       relatedHistoricalEventCount: temporal.relatedHistoricalEventCount,
       temporalNarrativeState: temporal.temporalNarrativeState,
+      quality: eventQuality,
     };
+    const narrativeClusterQuality = narrativeCluster
+      ? computeIntelligenceNarrativeClusterQuality({
+          cluster: narrativeCluster,
+          memberEvents: clusterMemberships
+            .map((membership) => canonicalEvents.find((row) => row.id === membership.eventId) ?? null)
+            .filter((row): row is NonNullable<typeof row> => row !== null),
+        })
+      : null;
     return sendSuccess(reply, request, 200, {
       workspace_id: access.workspaceId,
       event: {
@@ -824,6 +1061,7 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       narrative_cluster: narrativeCluster
         ? {
             ...narrativeCluster,
+            quality: narrativeClusterQuality,
             last_transition: narrativeClusterLastTransition,
           }
         : null,
@@ -860,9 +1098,10 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
         limit: 200,
       }),
     ]);
+    const canonicalEvents = filterCanonicalEvents(events);
     const temporal = computeIntelligenceTemporalNarrativeProfile({
       event,
-      candidateEvents: events,
+      candidateEvents: canonicalEvents,
     });
     const hotspotClusters = buildIntelligenceHotspotClusters({
       linkedClaims,
@@ -917,6 +1156,9 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
     if (!access) return reply;
     const event = await loadEventOr404(ctx, request, reply, access.workspaceId, (request.params as { eventId: string }).eventId);
     if (!event) return reply;
+    if (event.lifecycleState !== 'canonical') {
+      return sendError(reply, request, 404, 'NOT_FOUND', 'canonical intelligence event not found');
+    }
     const [ledgerEntries, evidenceLinks, invalidationEntries, expectedSignalEntries, outcomeEntries, graphEdges] = await Promise.all([
       ctx.store.listIntelligenceHypothesisLedgerEntries({
         workspaceId: access.workspaceId,
@@ -1011,6 +1253,23 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       workspaceId: access.workspaceId,
       limit: parsed.data.limit,
     });
+    const [events, memberships] = await Promise.all([
+      ctx.store.listIntelligenceEvents({
+        workspaceId: access.workspaceId,
+        limit: 500,
+      }),
+      ctx.store.listIntelligenceNarrativeClusterMemberships({
+        workspaceId: access.workspaceId,
+        limit: 1500,
+      }),
+    ]);
+    const canonicalEvents = filterCanonicalEvents(events);
+    const canonicalEventIds = new Set(canonicalEvents.map((event) => event.id));
+    const clusterQualityById = buildClusterQualityMap({
+      clusters,
+      events: canonicalEvents,
+      memberships: memberships.filter((membership) => canonicalEventIds.has(membership.eventId)),
+    });
     const latestLedgerEntries = await Promise.all(
       clusters.map(async (cluster) => {
         const entry = (
@@ -1033,6 +1292,7 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       workspace_id: access.workspaceId,
       narrative_clusters: sorted.map((cluster) => ({
         ...cluster,
+        quality: clusterQualityById.get(cluster.id),
         last_transition: latestLedgerEntryByClusterId.get(cluster.id) ?? null,
       })),
     });
@@ -1075,8 +1335,18 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
         limit: 200,
       }),
     ]);
-    const eventById = new Map(events.map((row) => [row.id, row] as const));
-    const memberSummaries = memberships
+    const canonicalEvents = filterCanonicalEvents(events);
+    const canonicalEventIds = new Set(canonicalEvents.map((event) => event.id));
+    const filteredMemberships = memberships.filter((membership) => canonicalEventIds.has(membership.eventId));
+    const eventQualityById = await buildEventQualityMap(ctx, access.workspaceId, canonicalEvents);
+    const clusterQuality = computeIntelligenceNarrativeClusterQuality({
+      cluster,
+      memberEvents: filteredMemberships
+        .map((membership) => canonicalEvents.find((row) => row.id === membership.eventId) ?? null)
+        .filter((row): row is NonNullable<typeof row> => row !== null),
+    });
+    const eventById = new Map(canonicalEvents.map((row) => [row.id, row] as const));
+    const memberSummaries = filteredMemberships
       .map((membership) => {
         const event = eventById.get(membership.eventId);
         if (!event) return null;
@@ -1108,11 +1378,16 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       .map((summary) => eventById.get(summary.eventId) ?? null)
       .filter((row): row is NonNullable<typeof row> => row !== null)
       .sort((left, right) => Date.parse(right.timeWindowEnd ?? right.updatedAt) - Date.parse(left.timeWindowEnd ?? left.updatedAt))
-      .slice(0, 25);
+      .slice(0, 25)
+      .map((event) => ({
+        ...event,
+        quality: eventQualityById.get(event.id),
+      }));
     return sendSuccess(reply, request, 200, {
       workspace_id: access.workspaceId,
       narrative_cluster: {
         ...cluster,
+        quality: clusterQuality,
         last_transition: toNarrativeClusterLastTransition(ledgerEntries[0] ?? null, cluster),
       },
       memberships: memberSummaries,
@@ -1205,7 +1480,8 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
         ),
       ),
     ]);
-    const memberEvents = events.filter((event) => eventIds.includes(event.id));
+    const memberEvents = filterCanonicalEvents(events).filter((event) => eventIds.includes(event.id));
+    const eventQualityById = await buildEventQualityMap(ctx, access.workspaceId, memberEvents);
     const linkedClaims = [...new Map(linkedClaimsByEvent.flat().map((row) => [row.id, row] as const)).values()];
     const edges = [...new Map(linkedEdgesByEvent.flat().map((row) => [row.id, row] as const)).values()];
     const hotspots = new Set<string>();
@@ -1250,7 +1526,97 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       }),
       recent_events: memberEvents
         .sort((left, right) => Date.parse(right.timeWindowEnd ?? right.updatedAt) - Date.parse(left.timeWindowEnd ?? left.updatedAt))
-        .slice(0, 25),
+        .slice(0, 25)
+        .map((event) => ({
+          ...event,
+          quality: eventQualityById.get(event.id),
+        })),
+    });
+  });
+
+  app.get('/api/v1/intelligence/quarantine', async (request, reply) => {
+    const parsed = WorkspaceScopedQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      return sendError(reply, request, 422, 'VALIDATION_ERROR', 'invalid intelligence quarantine query', parsed.error.flatten());
+    }
+    const access = await resolveWorkspaceAccess(ctx, request, reply, {
+      workspaceId: parsed.data.workspace_id,
+    });
+    if (!access) return reply;
+    const [signals, events, documents] = await Promise.all([
+      ctx.store.listIntelligenceSignals({
+        workspaceId: access.workspaceId,
+        limit: 5000,
+      }),
+      ctx.store.listIntelligenceEvents({
+        workspaceId: access.workspaceId,
+        limit: 2000,
+      }),
+      ctx.store.listIntelligenceRawDocuments({
+        workspaceId: access.workspaceId,
+        limit: 5000,
+      }),
+    ]);
+    const documentById = new Map(documents.map((document) => [document.id, document] as const));
+    const quarantinedSignals = signals
+      .filter((signal) => signal.promotionState === 'quarantined')
+      .map((signal) => {
+        const document = documentById.get(signal.documentId) ?? null;
+        return {
+          signal_id: signal.id,
+          document_id: signal.documentId,
+          title: document?.title ?? 'Untitled document',
+          url: signal.url,
+          source_type: signal.sourceType,
+          source_tier: signal.sourceTier,
+          reasons: signal.promotionReasons.map(formatQuarantineReason),
+          created_at: signal.createdAt,
+          processed_at: signal.processedAt,
+        };
+      });
+    const provisionalEvents = events
+      .filter((event) => event.lifecycleState === 'provisional')
+      .map((event) => ({
+        event_id: event.id,
+        title: event.title,
+        summary: event.summary,
+        signal_count: event.signalIds.length,
+        document_count: event.documentIds.length,
+        non_social_corroboration_count: event.nonSocialCorroborationCount,
+        reasons: event.validationReasons.map(formatQuarantineReason),
+        updated_at: event.updatedAt,
+      }));
+    const collisionsByIdentity = new Map<string, {
+      document_identity_key: string;
+      count: number;
+      titles: string[];
+      canonical_urls: string[];
+    }>();
+    for (const document of documents) {
+      if (!document.documentIdentityKey) continue;
+      const current = collisionsByIdentity.get(document.documentIdentityKey);
+      if (!current) {
+        collisionsByIdentity.set(document.documentIdentityKey, {
+          document_identity_key: document.documentIdentityKey,
+          count: 1,
+          titles: [document.title],
+          canonical_urls: [document.canonicalUrl],
+        });
+        continue;
+      }
+      current.count += 1;
+      if (!current.titles.includes(document.title)) current.titles.push(document.title);
+      if (!current.canonical_urls.includes(document.canonicalUrl)) current.canonical_urls.push(document.canonicalUrl);
+    }
+    const identityCollisions = [...collisionsByIdentity.values()]
+      .filter((entry) => entry.count > 1)
+      .sort((left, right) => right.count - left.count)
+      .slice(0, 50);
+    return sendSuccess(reply, request, 200, {
+      workspace_id: access.workspaceId,
+      quarantined_signals: quarantinedSignals,
+      provisional_events: provisionalEvents,
+      identity_collisions: identityCollisions,
     });
   });
 
@@ -1268,6 +1634,9 @@ export async function intelligenceRoutes(app: FastifyInstance, ctx: RouteContext
       workspaceId: access.workspaceId,
       signalId: (request.params as { signalId: string }).signalId,
       processingStatus: 'pending',
+      promotionState: 'pending_validation',
+      promotionReasons: [],
+      processingLeaseId: null,
       linkedEventId: null,
       processingError: null,
       processedAt: null,

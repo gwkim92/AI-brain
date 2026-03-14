@@ -372,6 +372,14 @@ export function createMemoryIntelligenceRepository({
       );
     },
 
+    async findIntelligenceRawDocumentByIdentityKey(input) {
+      return (
+        [...state.intelligenceRawDocuments.values()].find(
+          (row) => row.workspaceId === input.workspaceId && row.documentIdentityKey === input.documentIdentityKey,
+        ) ?? null
+      );
+    },
+
     async createIntelligenceRawDocument(input) {
       const row: RawDocumentRecord = {
         id: randomUUID(),
@@ -379,6 +387,7 @@ export function createMemoryIntelligenceRepository({
         sourceId: input.sourceId ?? null,
         sourceUrl: input.sourceUrl,
         canonicalUrl: input.canonicalUrl,
+        documentIdentityKey: input.documentIdentityKey ?? input.canonicalUrl ?? `${input.sourceUrl}::${input.title.trim().toLowerCase()}`,
         title: input.title,
         summary: input.summary ?? '',
         rawText: input.rawText,
@@ -394,6 +403,22 @@ export function createMemoryIntelligenceRepository({
       };
       state.intelligenceRawDocuments.set(row.id, row);
       return row;
+    },
+
+    async updateIntelligenceRawDocumentObservation(input) {
+      const current = state.intelligenceRawDocuments.get(input.documentId);
+      if (!current || current.workspaceId !== input.workspaceId) return null;
+      const next: RawDocumentRecord = {
+        ...current,
+        observedAt: typeof input.observedAt === 'undefined' ? current.observedAt : input.observedAt ?? null,
+        publishedAt: typeof input.publishedAt === 'undefined' ? current.publishedAt : input.publishedAt ?? null,
+        metadataJson:
+          typeof input.metadataJson === 'undefined'
+            ? current.metadataJson
+            : { ...current.metadataJson, ...(input.metadataJson ?? {}) },
+      };
+      state.intelligenceRawDocuments.set(next.id, next);
+      return next;
     },
 
     async listIntelligenceRawDocuments(input) {
@@ -430,6 +455,9 @@ export function createMemoryIntelligenceRepository({
         entityHints: [...(input.entityHints ?? [])],
         trustHint: input.trustHint ?? null,
         processingStatus: input.processingStatus ?? 'pending',
+        promotionState: input.promotionState ?? 'pending_validation',
+        promotionReasons: [...(input.promotionReasons ?? [])],
+        processingLeaseId: input.processingLeaseId ?? null,
         linkedEventId: input.linkedEventId ?? null,
         processingError: input.processingError ?? null,
         processedAt: input.processedAt ?? null,
@@ -463,9 +491,25 @@ export function createMemoryIntelligenceRepository({
     async updateIntelligenceSignalProcessing(input) {
       const current = state.intelligenceSignals.get(input.signalId);
       if (!current || current.workspaceId !== input.workspaceId) return null;
+      if (input.expectedCurrentStatus && current.processingStatus !== input.expectedCurrentStatus) {
+        return null;
+      }
+      if (
+        typeof input.expectedCurrentLeaseId !== 'undefined' &&
+        current.processingLeaseId !== input.expectedCurrentLeaseId
+      ) {
+        return null;
+      }
       const next: SignalEnvelopeRecord = {
         ...current,
         processingStatus: input.processingStatus,
+        promotionState: typeof input.promotionState === 'undefined' ? current.promotionState : input.promotionState,
+        promotionReasons:
+          typeof input.promotionReasons === 'undefined'
+            ? current.promotionReasons
+            : [...(input.promotionReasons ?? [])],
+        processingLeaseId:
+          typeof input.processingLeaseId === 'undefined' ? current.processingLeaseId : input.processingLeaseId,
         linkedEventId: typeof input.linkedEventId === 'undefined' ? current.linkedEventId : input.linkedEventId,
         processingError: typeof input.processingError === 'undefined' ? current.processingError : input.processingError,
         processedAt: typeof input.processedAt === 'undefined' ? current.processedAt : input.processedAt,
@@ -722,6 +766,8 @@ export function createMemoryIntelligenceRepository({
         reviewUpdatedAt: input.reviewUpdatedAt ?? null,
         reviewUpdatedBy: input.reviewUpdatedBy ?? null,
         reviewResolvedAt: input.reviewResolvedAt ?? null,
+        lifecycleState: input.lifecycleState ?? 'canonical',
+        validationReasons: [...(input.validationReasons ?? [])],
         operatorNoteCount: input.operatorNoteCount,
         createdAt: current?.createdAt ?? input.createdAt ?? now,
         updatedAt: input.updatedAt ?? now,
@@ -815,6 +861,53 @@ export function createMemoryIntelligenceRepository({
         }
       }
       return true;
+    },
+
+    async resetIntelligenceDerivedWorkspaceState(input) {
+      const deletedEventCount = [...state.intelligenceEvents.values()].filter((row) => row.workspaceId === input.workspaceId).length;
+      const deletedClusterCount = [...state.intelligenceNarrativeClusters.values()].filter((row) => row.workspaceId === input.workspaceId).length;
+      const deletedLinkedClaimCount = [...state.intelligenceLinkedClaims.values()].filter((row) => row.workspaceId === input.workspaceId).length;
+
+      const derivedMaps = [
+        state.intelligenceEvents,
+        state.intelligenceClaimLinks,
+        state.intelligenceEventMemberships,
+        state.intelligenceHypothesisLedger,
+        state.intelligenceHypothesisEvidenceLinks,
+        state.intelligenceInvalidationEntries,
+        state.intelligenceExpectedSignalEntries,
+        state.intelligenceOutcomeEntries,
+        state.intelligenceNarrativeClusters,
+        state.intelligenceNarrativeClusterMemberships,
+        state.intelligenceTemporalNarrativeLedger,
+        state.intelligenceNarrativeClusterLedger,
+        state.intelligenceNarrativeClusterTimeline,
+        state.intelligenceExecutionAudits,
+        state.intelligenceBridgeDispatches,
+        state.intelligenceLinkedClaims,
+        state.intelligenceLinkedClaimEdges,
+      ] as const;
+
+      for (const map of derivedMaps) {
+        for (const [id, row] of map.entries()) {
+          if (row.workspaceId === input.workspaceId) {
+            map.delete(id);
+          }
+        }
+      }
+
+      for (const [id, row] of state.intelligenceOperatorNotes.entries()) {
+        if (row.workspaceId === input.workspaceId) {
+          state.intelligenceOperatorNotes.delete(id);
+        }
+      }
+
+      return {
+        workspaceId: input.workspaceId,
+        deletedEventCount,
+        deletedClusterCount,
+        deletedLinkedClaimCount,
+      };
     },
 
     async updateIntelligenceEventReviewState(input) {

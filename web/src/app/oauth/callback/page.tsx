@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 import { useLocale } from "@/components/providers/LocaleProvider";
 
 type OauthCallbackParams = {
@@ -27,20 +28,15 @@ function postToOpener(payload: Record<string, unknown>) {
 
 export default function OauthCallbackPage() {
   const { t } = useLocale();
-  const [params, setParams] = useState<OauthCallbackParams>({
-    code: null,
-    state: null,
-    error: null,
-  });
-
-  useEffect(() => {
-    const search = new URLSearchParams(window.location.search);
-    setParams({
-      code: search.get("code"),
-      state: search.get("state"),
-      error: search.get("error") ?? search.get("error_description"),
-    });
-  }, []);
+  const searchParams = useSearchParams();
+  const params = useMemo<OauthCallbackParams>(
+    () => ({
+      code: searchParams.get("code"),
+      state: searchParams.get("state"),
+      error: searchParams.get("error") ?? searchParams.get("error_description"),
+    }),
+    [searchParams]
+  );
 
   useEffect(() => {
     postToOpener(params);

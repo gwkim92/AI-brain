@@ -2283,6 +2283,14 @@ export type IntelligenceStaleEventPreview = {
   updatedAt: string;
 };
 
+export type IntelligenceSignalPromotionState =
+  | "pending_validation"
+  | "quarantined"
+  | "attached"
+  | "promoted";
+
+export type IntelligenceEventLifecycleState = "provisional" | "canonical";
+
 export type IntelligenceEventRebuildResult = {
   workspaceId: string;
   previousEventId: string;
@@ -2312,12 +2320,32 @@ export type IntelligenceBulkEventRebuildResult = {
   }>;
 };
 
+export type IntelligenceQualityState = "healthy" | "suspect";
+
+export type IntelligenceQualitySummary = {
+  state: IntelligenceQualityState;
+  score: number;
+  reasons: string[];
+};
+
+export type IntelligenceWorkspaceRebuildResult = {
+  workspaceId: string;
+  deletedEventCount: number;
+  deletedClusterCount: number;
+  deletedLinkedClaimCount: number;
+  mode: "hard_reset";
+  queuedSignalCount: number;
+  executionMode: "worker" | "background_loop";
+};
+
 export type IntelligenceEventClusterRecord = {
   id: string;
   workspaceId: string;
   title: string;
   summary: string;
   eventFamily: IntelligenceEventFamily;
+  lifecycleState: IntelligenceEventLifecycleState;
+  validationReasons: string[];
   signalIds: string[];
   documentIds: string[];
   entities: string[];
@@ -2363,8 +2391,39 @@ export type IntelligenceEventClusterRecord = {
   temporalNarrativeState?: IntelligenceTemporalNarrativeState;
   narrativeClusterId?: string | null;
   narrativeClusterState?: IntelligenceNarrativeClusterState | null;
+  quality: IntelligenceQualitySummary;
   createdAt: string;
   updatedAt: string;
+};
+
+export type IntelligenceQuarantinedSignalRecord = {
+  signal_id: string;
+  document_id: string;
+  title: string;
+  url: string;
+  source_type: IntelligenceSourceType;
+  source_tier: IntelligenceSourceTier;
+  reasons: string[];
+  created_at: string;
+  processed_at: string | null;
+};
+
+export type IntelligenceProvisionalEventRecord = {
+  event_id: string;
+  title: string;
+  summary: string;
+  signal_count: number;
+  document_count: number;
+  non_social_corroboration_count: number;
+  reasons: string[];
+  updated_at: string;
+};
+
+export type IntelligenceIdentityCollisionRecord = {
+  document_identity_key: string;
+  count: number;
+  titles: string[];
+  canonical_urls: string[];
 };
 
 export type IntelligenceTemporalNarrativeState = "new" | "recurring" | "diverging";
@@ -2446,6 +2505,7 @@ export type IntelligenceNarrativeClusterRecord = {
   lastEventAt: string | null;
   lastRecurringAt: string | null;
   lastDivergingAt: string | null;
+  quality: IntelligenceQualitySummary;
   createdAt: string;
   updatedAt: string;
 };

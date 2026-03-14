@@ -200,7 +200,7 @@ describe('runIntelligenceScannerPass', () => {
       workspaceId: workspace.id,
       limit: 10,
     });
-    expect(events[0]?.title).toBe('Hormuz LNG routing shock');
+    expect(events[0]?.title).toBe('Official Hormuz LNG routing shock');
     expect(events[0]?.topDomainId).toBe('geopolitics_energy_lng');
     expect(events[0]?.primaryHypotheses.length).toBeGreaterThanOrEqual(1);
     expect(events[0]?.timeCoherenceScore).toBeGreaterThan(0);

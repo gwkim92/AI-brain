@@ -1,9 +1,5 @@
-"use client";
-
-import React from "react";
-
-import { IntelligenceModule } from "@/components/modules/IntelligenceModule";
+import { IntelligenceInboxModule } from "@/components/modules/intelligence/IntelligenceOperatorModule";
 
 export default function IntelligencePage() {
-  return <IntelligenceModule />;
+  return <IntelligenceInboxModule />;
 }

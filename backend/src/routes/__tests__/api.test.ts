@@ -18,6 +18,8 @@ const dockerAvailable = (() => {
 })();
 
 describe('API routes', () => {
+  const recentRfc822Date = (hoursAgo: number) => new Date(Date.now() - hoursAgo * 60 * 60 * 1000).toUTCString();
+
   const waitFor = async <T>(
     fn: () => Promise<T>,
     options: {
@@ -4939,13 +4941,13 @@ describe('API routes', () => {
           <title>Major diplomatic talks continue</title>
           <link>https://example.com/world/diplomatic-talks</link>
           <description>Leaders confirmed new talks and sanctions review.</description>
-          <pubDate>Thu, 05 Mar 2026 12:00:00 GMT</pubDate>
+          <pubDate>${recentRfc822Date(6)}</pubDate>
         </item>
         <item>
           <title>Global markets react to security tensions</title>
           <link>https://example.org/markets/security-tensions</link>
           <description>Markets moved as investors priced in geopolitical risk.</description>
-          <pubDate>Thu, 05 Mar 2026 10:00:00 GMT</pubDate>
+          <pubDate>${recentRfc822Date(8)}</pubDate>
         </item>
       </channel></rss>
     `;
@@ -5047,7 +5049,7 @@ describe('API routes', () => {
           <title>Repo health issue discovered</title>
           <link>https://example.com/engineering/repo-health</link>
           <description>CI instability and flaky test incidents are rising.</description>
-          <pubDate>Thu, 05 Mar 2026 09:00:00 GMT</pubDate>
+          <pubDate>${recentRfc822Date(6)}</pubDate>
         </item>
       </channel></rss>
     `;
@@ -5474,7 +5476,7 @@ describe('API routes', () => {
           <title>Repo health issue discovered</title>
           <link>https://example.com/engineering/repo-health</link>
           <description>CI instability and flaky test incidents are rising.</description>
-          <pubDate>Thu, 05 Mar 2026 09:00:00 GMT</pubDate>
+          <pubDate>${recentRfc822Date(6)}</pubDate>
         </item>
       </channel></rss>
     `;
@@ -5603,7 +5605,7 @@ describe('API routes', () => {
           <title>Ukraine front line updates continue</title>
           <link>https://example.com/world/ukraine-update</link>
           <description>Fresh developments continue across multiple fronts.</description>
-          <pubDate>Thu, 05 Mar 2026 09:00:00 GMT</pubDate>
+          <pubDate>${recentRfc822Date(6)}</pubDate>
         </item>
       </channel></rss>
     `;
@@ -5662,7 +5664,7 @@ describe('API routes', () => {
           <title>Routine platform maintenance note</title>
           <link>https://example.com/status/maintenance-note</link>
           <description>Routine maintenance completed with no material changes reported.</description>
-          <pubDate>Thu, 05 Mar 2026 09:00:00 GMT</pubDate>
+          <pubDate>${recentRfc822Date(6)}</pubDate>
         </item>
       </channel></rss>
     `;
@@ -5732,7 +5734,7 @@ describe('API routes', () => {
           <title>EU AI Act implementation update</title>
           <link>https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai</link>
           <description>The AI Act entered into force on 1 August 2024 and staged application continues without new changes.</description>
-          <pubDate>Thu, 05 Mar 2026 09:00:00 GMT</pubDate>
+          <pubDate>${recentRfc822Date(6)}</pubDate>
         </item>
       </channel></rss>
     `;
@@ -5859,7 +5861,7 @@ describe('API routes', () => {
           <title>EU AI Act timeline update</title>
           <link>https://example.com/policy/eu-ai-act</link>
           <description>Officials confirmed a phased implementation timeline and enforcement plan.</description>
-          <pubDate>Thu, 05 Mar 2026 12:00:00 GMT</pubDate>
+          <pubDate>${recentRfc822Date(6)}</pubDate>
         </item>
       </channel></rss>
     `;
@@ -6115,7 +6117,7 @@ describe('API routes', () => {
           <title>Regional tensions remain elevated</title>
           <link>https://example.com/world/tensions</link>
           <description>Officials expect the situation to remain volatile this week.</description>
-          <pubDate>Thu, 05 Mar 2026 12:00:00 GMT</pubDate>
+          <pubDate>${recentRfc822Date(6)}</pubDate>
         </item>
       </channel></rss>
     `;
@@ -6219,25 +6221,25 @@ describe('API routes', () => {
           <title>TSMC outlines advanced packaging roadmap</title>
           <link>https://www.tsmc.com/english/news/packaging-roadmap</link>
           <description>TSMC shared updated packaging and capacity plans for advanced AI chips.</description>
-          <pubDate>Thu, 05 Mar 2026 09:00:00 GMT</pubDate>
+          <pubDate>${recentRfc822Date(6)}</pubDate>
         </item>
         <item>
           <title>EU publishes AI Act implementation guidance</title>
           <link>https://digital-strategy.ec.europa.eu/en/library/ai-act-implementation-guidance</link>
           <description>The European Commission published new guidance on implementation timing and scope.</description>
-          <pubDate>Thu, 05 Mar 2026 08:00:00 GMT</pubDate>
+          <pubDate>${recentRfc822Date(7)}</pubDate>
         </item>
         <item>
           <title>Analysts expect TSMC capex to remain elevated</title>
           <link>https://www.reuters.com/technology/tsmc-capex-2026</link>
           <description>Analysts said TSMC remains central to advanced AI and mobile supply chains.</description>
-          <pubDate>Thu, 05 Mar 2026 07:30:00 GMT</pubDate>
+          <pubDate>${recentRfc822Date(8)}</pubDate>
         </item>
         <item>
           <title>EU AI Act changes compliance obligations for foundation models</title>
           <link>https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:32026R0001</link>
           <description>The updated text clarifies scope, enforcement timing, and obligations for providers.</description>
-          <pubDate>Thu, 05 Mar 2026 07:00:00 GMT</pubDate>
+          <pubDate>${recentRfc822Date(9)}</pubDate>
         </item>
       </channel></rss>
     `;
@@ -6337,13 +6339,13 @@ describe('API routes', () => {
           <title>Global headlines remain volatile</title>
           <link>https://example.com/world/global-headlines</link>
           <description>Diplomatic pressure and battlefield updates continued overnight.</description>
-          <pubDate>Thu, 05 Mar 2026 13:00:00 GMT</pubDate>
+          <pubDate>${recentRfc822Date(4)}</pubDate>
         </item>
         <item>
           <title>Markets respond to war risk</title>
           <link>https://example.org/markets/war-risk</link>
           <description>Investors repriced energy and defense-linked assets.</description>
-          <pubDate>Thu, 05 Mar 2026 11:00:00 GMT</pubDate>
+          <pubDate>${recentRfc822Date(6)}</pubDate>
         </item>
       </channel></rss>
     `;

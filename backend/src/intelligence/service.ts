@@ -15,6 +15,8 @@ import type {
   IntelligenceBridgeDispatchRecord,
   IntelligenceDomainId,
   IntelligenceEventClusterRecord,
+  IntelligenceEventLifecycleState,
+  IntelligenceEventFamily,
   IntelligenceExpectedSignalEntryRecord,
   IntelligenceExecutionStatus,
   IntelligenceInvalidationEntryRecord,
@@ -27,7 +29,11 @@ import type {
   IntelligenceOutcomeRecord,
   IntelligenceOutcomeEntryRecord,
   IntelligenceHotspotCluster,
+  IntelligenceQualitySummary,
   IntelligenceRelatedHistoricalEventSummary,
+  IntelligenceSemanticValidation,
+  IntelligenceSignalPromotionState,
+  ResetIntelligenceDerivedWorkspaceStateResult,
   IntelligenceTemporalNarrativeState,
   SemanticClaim,
   IntelligenceSignalProcessingStatus,
@@ -43,10 +49,13 @@ import { fetchProviderModelCatalog } from '../providers/catalog';
 
 import { fetchIntelligenceSource } from './fetchers';
 import { inferIntelligenceModelMetadata } from './runtime';
-import { classifyClaimLink, extractEventSemantics } from './semantic';
+import { classifyClaimLink, extractEventSemantics, inferDomainScores, inferEventFamily, normalizeText } from './semantic';
 
 const SOCIAL_SOURCE_TYPES = new Set(['social', 'forum'] as const);
 const SOCIAL_SOURCE_TIERS = new Set(['tier_3'] as const);
+const RESTRICTED_PROMOTION_SOURCE_TYPES = new Set(['search_result', 'forum', 'social'] as const);
+const CANONICAL_SOURCE_TIERS = new Set<string>(['tier_0', 'tier_1']);
+const CANONICAL_SOURCE_TYPES = new Set(['policy', 'web_page', 'blog', 'news', 'filing'] as const);
 const LOW_RISK_MCP_TOOLS = new Set(['task_create', 'notification_emit']);
 const AUTO_DELIBERATION_DOMAIN_DELTA = 0.15;
 const AUTO_DELIBERATION_HYPOTHESIS_DELTA = 0.2;
@@ -54,6 +63,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const EXACT_LINKED_CLAIM_WINDOW_MS = 2 * DAY_MS;
 const SHORTLIST_LINKED_CLAIM_WINDOW_MS = 7 * DAY_MS;
 const RECENCY_DECAY_WINDOW_MS = 14 * DAY_MS;
+const GENERIC_CLAIM_PREDICATES = new Set(['signal', 'signals', 'mention', 'mentions', 'report', 'reports']);
+const QUALITY_SUSPECT_THRESHOLD = 0.55;
+const CANONICAL_CLUSTER_WINDOW_MS = 90 * DAY_MS;
+const SEMANTIC_MATCH_EVENT_LIMIT = 2_000;
 
 type WorkspaceScopedStore = Pick<
   JarvisStore,
@@ -68,7 +81,9 @@ type WorkspaceScopedStore = Pick<
   | 'listIntelligenceRawDocuments'
   | 'listIntelligenceRawDocumentsByIds'
   | 'findIntelligenceRawDocumentByFingerprint'
+  | 'findIntelligenceRawDocumentByIdentityKey'
   | 'createIntelligenceRawDocument'
+  | 'updateIntelligenceRawDocumentObservation'
   | 'createIntelligenceSignal'
   | 'listIntelligenceSignals'
   | 'listIntelligenceSignalsByIds'
@@ -85,6 +100,7 @@ type WorkspaceScopedStore = Pick<
   | 'listIntelligenceEvents'
   | 'upsertIntelligenceEvent'
   | 'deleteIntelligenceEventById'
+  | 'resetIntelligenceDerivedWorkspaceState'
   | 'listIntelligenceModelRegistryEntries'
   | 'upsertIntelligenceModelRegistryEntries'
   | 'replaceIntelligenceProviderHealth'
@@ -197,6 +213,12 @@ export type IntelligenceBulkEventRebuildResult = {
     eventId: string;
     message: string;
   }>;
+};
+
+export type IntelligenceWorkspaceRebuildResult = ResetIntelligenceDerivedWorkspaceStateResult & {
+  mode: 'hard_reset';
+  queuedSignalCount: number;
+  executionMode: 'worker' | 'background_loop';
 };
 
 export function computeIntelligenceOperatorPriorityScore(event: Pick<
@@ -378,6 +400,451 @@ function normalizeClaimPart(value: string | null | undefined): string {
     .replace(/\s+/g, ' ');
 }
 
+function normalizedPhraseMatch(haystack: string, needle: string): boolean {
+  const normalizedHaystack = normalizeText(haystack);
+  const normalizedNeedle = normalizeText(needle);
+  if (!normalizedNeedle) return false;
+  return ` ${normalizedHaystack} `.includes(` ${normalizedNeedle} `);
+}
+
+function buildNormalizedTitleKey(title: string): string {
+  return normalizeText(title)
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 12)
+    .join(' ');
+}
+
+function isGenericPredicate(predicate: string): boolean {
+  const normalized = normalizeClaimPart(predicate);
+  return GENERIC_CLAIM_PREDICATES.has(normalized);
+}
+
+function isGenericSemanticClaim(claim: Pick<SemanticClaim, 'predicate' | 'claimType' | 'object'>): boolean {
+  const normalizedPredicate = normalizeClaimPart(claim.predicate);
+  if (GENERIC_CLAIM_PREDICATES.has(normalizedPredicate)) return true;
+  return claim.claimType === 'signal' && normalizedPredicate === 'general';
+}
+
+const PLATFORM_GENERIC_NARRATIVE_ANCHORS = new Set([
+  'agent',
+  'agents',
+  'ai',
+  'ai agent',
+  'ai agents',
+  'ai generated',
+  'ai native',
+  'anthropic',
+  'api',
+  'apis',
+  'app',
+  'apps',
+  'claude api',
+  'gemini',
+  'google',
+  'llm',
+  'llms',
+  'model',
+  'models',
+  'openai',
+  'platform',
+  'protocol',
+  'tool',
+  'tools',
+]);
+
+const POLICY_GENERIC_NARRATIVE_ANCHORS = new Set([
+  'agency',
+  'agencies',
+  'board',
+  'cftc',
+  'division of enforcement',
+  'federal open market committee',
+  'federal reserve',
+  'federal reserve board',
+  'fsa',
+  'government',
+  'governments',
+  'sec',
+  'securities and exchange commission',
+]);
+
+const POLICY_TITLE_NOISE_TOKENS = new Set([
+  'announce',
+  'announced',
+  'announces',
+  'approval',
+  'application',
+  'applications',
+  'board',
+  'by',
+  'federal',
+  'for',
+  'from',
+  'of',
+  'on',
+  'propose',
+  'proposed',
+  'proposes',
+  'reserve',
+  'sec',
+  'the',
+  'to',
+]);
+
+type NarrativeAnchorShape = Pick<
+  IntelligenceEventClusterRecord,
+  'title' | 'entities' | 'semanticClaims' | 'eventFamily'
+>;
+
+function isGenericNarrativeAnchor(value: string, eventFamily: IntelligenceEventFamily): boolean {
+  const normalized = normalizeText(value);
+  if (!normalized) return true;
+  if (eventFamily === 'platform_ai_shift') {
+    return PLATFORM_GENERIC_NARRATIVE_ANCHORS.has(normalized);
+  }
+  if (eventFamily === 'policy_change') {
+    return POLICY_GENERIC_NARRATIVE_ANCHORS.has(normalized);
+  }
+  return false;
+}
+
+function filterNarrativeAnchors(values: string[], eventFamily: IntelligenceEventFamily): string[] {
+  return values.filter((value) => !isGenericNarrativeAnchor(value, eventFamily));
+}
+
+function narrativeEntityOverlap(
+  left: string[],
+  right: string[],
+  eventFamily: IntelligenceEventFamily,
+): number {
+  return entityOverlap(filterNarrativeAnchors(left, eventFamily), filterNarrativeAnchors(right, eventFamily));
+}
+
+function isGenericLinkedClaim(claim: Pick<LinkedClaimRecord, 'canonicalPredicate' | 'predicateFamily'>): boolean {
+  return isGenericPredicate(claim.canonicalPredicate) || claim.predicateFamily === 'signal';
+}
+
+function buildComparisonClaimText(claims: SemanticClaim[]): string {
+  return claims
+    .filter((claim) => !isGenericSemanticClaim(claim))
+    .map((row) => `${row.subjectEntity} ${row.predicate} ${row.object}`)
+    .join(' ');
+}
+
+function primarySemanticAnchor(input: NarrativeAnchorShape): string {
+  const claimSubject = input.semanticClaims.find(
+    (claim) =>
+      !isGenericSemanticClaim(claim) &&
+      normalizeText(claim.subjectEntity) &&
+      !isGenericNarrativeAnchor(claim.subjectEntity, input.eventFamily),
+  )?.subjectEntity;
+  const entity = input.entities.find(
+    (value) => normalizeText(value) && !isGenericNarrativeAnchor(value, input.eventFamily),
+  );
+  return normalizeText(claimSubject ?? entity ?? input.title);
+}
+
+function platformProductAnchorMismatch(
+  left: NarrativeAnchorShape,
+  right: NarrativeAnchorShape,
+): boolean {
+  if (left.eventFamily !== 'platform_ai_shift' || right.eventFamily !== 'platform_ai_shift') {
+    return false;
+  }
+  const leftAnchor = primarySemanticAnchor(left);
+  const rightAnchor = primarySemanticAnchor(right);
+  if (!leftAnchor || !rightAnchor || leftAnchor === rightAnchor) {
+    return false;
+  }
+  if (leftAnchor.includes(rightAnchor) || rightAnchor.includes(leftAnchor)) {
+    return false;
+  }
+  return similarity(leftAnchor, rightAnchor) < 0.45;
+}
+
+function policyNarrativeAnchorMismatch(
+  left: NarrativeAnchorShape,
+  right: NarrativeAnchorShape,
+): boolean {
+  if (left.eventFamily !== 'policy_change' || right.eventFamily !== 'policy_change') {
+    return false;
+  }
+  const leftTemplateAnchor = extractPolicyTemplateAnchor(left.title);
+  const rightTemplateAnchor = extractPolicyTemplateAnchor(right.title);
+  if (leftTemplateAnchor && rightTemplateAnchor) {
+    if (leftTemplateAnchor === rightTemplateAnchor) return false;
+    if (leftTemplateAnchor.includes(rightTemplateAnchor) || rightTemplateAnchor.includes(leftTemplateAnchor)) {
+      return false;
+    }
+    return true;
+  }
+  const leftTitleAnchor = extractPolicyTitleAnchor(left.title);
+  const rightTitleAnchor = extractPolicyTitleAnchor(right.title);
+  if (leftTitleAnchor && rightTitleAnchor) {
+    if (
+      leftTitleAnchor !== rightTitleAnchor &&
+      !leftTitleAnchor.includes(rightTitleAnchor) &&
+      !rightTitleAnchor.includes(leftTitleAnchor) &&
+      similarity(leftTitleAnchor, rightTitleAnchor) < 0.68
+    ) {
+      return true;
+    }
+  }
+  const leftAnchor = primarySemanticAnchor(left);
+  const rightAnchor = primarySemanticAnchor(right);
+  if (!leftAnchor || !rightAnchor || leftAnchor === rightAnchor) {
+    return false;
+  }
+  if (leftAnchor.includes(rightAnchor) || rightAnchor.includes(leftAnchor)) {
+    return false;
+  }
+  if (narrativeEntityOverlap(left.entities, right.entities, 'policy_change') >= 1) {
+    return false;
+  }
+  return similarity(leftAnchor, rightAnchor) < 0.58;
+}
+
+function extractPolicyTemplateAnchor(title: string): string | null {
+  const normalized = normalizeText(title);
+  if (!normalized) return null;
+  const patterns = [
+    /approval of application by (.+)$/u,
+    /approval of the application by (.+)$/u,
+    /approval of application from (.+)$/u,
+    /approval of the application from (.+)$/u,
+  ];
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    const candidate = match?.[1]?.trim();
+    if (candidate) return candidate;
+  }
+  return null;
+}
+
+function extractPolicyTitleAnchor(title: string): string | null {
+  const tokens = normalizeText(title)
+    .split(' ')
+    .filter((token) => token.length >= 3)
+    .filter((token) => !POLICY_TITLE_NOISE_TOKENS.has(token))
+    .slice(0, 8);
+  return tokens.length > 0 ? tokens.join(' ') : null;
+}
+
+function buildEventScopedClaimFingerprint(input: {
+  claim: SemanticClaim;
+  fallbackAt: string | null;
+  eventId: string;
+}): string {
+  return `${buildClaimFingerprint(input.claim, input.fallbackAt)}|event:${input.eventId}`;
+}
+
+function eventCompatibilityBucket(event: Pick<IntelligenceEventClusterRecord, 'eventFamily' | 'topDomainId'>): string {
+  return `${event.eventFamily}::${event.topDomainId ?? 'unknown'}`;
+}
+
+function eventDomainMatches(left: IntelligenceDomainId | null, right: IntelligenceDomainId | null): boolean {
+  return left !== null && right !== null && left === right;
+}
+
+function isTrustedPolicyPromotionSource(source: IntelligenceSourceRecord): boolean {
+  return source.sourceType === 'policy' && CANONICAL_SOURCE_TIERS.has(source.sourceTier);
+}
+
+function isTrustedPolicyEvent(event: Pick<IntelligenceEventClusterRecord, 'sourceMix'>): boolean {
+  const sourceTypes = Array.isArray(event.sourceMix.source_types)
+    ? event.sourceMix.source_types.filter((value): value is string => typeof value === 'string')
+    : [];
+  const sourceTiers = Array.isArray(event.sourceMix.source_tiers)
+    ? event.sourceMix.source_tiers.filter((value): value is string => typeof value === 'string')
+    : [];
+  return (
+    sourceTypes.includes('policy') &&
+    sourceTiers.some((tier) => CANONICAL_SOURCE_TIERS.has(tier as IntelligenceSourceRecord['sourceTier'])) &&
+    Number(event.sourceMix.non_social_source_count ?? 0) >= 1
+  );
+}
+
+function sameTitleException(left: Pick<IntelligenceEventClusterRecord, 'title' | 'entities'>, right: Pick<IntelligenceEventClusterRecord, 'title' | 'entities'>): boolean {
+  return buildNormalizedTitleKey(left.title) === buildNormalizedTitleKey(right.title) &&
+    similarity(left.title, right.title) >= 0.75 &&
+    entityOverlap(left.entities, right.entities) >= 1;
+}
+
+function eventsNarrativelyCompatible(
+  left: Pick<IntelligenceEventClusterRecord, 'title' | 'entities' | 'semanticClaims' | 'eventFamily' | 'topDomainId'>,
+  right: Pick<IntelligenceEventClusterRecord, 'title' | 'entities' | 'semanticClaims' | 'eventFamily' | 'topDomainId'>,
+): boolean {
+  if (sameTitleException(left, right)) return true;
+  const sameFamily = left.eventFamily === right.eventFamily;
+  const sameDomain = domainsCompatible(left.topDomainId, right.topDomainId);
+  if (!sameFamily || !sameDomain) return false;
+  if (platformProductAnchorMismatch(left, right) || policyNarrativeAnchorMismatch(left, right)) {
+    return false;
+  }
+  const overlap =
+    left.eventFamily === 'platform_ai_shift' || left.eventFamily === 'policy_change'
+      ? narrativeEntityOverlap(left.entities, right.entities, left.eventFamily)
+      : entityOverlap(left.entities, right.entities);
+  const titleScore = similarity(left.title, right.title);
+  if (left.eventFamily === 'general_signal') {
+    return (overlap >= 1 && titleScore >= 0.18) || titleScore >= 0.72;
+  }
+  if (left.eventFamily === 'platform_ai_shift' || left.eventFamily === 'policy_change') {
+    return overlap >= 1 || titleScore >= 0.58;
+  }
+  return overlap >= 1 || titleScore >= 0.5;
+}
+
+function clusterCompatibleWithEvent(input: {
+  cluster: Pick<IntelligenceNarrativeClusterRecord, 'title' | 'eventFamily' | 'topDomainId' | 'anchorEntities'>;
+  event: Pick<IntelligenceEventClusterRecord, 'title' | 'entities' | 'semanticClaims' | 'eventFamily' | 'topDomainId'>;
+}): boolean {
+  if (input.cluster.eventFamily !== input.event.eventFamily) return false;
+  if (!domainsCompatible(input.cluster.topDomainId, input.event.topDomainId)) return false;
+  const clusterAnchor: NarrativeAnchorShape = {
+    title: input.cluster.title,
+    entities: input.cluster.anchorEntities,
+    semanticClaims: [],
+    eventFamily: input.cluster.eventFamily,
+  };
+  if (
+    platformProductAnchorMismatch(clusterAnchor, input.event) ||
+    policyNarrativeAnchorMismatch(clusterAnchor, input.event)
+  ) {
+    return false;
+  }
+  const overlap = anchorOverlap(
+    filterNarrativeAnchors(input.cluster.anchorEntities, input.cluster.eventFamily),
+    filterNarrativeAnchors(input.event.entities, input.event.eventFamily),
+  );
+  if (overlap.count >= 1 || overlap.ratio >= 0.5) return true;
+  return similarity(input.cluster.title, input.event.title) >= 0.75;
+}
+
+function hasNarrativeClusterHeterogeneityVeto(memberEvents: IntelligenceEventClusterRecord[]): boolean {
+  const bucketCounts = new Map<string, number>();
+  for (const event of memberEvents) {
+    const bucket = eventCompatibilityBucket(event);
+    bucketCounts.set(bucket, (bucketCounts.get(bucket) ?? 0) + 1);
+  }
+  if (bucketCounts.size <= 1) return false;
+  const dominantBucket = Math.max(...bucketCounts.values(), 0);
+  if (bucketCounts.size >= 3) return true;
+  return memberEvents.length >= 4 && dominantBucket / Math.max(1, memberEvents.length) < 0.7;
+}
+
+export function computeIntelligenceEventQuality(input: {
+  event: IntelligenceEventClusterRecord;
+  documents?: Array<Pick<RawDocumentRecord, 'title' | 'summary' | 'rawText'>>;
+  linkedClaims?: Array<Pick<LinkedClaimRecord, 'canonicalPredicate' | 'predicateFamily'>>;
+}): IntelligenceQualitySummary {
+  const reasons: string[] = [];
+  let score = 0;
+  const documents = input.documents ?? [];
+  const linkedClaims = input.linkedClaims ?? [];
+  if (documents.length >= 2) {
+    const titles = documents.map((row) => row.title).filter(Boolean);
+    let pairCount = 0;
+    let pairScoreTotal = 0;
+    for (let index = 0; index < titles.length; index += 1) {
+      for (let inner = index + 1; inner < titles.length; inner += 1) {
+        pairScoreTotal += similarity(titles[index] ?? '', titles[inner] ?? '');
+        pairCount += 1;
+      }
+    }
+    const averageTitleSimilarity = pairCount > 0 ? pairScoreTotal / pairCount : 1;
+    if (averageTitleSimilarity < 0.28) {
+      reasons.push('cross_document_title_divergence');
+      score += 0.32;
+    }
+  }
+  const genericSemanticClaimRatio =
+    input.event.semanticClaims.length > 0
+      ? input.event.semanticClaims.filter((claim) => isGenericSemanticClaim(claim)).length / input.event.semanticClaims.length
+      : 0;
+  const genericLinkedClaimRatio =
+    linkedClaims.length > 0 ? linkedClaims.filter((claim) => isGenericLinkedClaim(claim)).length / linkedClaims.length : 0;
+  if (Math.max(genericSemanticClaimRatio, genericLinkedClaimRatio) >= 0.6) {
+    reasons.push('generic_claim_dominance');
+    score += 0.24;
+  }
+  const combinedText = documents.map((row) => `${row.title}\n${row.summary}\n${row.rawText}`).join('\n');
+  if (combinedText) {
+    const hintOnlyEntityRatio =
+      input.event.entities.length > 0
+        ? input.event.entities.filter((entity) => !normalizedPhraseMatch(combinedText, entity)).length / input.event.entities.length
+        : 0;
+    if (hintOnlyEntityRatio >= 0.5) {
+      reasons.push('hint_only_entities');
+      score += 0.22;
+    }
+    const inferredFamily = inferEventFamily(combinedText);
+    if (inferredFamily !== input.event.eventFamily) {
+      reasons.push('family_domain_mismatch');
+      score += 0.18;
+    } else {
+      const inferredDomain = inferDomainScores(combinedText, inferredFamily)[0]?.domainId ?? null;
+      if (input.event.topDomainId && inferredDomain && inferredDomain !== input.event.topDomainId) {
+        reasons.push('family_domain_mismatch');
+        score += 0.18;
+      }
+    }
+  }
+  if (
+    input.event.documentIds.length >= 2 &&
+    input.event.linkedClaimCount === 0 &&
+    input.event.graphSupportScore === 0 &&
+    input.event.graphContradictionScore === 0
+  ) {
+    reasons.push('zero_graph_multi_document_merge');
+    score += 0.28;
+  }
+  return {
+    state: score >= QUALITY_SUSPECT_THRESHOLD ? 'suspect' : 'healthy',
+    score: Number(clampScore(score).toFixed(3)),
+    reasons,
+  };
+}
+
+export function computeIntelligenceNarrativeClusterQuality(input: {
+  cluster: IntelligenceNarrativeClusterRecord;
+  memberEvents: IntelligenceEventClusterRecord[];
+  duplicateTitleCount?: number;
+}): IntelligenceQualitySummary {
+  const reasons: string[] = [];
+  let score = 0;
+  if (hasNarrativeClusterHeterogeneityVeto(input.memberEvents)) {
+    reasons.push('member_family_domain_heterogeneity');
+    score += 0.34;
+  }
+  if ((input.duplicateTitleCount ?? 0) > 1) {
+    reasons.push('duplicate_title_collision');
+    score += 0.24;
+  }
+  const pollutedMemberSample = input.memberEvents.filter((event) => {
+    const titleScore = similarity(event.title, input.cluster.title);
+    return titleScore < 0.18 || !clusterCompatibleWithEvent({ cluster: input.cluster, event });
+  }).length;
+  if (input.memberEvents.length > 0 && pollutedMemberSample / input.memberEvents.length >= 0.25) {
+    reasons.push('polluted_member_sample');
+    score += 0.2;
+  }
+  const averageTitleSimilarity =
+    input.memberEvents.length > 0
+      ? average(input.memberEvents.map((event) => similarity(event.title, input.cluster.title)))
+      : 1;
+  if (input.memberEvents.length >= 10 && averageTitleSimilarity < 0.28 && input.cluster.timeCoherenceScore < 0.45) {
+    reasons.push('oversized_low_coherence_cluster');
+    score += 0.24;
+  }
+  return {
+    state: score >= QUALITY_SUSPECT_THRESHOLD ? 'suspect' : 'healthy',
+    score: Number(clampScore(score).toFixed(3)),
+    reasons,
+  };
+}
+
 function buildClaimFingerprint(claim: SemanticClaim, fallbackAt: string | null = null): string {
   const timeBucket = buildClaimTimeBucket(claim.timeScope, fallbackAt).start?.slice(0, 10) ?? normalizeClaimPart(claim.timeScope ?? fallbackAt);
   return [
@@ -478,11 +945,137 @@ function isNonSocialSignal(signal: Pick<SignalEnvelopeRecord, 'sourceType' | 'so
   return !SOCIAL_SOURCE_TYPES.has(signal.sourceType as 'social' | 'forum') && !SOCIAL_SOURCE_TIERS.has(signal.sourceTier as 'tier_3');
 }
 
+function isRestrictedPromotionSource(
+  source: Pick<IntelligenceSourceRecord, 'sourceType'>,
+): boolean {
+  return RESTRICTED_PROMOTION_SOURCE_TYPES.has(
+    source.sourceType as 'search_result' | 'forum' | 'social',
+  );
+}
+
+function isCanonicalCreationSource(
+  source: Pick<IntelligenceSourceRecord, 'sourceType' | 'sourceTier'>,
+): boolean {
+  return CANONICAL_SOURCE_TIERS.has(source.sourceTier as 'tier_0' | 'tier_1') &&
+    CANONICAL_SOURCE_TYPES.has(
+      source.sourceType as 'policy' | 'web_page' | 'blog' | 'news' | 'filing',
+    );
+}
+
+function findExactCanonicalUrlEvent(input: {
+  events: IntelligenceEventClusterRecord[];
+  document: Pick<RawDocumentRecord, 'canonicalUrl'>;
+  eventCanonicalUrlsById?: Map<string, Set<string>>;
+}): IntelligenceEventClusterRecord | null {
+  if (!input.document.canonicalUrl) return null;
+  return input.events.find((event) => input.eventCanonicalUrlsById?.get(event.id)?.has(input.document.canonicalUrl)) ?? null;
+}
+
+function validationBlocksCanonicalWrite(input: {
+  validation: IntelligenceSemanticValidation;
+  hasExactCanonicalUrlMatch: boolean;
+}): boolean {
+  if (input.validation.usedFallback) return true;
+  if (input.validation.genericClaimRatio >= 1) return true;
+  if (input.validation.topDomainScore < 0.6) return true;
+  if (input.validation.topDomainMargin < 0.15) return true;
+  if (input.validation.hintOnlyEntityRatio > 0.5) return true;
+  if (input.validation.titleDriftScore < 0.45 && !input.hasExactCanonicalUrlMatch) return true;
+  return false;
+}
+
+function canPromoteProvisionalEvent(input: {
+  event: IntelligenceEventClusterRecord;
+  source: Pick<IntelligenceSourceRecord, 'sourceType' | 'sourceTier'>;
+  validation: IntelligenceSemanticValidation;
+}): boolean {
+  const hasNonGenericClaim = input.event.semanticClaims.some((claim) => !isGenericSemanticClaim(claim));
+  const distinctDocumentCount = new Set(input.event.documentIds).size;
+  const hasTrustedSource = CANONICAL_SOURCE_TIERS.has(input.source.sourceTier as 'tier_0' | 'tier_1');
+  return (
+    hasNonGenericClaim &&
+    input.validation.topDomainScore >= 0.6 &&
+    input.validation.topDomainMargin >= 0.15 &&
+    distinctDocumentCount >= 2 &&
+    (input.event.nonSocialCorroborationCount >= 1 || hasTrustedSource)
+  );
+}
+
+function determinePromotionPlan(input: {
+  existing: IntelligenceEventClusterRecord | null;
+  merged: IntelligenceEventClusterRecord;
+  source: IntelligenceSourceRecord;
+  validation: IntelligenceSemanticValidation;
+  exactCanonicalUrlMatch: IntelligenceEventClusterRecord | null;
+}): {
+  promotionState: IntelligenceSignalPromotionState;
+  promotionReasons: string[];
+  lifecycleState: IntelligenceEventLifecycleState;
+} {
+  const restrictedSource = isRestrictedPromotionSource(input.source);
+  const exactCanonicalMatch = input.exactCanonicalUrlMatch !== null;
+  if (validationBlocksCanonicalWrite({
+    validation: input.validation,
+    hasExactCanonicalUrlMatch: exactCanonicalMatch,
+  })) {
+    return {
+      promotionState: 'quarantined',
+      promotionReasons: [...input.validation.reasons],
+      lifecycleState: 'provisional',
+    };
+  }
+  if (input.exactCanonicalUrlMatch?.lifecycleState === 'canonical') {
+    return {
+      promotionState: 'attached',
+      promotionReasons: ['exact_canonical_url_match'],
+      lifecycleState: 'canonical',
+    };
+  }
+  if (restrictedSource && input.existing?.lifecycleState === 'canonical') {
+    return {
+      promotionState: 'attached',
+      promotionReasons: ['restricted_source_attached_to_existing_canonical'],
+      lifecycleState: 'canonical',
+    };
+  }
+  if (restrictedSource) {
+    return {
+      promotionState: 'attached',
+      promotionReasons: ['restricted_source_requires_corroboration'],
+      lifecycleState: 'provisional',
+    };
+  }
+  if (input.existing?.lifecycleState === 'canonical' || isCanonicalCreationSource(input.source)) {
+    return {
+      promotionState: 'promoted',
+      promotionReasons: [],
+      lifecycleState: 'canonical',
+    };
+  }
+  if (canPromoteProvisionalEvent({
+    event: input.merged,
+    source: input.source,
+    validation: input.validation,
+  })) {
+    return {
+      promotionState: 'promoted',
+      promotionReasons: [],
+      lifecycleState: 'canonical',
+    };
+  }
+  return {
+    promotionState: 'attached',
+    promotionReasons: ['awaiting_corroboration_for_promotion'],
+    lifecycleState: 'provisional',
+  };
+}
+
 function buildLinkedClaimShortlist(input: {
   claim: SemanticClaim;
   existingLinkedClaims: LinkedClaimRecord[];
   signalObservedAt: string | null;
 }): Array<{ claim: LinkedClaimRecord; score: number }> {
+  if (isGenericSemanticClaim(input.claim)) return [];
   const fingerprint = buildClaimFingerprint(input.claim, input.signalObservedAt);
   const claimAnchorMs = resolveClaimTemporalAnchorMs(input.claim, input.signalObservedAt);
   const exact = input.existingLinkedClaims.find((row) => row.claimFingerprint === fingerprint);
@@ -501,6 +1094,7 @@ function buildLinkedClaimShortlist(input: {
   const predicateFamily = derivePredicateFamily(input.claim.predicate);
   const shortlist: Array<{ claim: LinkedClaimRecord; score: number }> = [];
   for (const row of input.existingLinkedClaims) {
+    if (isGenericLinkedClaim(row)) continue;
     const timeScore = temporalDistanceScore(
       claimAnchorMs,
       resolveLinkedClaimTemporalAnchorMs(row),
@@ -515,7 +1109,7 @@ function buildLinkedClaimShortlist(input: {
       normalizeClaimPart(row.canonicalSubject) === normalizeClaimPart(input.claim.subjectEntity) ? 0.3 : 0;
     const predicateScore = row.predicateFamily === predicateFamily ? 0.2 : 0;
     const score = lexicalScore + entityScore + predicateScore + 0.18 * timeScore;
-    if (score < 0.62) continue;
+    if (score < 0.7) continue;
     shortlist.push({ claim: row, score });
   }
   return shortlist.sort((left, right) => right.score - left.score).slice(0, 4);
@@ -525,11 +1119,13 @@ function buildLinkedClaimEdgeShortlist(input: {
   claim: LinkedClaimRecord;
   existingLinkedClaims: LinkedClaimRecord[];
 }): Array<{ claim: LinkedClaimRecord; score: number }> {
+  if (isGenericLinkedClaim(input.claim)) return [];
   const claimAnchorMs = resolveLinkedClaimTemporalAnchorMs(input.claim);
   const claimText = `${input.claim.canonicalSubject} ${input.claim.canonicalPredicate} ${input.claim.canonicalObject}`;
   const shortlist: Array<{ claim: LinkedClaimRecord; score: number }> = [];
   for (const candidate of input.existingLinkedClaims) {
     if (candidate.id === input.claim.id) continue;
+    if (isGenericLinkedClaim(candidate)) continue;
     const timeScore = temporalDistanceScore(
       claimAnchorMs,
       resolveLinkedClaimTemporalAnchorMs(candidate),
@@ -548,6 +1144,59 @@ function buildLinkedClaimEdgeShortlist(input: {
     shortlist.push({ claim: candidate, score });
   }
   return shortlist.sort((left, right) => right.score - left.score).slice(0, 6);
+}
+
+function dominantLinkedClaimOrientation(
+  claim: Pick<LinkedClaimRecord, 'sourceCount' | 'contradictionCount'>,
+): 'supporting' | 'contradicting' | 'mixed' {
+  const supportingCount = Math.max(0, claim.sourceCount - claim.contradictionCount);
+  if (claim.contradictionCount === 0) return 'supporting';
+  if (supportingCount === 0) return 'contradicting';
+  if (supportingCount === claim.contradictionCount) return 'mixed';
+  return supportingCount > claim.contradictionCount ? 'supporting' : 'contradicting';
+}
+
+function inferLinkedClaimGraphRelation(input: {
+  claim: LinkedClaimRecord;
+  candidate: LinkedClaimRecord;
+}): { relation: LinkedClaimEdgeRecord['relation']; confidence: number } | null {
+  const sameSubject =
+    normalizeClaimPart(input.claim.canonicalSubject) ===
+    normalizeClaimPart(input.candidate.canonicalSubject);
+  if (!sameSubject) return null;
+  const leftFamily = input.claim.predicateFamily;
+  const rightFamily = input.candidate.predicateFamily;
+  const objectSimilarity = similarity(input.claim.canonicalObject, input.candidate.canonicalObject);
+  const leftOrientation = dominantLinkedClaimOrientation(input.claim);
+  const rightOrientation = dominantLinkedClaimOrientation(input.candidate);
+  const oppositePressure =
+    (leftFamily === 'pressure_up' && rightFamily === 'pressure_down') ||
+    (leftFamily === 'pressure_down' && rightFamily === 'pressure_up');
+  if (oppositePressure) {
+    return { relation: 'contradicts', confidence: 0.78 };
+  }
+  if (
+    ((leftFamily === 'challenge') !== (rightFamily === 'challenge') && objectSimilarity >= 0.18) ||
+    (leftOrientation !== 'mixed' &&
+      rightOrientation !== 'mixed' &&
+      leftOrientation !== rightOrientation &&
+      objectSimilarity >= 0.18)
+  ) {
+    return { relation: 'contradicts', confidence: 0.72 };
+  }
+  if (leftFamily === rightFamily && leftFamily !== 'general') {
+    return { relation: 'supports', confidence: 0.74 };
+  }
+  if (objectSimilarity >= 0.45) {
+    return {
+      relation:
+        leftOrientation === 'contradicting' || rightOrientation === 'contradicting'
+          ? 'contradicts'
+          : 'supports',
+      confidence: 0.68,
+    };
+  }
+  return null;
 }
 
 function canonicalizeLinkedClaimEdgePair(leftLinkedClaimId: string, rightLinkedClaimId: string): {
@@ -615,9 +1264,7 @@ function buildEventSemanticSignature(event: Pick<
   IntelligenceEventClusterRecord,
   'title' | 'summary' | 'semanticClaims' | 'primaryHypotheses'
 >): string {
-  const claimText = event.semanticClaims
-    .map((row) => `${row.subjectEntity} ${row.predicate} ${row.object}`)
-    .join(' ');
+  const claimText = buildComparisonClaimText(event.semanticClaims);
   const hypothesisText = event.primaryHypotheses
     .map((row) => `${row.title} ${row.summary}`)
     .join(' ');
@@ -644,8 +1291,12 @@ export function computeIntelligenceTemporalNarrativeProfile(input: {
     }
     const deltaMs = currentAnchorMs - candidateAnchorMs;
     if (deltaMs > 90 * DAY_MS) continue;
-    const entityScore = clampScore(entityOverlap(input.event.entities, candidate.entities) / 2);
     const titleScore = similarity(input.event.title, candidate.title);
+    const entityOverlapCount = entityOverlap(input.event.entities, candidate.entities);
+    const entityScore = clampScore(entityOverlapCount / 2);
+    if (!eventsNarrativelyCompatible(input.event, candidate) && !(titleScore >= 0.75 && entityOverlapCount >= 1)) {
+      continue;
+    }
     const signatureScore = similarity(currentSignature, buildEventSemanticSignature(candidate));
     const sameDomainBoost = input.event.topDomainId && input.event.topDomainId === candidate.topDomainId ? 0.16 : 0;
     const sameFamilyBoost = input.event.eventFamily === candidate.eventFamily ? 0.18 : 0;
@@ -716,10 +1367,27 @@ async function syncTemporalNarrativeLedgerForEvent(input: {
     event: input.event,
     candidateEvents: input.candidateEvents,
   });
+  const relatedEventRows = await Promise.all(
+    temporal.relatedHistoricalEvents.map(async (row) => {
+      const relatedEvent = await input.store.getIntelligenceEventById({
+        workspaceId: input.workspaceId,
+        eventId: row.eventId,
+      });
+      return relatedEvent ? row : null;
+    }),
+  );
+  const relatedHistoricalEvents = relatedEventRows.filter((row): row is NonNullable<typeof row> => Boolean(row));
+  const top = relatedHistoricalEvents[0] ?? null;
+  const nextTemporalNarrativeState: IntelligenceTemporalNarrativeState =
+    !top
+      ? 'new'
+      : top.relation === 'diverging'
+        ? 'diverging'
+        : 'recurring';
   await input.store.replaceIntelligenceTemporalNarrativeLedgerEntries({
     workspaceId: input.workspaceId,
     eventId: input.event.id,
-    entries: temporal.relatedHistoricalEvents.map((row) => ({
+    entries: relatedHistoricalEvents.map((row) => ({
       workspaceId: input.workspaceId,
       eventId: input.event.id,
       relatedEventId: row.eventId,
@@ -734,7 +1402,13 @@ async function syncTemporalNarrativeLedgerForEvent(input: {
       timeCoherenceScore: row.timeCoherenceScore,
     })),
   });
-  return temporal;
+  return {
+    ...temporal,
+    recurringNarrativeScore: top?.score ?? 0,
+    relatedHistoricalEventCount: relatedHistoricalEvents.length,
+    temporalNarrativeState: nextTemporalNarrativeState,
+    relatedHistoricalEvents,
+  };
 }
 
 type NarrativeClusterAggregate = {
@@ -772,11 +1446,21 @@ function normalizeNarrativeAnchorEntities(values: string[]): string[] {
     .slice(0, 6);
 }
 
+function deriveNarrativeAnchorEntitiesForEvent(event: Pick<
+  IntelligenceEventClusterRecord,
+  'title' | 'entities' | 'semanticClaims' | 'eventFamily'
+>): string[] {
+  return normalizeNarrativeAnchorEntities([
+    ...filterNarrativeAnchors(event.entities, event.eventFamily),
+    primarySemanticAnchor(event),
+  ]);
+}
+
 function buildNarrativeClusterKey(event: Pick<
   IntelligenceEventClusterRecord,
-  'eventFamily' | 'topDomainId' | 'entities'
+  'title' | 'eventFamily' | 'topDomainId' | 'entities' | 'semanticClaims'
 >): string {
-  const anchorEntities = normalizeNarrativeAnchorEntities(event.entities).slice(0, 3);
+  const anchorEntities = deriveNarrativeAnchorEntitiesForEvent(event).slice(0, 3);
   return [
     event.eventFamily,
     event.topDomainId ?? 'unknown',
@@ -1018,8 +1702,8 @@ function computeNarrativeClusterAggregate(input: {
     null;
   const anchorEntities = normalizeNarrativeAnchorEntities([
     ...(input.baseCluster?.anchorEntities ?? []),
-    ...input.memberEvents.flatMap((row) => row.entities),
-    ...input.defaultEvent.entities,
+    ...input.memberEvents.flatMap((row) => deriveNarrativeAnchorEntitiesForEvent(row)),
+    ...deriveNarrativeAnchorEntitiesForEvent(input.defaultEvent),
   ]);
   const partialCluster: Pick<
     IntelligenceNarrativeClusterRecord,
@@ -1302,6 +1986,26 @@ function chooseCanonicalCluster(
     : { canonical: right, absorbed: left };
 }
 
+function findCanonicalNarrativeClusterByTitle(input: {
+  clusters: IntelligenceNarrativeClusterRecord[];
+  event: IntelligenceEventClusterRecord;
+}): IntelligenceNarrativeClusterRecord | null {
+  const targetKey = buildNormalizedTitleKey(input.event.title);
+  const targetAnchorMs = publishedMs(eventAnchorIso(input.event));
+  const matches = input.clusters.filter((cluster) => {
+    if (cluster.eventFamily !== input.event.eventFamily) return false;
+    if (!domainsCompatible(cluster.topDomainId, input.event.topDomainId)) return false;
+    if (buildNormalizedTitleKey(cluster.title) !== targetKey) return false;
+    const clusterAnchorMs = publishedMs(cluster.lastEventAt ?? cluster.updatedAt);
+    if (targetAnchorMs !== null && clusterAnchorMs !== null && Math.abs(targetAnchorMs - clusterAnchorMs) > CANONICAL_CLUSTER_WINDOW_MS) {
+      return false;
+    }
+    return true;
+  });
+  if (matches.length === 0) return null;
+  return matches.sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))[0] ?? null;
+}
+
 async function tryMergeNarrativeCluster(input: {
   store: WorkspaceScopedStore;
   workspaceId: string;
@@ -1388,6 +2092,9 @@ async function tryMergeNarrativeCluster(input: {
     memberships: mergedMemberships,
     candidateEventsById: input.candidateEventsById,
   });
+  if (hasNarrativeClusterHeterogeneityVeto(mergedMemberEvents)) {
+    return null;
+  }
   const mergedCluster = await upsertNarrativeClusterSnapshot({
     store: input.store,
     workspaceId: input.workspaceId,
@@ -1671,13 +2378,19 @@ async function syncNarrativeClusterForEvent(input: {
   cluster: IntelligenceNarrativeClusterRecord;
   memberships: IntelligenceNarrativeClusterMembershipRecord[];
 }> {
-  const existingMembership = (
-    await input.store.listIntelligenceNarrativeClusterMemberships({
+  const [existingMembership, allClusters] = await Promise.all([
+    (
+      await input.store.listIntelligenceNarrativeClusterMemberships({
+        workspaceId: input.workspaceId,
+        eventId: input.event.id,
+        limit: 1,
+      })
+    )[0] ?? null,
+    input.store.listIntelligenceNarrativeClusters({
       workspaceId: input.workspaceId,
-      eventId: input.event.id,
-      limit: 1,
-    })
-  )[0] ?? null;
+      limit: 200,
+    }),
+  ]);
 
   let cluster: IntelligenceNarrativeClusterRecord | null = existingMembership
     ? await input.store.getIntelligenceNarrativeClusterById({
@@ -1685,6 +2398,9 @@ async function syncNarrativeClusterForEvent(input: {
         clusterId: existingMembership.clusterId,
       })
     : null;
+  if (cluster && !clusterCompatibleWithEvent({ cluster, event: input.event })) {
+    cluster = null;
+  }
 
   if (!cluster) {
     for (const related of input.temporal.relatedHistoricalEvents) {
@@ -1696,12 +2412,21 @@ async function syncNarrativeClusterForEvent(input: {
         })
       )[0];
       if (!membership) continue;
-      cluster = await input.store.getIntelligenceNarrativeClusterById({
+      const candidateCluster = await input.store.getIntelligenceNarrativeClusterById({
         workspaceId: input.workspaceId,
         clusterId: membership.clusterId,
       });
-      if (cluster) break;
+      if (!candidateCluster || !clusterCompatibleWithEvent({ cluster: candidateCluster, event: input.event })) continue;
+      cluster = candidateCluster;
+      break;
     }
+  }
+
+  if (!cluster) {
+    cluster = findCanonicalNarrativeClusterByTitle({
+      clusters: allClusters,
+      event: input.event,
+    });
   }
 
   const membersByEventId = new Map<string, IntelligenceNarrativeClusterMembershipRecord>();
@@ -1742,6 +2467,23 @@ async function syncNarrativeClusterForEvent(input: {
       isLatest: false,
     })),
   ];
+  const priorMembershipsByEventId = new Map<string, IntelligenceNarrativeClusterMembershipRecord>();
+  const priorMemberships = await Promise.all(
+    [...new Set(clusterMembersToUpsert.map((row) => row.eventId))].map(async (eventId) => {
+      if (eventId === input.event.id && existingMembership) return existingMembership;
+      return (
+        await input.store.listIntelligenceNarrativeClusterMemberships({
+          workspaceId: input.workspaceId,
+          eventId,
+          limit: 1,
+        })
+      )[0] ?? null;
+    }),
+  );
+  for (const membership of priorMemberships) {
+    if (!membership) continue;
+    priorMembershipsByEventId.set(membership.eventId, membership);
+  }
 
   for (const membership of clusterMembersToUpsert) {
     const existing = membersByEventId.get(membership.eventId);
@@ -1850,6 +2592,25 @@ async function syncNarrativeClusterForEvent(input: {
     clusterId: persistedCluster.id,
     memberEvents,
   });
+  const displacedClusterIds = new Set<string>();
+  for (const membership of memberships) {
+    const previousMembership = priorMembershipsByEventId.get(membership.eventId);
+    if (!previousMembership) continue;
+    if (previousMembership.clusterId !== membership.clusterId) {
+      displacedClusterIds.add(previousMembership.clusterId);
+    }
+  }
+  await Promise.all(
+    [...displacedClusterIds]
+      .filter((clusterId) => clusterId !== persistedCluster.id)
+      .map((clusterId) =>
+        reconcileNarrativeClusterAfterEventRemoval({
+          store: input.store,
+          workspaceId: input.workspaceId,
+          clusterId,
+        }),
+      ),
+  );
 
   return { cluster: persistedCluster, memberships };
 }
@@ -2335,8 +3096,6 @@ function buildExecutionCandidate(input: {
           : (input.cluster?.recentExecutionBlockedCount ?? 0) >= 2
             ? 'cluster_recent_blocked_executions'
             : null;
-  if (input.event.actionabilityScore < 0.68) return [];
-
   if (evidenceWeak || clusterBlockedReason) {
     return [
       {
@@ -2394,6 +3153,7 @@ function buildExecutionCandidate(input: {
       },
     ];
   }
+  if (input.event.actionabilityScore < 0.68) return [];
 
   const notificationMode = input.event.actionabilityScore >= 0.74 && input.event.riskBand === 'low'
     ? 'execute_auto'
@@ -2515,6 +3275,170 @@ function mergeMetricShocks(
   return [...map.values()].slice(0, 12);
 }
 
+function preferredStorageEntity(input: {
+  title: string;
+  rawText: string;
+  entities: string[];
+}): string {
+  const titleEntity = input.entities.find((entity) => normalizedPhraseMatch(input.title, entity));
+  if (titleEntity) return titleEntity;
+  const textEntity = input.entities.find((entity) => normalizedPhraseMatch(`${input.title}\n${input.rawText}`, entity));
+  if (textEntity) return textEntity;
+  return input.entities[0] ?? 'market';
+}
+
+function looksLikeTitleDerivedSubject(input: {
+  subjectEntity: string | null | undefined;
+  title: string;
+  preferredEntity: string;
+  eventFamily: IntelligenceEventClusterRecord['eventFamily'];
+}): boolean {
+  const subject = normalizeText(input.subjectEntity ?? '');
+  const title = normalizeText(input.title);
+  const preferred = normalizeText(input.preferredEntity);
+  if (!subject || !title || !preferred) return false;
+  if (input.eventFamily === 'platform_ai_shift') return false;
+  if (subject === preferred) return false;
+  if (subject === title) return true;
+  if (subject.includes(title) || title.includes(subject)) return true;
+  return similarity(subject, title) >= 0.78;
+}
+
+function subjectAlignsWithKnownEntities(subjectEntity: string | null | undefined, entities: string[]): boolean {
+  const subject = (subjectEntity ?? '').trim();
+  if (!subject) return false;
+  return entities.some(
+    (entity) =>
+      normalizedPhraseMatch(subject, entity) ||
+      normalizedPhraseMatch(entity, subject) ||
+      normalizeText(subject) === normalizeText(entity),
+  );
+}
+
+function storagePredicateFallback(input: {
+  eventFamily: IntelligenceEventClusterRecord['eventFamily'];
+  title: string;
+  rawText: string;
+}): string {
+  const normalized = normalizeText(`${input.title}\n${input.rawText}`);
+  if (/\b(launch|launches|launched|release|released|introduce|introduces|introduced|debut)\b/u.test(normalized)) return 'launches';
+  if (/\b(build|builds|built|develop|develops|developed|create|creates|created)\b/u.test(normalized)) return 'builds';
+  if (/\b(hire|hiring|recruit)\b/u.test(normalized)) return 'hiring_focuses_on';
+  if (/\b(fail|fails|failed|weakness|weaknesses|struggle|struggles)\b/u.test(normalized)) return 'struggles_with';
+  if (/\b(mislead|misleads|misled)\b/u.test(normalized)) return 'misleads';
+  if (/\b(inspect|clean|cleaning)\b/u.test(normalized)) return 'cleans';
+  if (input.eventFamily === 'platform_ai_shift') return 'introduces';
+  if (input.eventFamily === 'policy_change') return 'changes_policy';
+  if (input.eventFamily === 'earnings_guidance') return 'posts_results';
+  if (input.eventFamily === 'supply_chain_shift') return 'reshapes_supply_chain';
+  if (input.eventFamily === 'rate_repricing') return 'reprices_rates';
+  if (input.eventFamily === 'commodity_move') return 'moves_commodity';
+  if (input.eventFamily === 'geopolitical_flashpoint') return 'escalates';
+  return 'affects';
+}
+
+function storagePredicateMatchesText(input: {
+  predicate: string;
+  text: string;
+}): boolean {
+  const normalized = normalizeText(input.text);
+  switch (normalizeText(input.predicate)) {
+    case 'launches':
+      return /\b(launch|launches|launched|release|released|introduce|introduces|introduced|debut|debuts)\b/u.test(normalized);
+    case 'builds':
+      return /\b(build|builds|built|develop|develops|developed|create|creates|created)\b/u.test(normalized);
+    case 'hiring focuses on':
+    case 'hiring_focuses_on':
+      return /\b(hire|hiring|recruit|recruiting)\b/u.test(normalized);
+    case 'struggles with':
+    case 'struggles_with':
+      return /\b(fail|fails|failed|weakness|weaknesses|struggle|struggles|struggled)\b/u.test(normalized);
+    case 'misleads':
+      return /\b(mislead|misleads|misled)\b/u.test(normalized);
+    case 'authorizes':
+      return /\b(authorize|authorizes|authorization|auth)\b/u.test(normalized);
+    case 'cleans':
+      return /\b(inspect|clean|cleaning)\b/u.test(normalized);
+    default:
+      return true;
+  }
+}
+
+function isRetryableIntelligenceProcessingError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes('intelligence_claim_links_event_id_fkey') ||
+    message.includes('intelligence_temporal_narrative_ledger_related_event_id_fkey') ||
+    message.includes('intelligence_linked_claim_edges_left_linked_claim_id_fkey') ||
+    message.includes('intelligence_linked_claim_edges_right_linked_claim_id_fkey')
+  );
+}
+
+async function hasActiveSignalProcessingLease(input: {
+  store: WorkspaceScopedStore;
+  workspaceId: string;
+  signalId: string;
+  processingLeaseId: string | null;
+}): Promise<boolean> {
+  if (!input.processingLeaseId) return false;
+  const current =
+    (
+      await input.store.listIntelligenceSignalsByIds({
+        workspaceId: input.workspaceId,
+        signalIds: [input.signalId],
+      })
+    )[0] ?? null;
+  return current?.processingStatus === 'processing' && current.processingLeaseId === input.processingLeaseId;
+}
+
+function stabilizeSemanticClaimsForStorage(input: {
+  claims: IntelligenceEventClusterRecord['semanticClaims'];
+  title: string;
+  rawText: string;
+  entities: string[];
+  eventFamily: IntelligenceEventClusterRecord['eventFamily'];
+}): IntelligenceEventClusterRecord['semanticClaims'] {
+  const fallbackPredicate = storagePredicateFallback({
+    eventFamily: input.eventFamily,
+    title: input.title,
+    rawText: input.rawText,
+  });
+  const subjectEntity = preferredStorageEntity({
+    title: input.title,
+    rawText: input.rawText,
+    entities: input.entities,
+  });
+  return input.claims.map((claim) => ({
+    ...claim,
+    subjectEntity:
+      looksLikeTitleDerivedSubject({
+        subjectEntity: claim.subjectEntity,
+        title: input.title,
+        preferredEntity: subjectEntity,
+        eventFamily: input.eventFamily,
+      })
+        ? subjectEntity
+        : input.eventFamily !== 'platform_ai_shift' &&
+            !subjectAlignsWithKnownEntities(claim.subjectEntity, input.entities)
+        ? subjectEntity
+        : claim.subjectEntity &&
+            normalizedPhraseMatch(`${input.title}\n${input.rawText}`, claim.subjectEntity) &&
+            !(normalizeText(claim.subjectEntity).split(' ').filter(Boolean).length === 1 &&
+              normalizeText(subjectEntity).split(' ').filter(Boolean).length >= 2 &&
+              normalizeText(claim.subjectEntity) !== normalizeText(subjectEntity))
+          ? claim.subjectEntity
+          : subjectEntity,
+    predicate:
+      isGenericPredicate(claim.predicate) || !storagePredicateMatchesText({
+        predicate: claim.predicate,
+        text: claim.evidenceSpan ?? `${input.title}\n${input.rawText}`,
+      })
+        ? fallbackPredicate
+        : claim.predicate,
+    object: claim.object || input.title,
+  }));
+}
+
 function mergeEvent(existing: IntelligenceEventClusterRecord | null, input: {
   source: IntelligenceSourceRecord;
   signal: SignalEnvelopeRecord;
@@ -2524,10 +3448,17 @@ function mergeEvent(existing: IntelligenceEventClusterRecord | null, input: {
   const baseSourceMix = buildSourceMix(existing?.sourceMix, input.source);
   const signalIds = mergeUniqueStrings([...(existing?.signalIds ?? []), input.signal.id]);
   const documentIds = mergeUniqueStrings([...(existing?.documentIds ?? []), input.document.id]);
-  const semanticClaims = mergeSemanticClaims(existing?.semanticClaims ?? [], input.semantics.semanticClaims);
-  const metricShocks = mergeMetricShocks(existing?.metricShocks ?? [], input.semantics.metricShocks);
-
   const entities = mergeUniqueStrings([...(existing?.entities ?? []), ...input.semantics.entities]);
+  const stableTitle = input.document.title.trim().slice(0, 200) || input.semantics.title;
+  const incomingSemanticClaims = stabilizeSemanticClaimsForStorage({
+    claims: input.semantics.semanticClaims,
+    title: stableTitle,
+    rawText: input.document.rawText,
+    entities,
+    eventFamily: input.semantics.eventFamily,
+  });
+  const semanticClaims = mergeSemanticClaims(existing?.semanticClaims ?? [], incomingSemanticClaims);
+  const metricShocks = mergeMetricShocks(existing?.metricShocks ?? [], input.semantics.metricShocks);
   const domainPosteriorMap = new Map<IntelligenceDomainId, { score: number; evidenceFeatures: string[]; counterFeatures: string[] }>();
   for (const row of [...(existing?.domainPosteriors ?? []), ...input.semantics.domainPosteriors]) {
     const current = domainPosteriorMap.get(row.domainId);
@@ -2580,9 +3511,11 @@ function mergeEvent(existing: IntelligenceEventClusterRecord | null, input: {
       ...(existing ?? {
         id: eventId,
         workspaceId: input.signal.workspaceId,
-        title: input.semantics.title,
+        title: stableTitle,
         summary: input.semantics.summary,
         eventFamily: input.semantics.eventFamily,
+        lifecycleState: 'canonical' as IntelligenceEventLifecycleState,
+        validationReasons: [],
         signalIds: [],
         documentIds: [],
         entities: [],
@@ -2625,7 +3558,7 @@ function mergeEvent(existing: IntelligenceEventClusterRecord | null, input: {
         createdAt,
         updatedAt: createdAt,
       }),
-      title: input.semantics.title,
+      title: stableTitle,
       summary: input.semantics.summary,
       eventFamily: input.semantics.eventFamily,
       signalIds,
@@ -2674,9 +3607,11 @@ function mergeEvent(existing: IntelligenceEventClusterRecord | null, input: {
   return {
     id: eventId,
     workspaceId: input.signal.workspaceId,
-    title: input.semantics.title,
+    title: stableTitle,
     summary: input.semantics.summary,
     eventFamily: input.semantics.eventFamily,
+    lifecycleState: existing?.lifecycleState ?? 'canonical',
+    validationReasons: [...(existing?.validationReasons ?? [])],
     signalIds,
     documentIds,
     entities,
@@ -2725,22 +3660,58 @@ function findMatchingEvent(input: {
   events: IntelligenceEventClusterRecord[];
   semantics: Awaited<ReturnType<typeof extractEventSemantics>>;
   document: RawDocumentRecord;
+  source: IntelligenceSourceRecord;
+  eventCanonicalUrlsById?: Map<string, Set<string>>;
 }): IntelligenceEventClusterRecord | null {
   const documentMs = publishedMs(input.document.publishedAt ?? input.document.observedAt);
-  const windowMs = 24 * 60 * 60 * 1000;
+  const semanticsTopDomainId = input.semantics.domainPosteriors[0]?.domainId ?? null;
+  const incomingClaimText = buildComparisonClaimText(input.semantics.semanticClaims);
+  const incomingHasNonGenericClaim = input.semantics.semanticClaims.some((claim) => !isGenericSemanticClaim(claim));
   let best: { event: IntelligenceEventClusterRecord; score: number } | null = null;
   for (const event of input.events) {
-    if (event.eventFamily !== input.semantics.eventFamily) continue;
+    const exactCanonicalUrlMatch =
+      input.eventCanonicalUrlsById?.get(event.id)?.has(input.document.canonicalUrl) ?? false;
+    if (!exactCanonicalUrlMatch) {
+      if (event.eventFamily !== input.semantics.eventFamily) continue;
+      if (!eventDomainMatches(event.topDomainId, semanticsTopDomainId)) continue;
+      if (platformProductAnchorMismatch(event, input.semantics) || policyNarrativeAnchorMismatch(event, input.semantics)) continue;
+    }
     const eventMs = publishedMs(event.timeWindowEnd ?? event.updatedAt);
-    if (documentMs !== null && eventMs !== null && Math.abs(documentMs - eventMs) > windowMs) continue;
-    const overlap = entityOverlap(event.entities, input.semantics.entities);
-    if (overlap < 2) continue;
+    const trustedPolicyWindowMs =
+      isTrustedPolicyPromotionSource(input.source) && isTrustedPolicyEvent(event) ? 7 * DAY_MS : DAY_MS;
+    if (
+      !exactCanonicalUrlMatch &&
+      documentMs !== null &&
+      eventMs !== null &&
+      Math.abs(documentMs - eventMs) > trustedPolicyWindowMs
+    ) {
+      continue;
+    }
+    const overlap =
+      event.eventFamily === 'platform_ai_shift' || event.eventFamily === 'policy_change'
+        ? narrativeEntityOverlap(event.entities, input.semantics.entities, event.eventFamily)
+        : entityOverlap(event.entities, input.semantics.entities);
     const titleScore = similarity(event.title, input.semantics.title);
-    const claimLeft = event.semanticClaims.map((row) => `${row.subjectEntity} ${row.predicate} ${row.object}`).join(' ');
-    const claimRight = input.semantics.semanticClaims.map((row) => `${row.subjectEntity} ${row.predicate} ${row.object}`).join(' ');
-    const claimScore = similarity(claimLeft, claimRight);
-    if (titleScore < 0.18 && claimScore < 0.18) continue;
-    const score = overlap + titleScore + claimScore;
+    const eventClaimText = buildComparisonClaimText(event.semanticClaims);
+    const claimScore =
+      incomingClaimText && eventClaimText ? similarity(eventClaimText, incomingClaimText) : 0;
+    const eventHasNonGenericClaim = event.semanticClaims.some((claim) => !isGenericSemanticClaim(claim));
+    const titleEntityReady = titleScore >= 0.45 && overlap >= 1;
+    const claimReady =
+      claimScore >= 0.55 && incomingHasNonGenericClaim && eventHasNonGenericClaim;
+    const trustedPolicyReady =
+      isTrustedPolicyPromotionSource(input.source) &&
+      isTrustedPolicyEvent(event) &&
+      incomingHasNonGenericClaim &&
+      eventHasNonGenericClaim &&
+      overlap >= 1 &&
+      (titleScore >= 0.18 || claimScore >= 0.22);
+    if (!exactCanonicalUrlMatch && !titleEntityReady && !claimReady && !trustedPolicyReady) continue;
+    const score =
+      (exactCanonicalUrlMatch ? 10 + event.signalIds.length * 0.1 + titleScore : 0) +
+      (titleEntityReady ? 0.65 + titleScore + overlap * 0.12 : 0) +
+      (claimReady ? 0.6 + claimScore : 0) +
+      (trustedPolicyReady ? 0.44 + titleScore * 0.5 + claimScore * 0.35 + overlap * 0.08 : 0);
     if (!best || score > best.score) best = { event, score };
   }
   return best?.event ?? null;
@@ -2752,6 +3723,7 @@ async function findMatchingEventByLinkedClaims(input: {
   events: IntelligenceEventClusterRecord[];
   semantics: Awaited<ReturnType<typeof extractEventSemantics>>;
   document: RawDocumentRecord;
+  source: IntelligenceSourceRecord;
 }): Promise<IntelligenceEventClusterRecord | null> {
   const existingLinkedClaims = await input.store.listIntelligenceLinkedClaims({
     workspaceId: input.workspaceId,
@@ -2796,15 +3768,19 @@ async function findMatchingEventByLinkedClaims(input: {
     return links;
   };
   const documentMs = publishedMs(input.document.publishedAt ?? input.document.observedAt);
-  const windowMs = 24 * 60 * 60 * 1000;
+  const semanticsTopDomainId = input.semantics.domainPosteriors[0]?.domainId ?? null;
 
   for (const linkedClaim of matchedLinkedClaims) {
     const claimLinks = await getClaimLinksForLinkedClaim(linkedClaim.id);
     for (const link of claimLinks) {
       const event = input.events.find((row) => row.id === link.eventId);
       if (!event) continue;
+      if (event.eventFamily !== input.semantics.eventFamily) continue;
+      if (!eventDomainMatches(event.topDomainId, semanticsTopDomainId)) continue;
       const eventMs = publishedMs(event.timeWindowEnd ?? event.updatedAt);
-      if (documentMs !== null && eventMs !== null && Math.abs(documentMs - eventMs) > windowMs) continue;
+      const trustedPolicyWindowMs =
+        isTrustedPolicyPromotionSource(input.source) && isTrustedPolicyEvent(event) ? 7 * DAY_MS : DAY_MS;
+      if (documentMs !== null && eventMs !== null && Math.abs(documentMs - eventMs) > trustedPolicyWindowMs) continue;
       const relationWeight =
         link.relation === 'supporting'
           ? 1
@@ -2827,8 +3803,12 @@ async function findMatchingEventByLinkedClaims(input: {
       for (const neighborLink of neighborLinks) {
         const event = input.events.find((row) => row.id === neighborLink.eventId);
         if (!event) continue;
+        if (event.eventFamily !== input.semantics.eventFamily) continue;
+        if (!eventDomainMatches(event.topDomainId, semanticsTopDomainId)) continue;
         const eventMs = publishedMs(event.timeWindowEnd ?? event.updatedAt);
-        if (documentMs !== null && eventMs !== null && Math.abs(documentMs - eventMs) > windowMs) continue;
+        const trustedPolicyWindowMs =
+          isTrustedPolicyPromotionSource(input.source) && isTrustedPolicyEvent(event) ? 7 * DAY_MS : DAY_MS;
+        if (documentMs !== null && eventMs !== null && Math.abs(documentMs - eventMs) > trustedPolicyWindowMs) continue;
         const current = eventScoreMap.get(event.id) ?? 0;
         eventScoreMap.set(
           event.id,
@@ -2849,8 +3829,12 @@ async function findMatchingEventByLinkedClaims(input: {
         for (const secondHopLink of secondHopLinks) {
           const event = input.events.find((row) => row.id === secondHopLink.eventId);
           if (!event) continue;
+          if (event.eventFamily !== input.semantics.eventFamily) continue;
+          if (!eventDomainMatches(event.topDomainId, semanticsTopDomainId)) continue;
           const eventMs = publishedMs(event.timeWindowEnd ?? event.updatedAt);
-          if (documentMs !== null && eventMs !== null && Math.abs(documentMs - eventMs) > windowMs) continue;
+          const trustedPolicyWindowMs =
+            isTrustedPolicyPromotionSource(input.source) && isTrustedPolicyEvent(event) ? 7 * DAY_MS : DAY_MS;
+          if (documentMs !== null && eventMs !== null && Math.abs(documentMs - eventMs) > trustedPolicyWindowMs) continue;
           const current = eventScoreMap.get(event.id) ?? 0;
           eventScoreMap.set(
             event.id,
@@ -2865,8 +3849,13 @@ async function findMatchingEventByLinkedClaims(input: {
   for (const [eventId, claimScore] of eventScoreMap.entries()) {
     const event = input.events.find((row) => row.id === eventId);
     if (!event) continue;
+    if (platformProductAnchorMismatch(event, input.semantics) || policyNarrativeAnchorMismatch(event, input.semantics)) continue;
     const titleScore = similarity(event.title, input.semantics.title);
-    const entityScore = Math.min(1, entityOverlap(event.entities, input.semantics.entities) / 2);
+    const overlap =
+      event.eventFamily === 'platform_ai_shift' || event.eventFamily === 'policy_change'
+        ? narrativeEntityOverlap(event.entities, input.semantics.entities, event.eventFamily)
+        : entityOverlap(event.entities, input.semantics.entities);
+    const entityScore = Math.min(1, overlap / 2);
     const contradictionPenalty = event.linkedClaimCount > 0
       ? Math.min(0.35, event.contradictionCount / Math.max(1, event.linkedClaimCount + event.contradictionCount))
       : 0;
@@ -2881,7 +3870,7 @@ async function findMatchingEventByLinkedClaims(input: {
     if (!best || score > best.score) best = { event, score };
   }
 
-  return best?.score && best.score >= 1 ? best.event : null;
+  return best?.score && best.score >= 1.35 ? best.event : null;
 }
 
 async function syncLinkedClaimEdgesForEvent(input: {
@@ -2902,6 +3891,10 @@ async function syncLinkedClaimEdgesForEvent(input: {
       const canonicalPair = canonicalizeLinkedClaimEdgePair(claim.id, candidate.claim.id);
       const key = `${canonicalPair.leftLinkedClaimId}:${canonicalPair.rightLinkedClaimId}`;
       if (createdKeys.has(key)) continue;
+      const heuristicRelation = inferLinkedClaimGraphRelation({
+        claim,
+        candidate: candidate.claim,
+      });
       const pseudoSemanticClaim: SemanticClaim = {
         claimId: randomUUID(),
         subjectEntity: claim.canonicalSubject,
@@ -2913,21 +3906,24 @@ async function syncLinkedClaimEdgesForEvent(input: {
         stance: claim.contradictionCount > 0 ? 'contradicting' : 'supporting',
         claimType: 'signal',
       };
-      const classification = await classifyClaimLink({
-        store: input.store as JarvisStore,
-        env: input.env,
-        providerRouter: input.providerRouter,
-        workspaceId: input.workspaceId,
-        claim: pseudoSemanticClaim,
-        candidate: candidate.claim,
-      });
-      if (classification.relation === 'unrelated') continue;
-      const relation: LinkedClaimEdgeRecord['relation'] =
-        classification.relation === 'contradicting'
+      const classification = heuristicRelation
+        ? null
+        : await classifyClaimLink({
+            store: input.store as JarvisStore,
+            env: input.env,
+            providerRouter: input.providerRouter,
+            workspaceId: input.workspaceId,
+            claim: pseudoSemanticClaim,
+            candidate: candidate.claim,
+          });
+      const relation = heuristicRelation
+        ? heuristicRelation.relation
+        : classification?.relation === 'contradicting'
           ? 'contradicts'
-          : classification.relation === 'same' || classification.relation === 'supporting'
+          : classification?.relation === 'same' || classification?.relation === 'supporting'
             ? 'supports'
-            : 'related';
+            : null;
+      if (!relation) continue;
       const evidenceSignalIds = mergeUniqueStrings([
         ...claim.supportingSignalIds,
         ...candidate.claim.supportingSignalIds,
@@ -2937,7 +3933,9 @@ async function syncLinkedClaimEdgesForEvent(input: {
         leftLinkedClaimId: canonicalPair.leftLinkedClaimId,
         rightLinkedClaimId: canonicalPair.rightLinkedClaimId,
         relation,
-        edgeStrength: clampScore(Math.max(candidate.score / 1.2, classification.confidence)),
+        edgeStrength: clampScore(
+          Math.max(candidate.score / 1.2, heuristicRelation?.confidence ?? classification?.confidence ?? 0.58),
+        ),
         evidenceSignalIds,
         lastObservedAt:
           claim.lastContradictedAt ??
@@ -3141,7 +4139,6 @@ export async function runIntelligenceSourceScanPass(input: {
   let fetchedCount = 0;
   let storedDocumentCount = 0;
   let signalCount = 0;
-  let clusteredEventCount = 0;
   let executionCount = 0;
   let failedCount = 0;
   const failedSources: string[] = [];
@@ -3215,15 +4212,54 @@ export async function runIntelligenceSourceScanPass(input: {
       let storedForSource = 0;
       let signalsForSource = 0;
       for (const documentInput of fetched.documents.filter((row) => isFreshDocument(row, cursor))) {
+        const existingIdentityDocument = await input.store.findIntelligenceRawDocumentByIdentityKey({
+          workspaceId: input.workspaceId,
+          documentIdentityKey: documentInput.documentIdentityKey,
+        });
+        if (existingIdentityDocument) {
+          await input.store.updateIntelligenceRawDocumentObservation({
+            workspaceId: input.workspaceId,
+            documentId: existingIdentityDocument.id,
+            observedAt: documentInput.observedAt,
+            publishedAt: documentInput.publishedAt ?? existingIdentityDocument.publishedAt,
+            metadataJson: {
+              ...existingIdentityDocument.metadataJson,
+              ...documentInput.metadataJson,
+              last_seen_at: documentInput.observedAt,
+              last_seen_published_at: documentInput.publishedAt,
+              last_seen_source_url: documentInput.sourceUrl,
+              last_seen_canonical_url: documentInput.canonicalUrl,
+            },
+          });
+          continue;
+        }
         const existingDocument = await input.store.findIntelligenceRawDocumentByFingerprint({
           workspaceId: input.workspaceId,
           documentFingerprint: documentInput.documentFingerprint,
         });
-        const document = existingDocument ?? await input.store.createIntelligenceRawDocument({
+        if (existingDocument) {
+          await input.store.updateIntelligenceRawDocumentObservation({
+            workspaceId: input.workspaceId,
+            documentId: existingDocument.id,
+            observedAt: documentInput.observedAt,
+            publishedAt: documentInput.publishedAt ?? existingDocument.publishedAt,
+            metadataJson: {
+              ...existingDocument.metadataJson,
+              ...documentInput.metadataJson,
+              last_seen_at: documentInput.observedAt,
+              last_seen_published_at: documentInput.publishedAt,
+              last_seen_source_url: documentInput.sourceUrl,
+              last_seen_canonical_url: documentInput.canonicalUrl,
+            },
+          });
+          continue;
+        }
+        const document = await input.store.createIntelligenceRawDocument({
           workspaceId: input.workspaceId,
           sourceId: source.id,
           sourceUrl: documentInput.sourceUrl,
           canonicalUrl: documentInput.canonicalUrl,
+          documentIdentityKey: documentInput.documentIdentityKey,
           title: documentInput.title,
           summary: documentInput.summary,
           rawText: documentInput.rawText,
@@ -3236,9 +4272,6 @@ export async function runIntelligenceSourceScanPass(input: {
           documentFingerprint: documentInput.documentFingerprint,
           metadataJson: documentInput.metadataJson,
         });
-        if (existingDocument) {
-          continue;
-        }
         storedDocumentCount += 1;
         storedForSource += 1;
 
@@ -3401,6 +4434,7 @@ async function syncLinkedClaimsForEvent(input: {
   });
 
   for (const claim of input.semantics.semanticClaims) {
+    const genericClaim = isGenericSemanticClaim(claim);
     const shortlist = buildLinkedClaimShortlist({
       claim,
       existingLinkedClaims,
@@ -3420,9 +4454,11 @@ async function syncLinkedClaimsForEvent(input: {
         candidate: candidate.claim,
       });
       if (classification.relation === 'unrelated') continue;
-      matched = candidate.claim;
       linkStrength = clampScore(Math.max(candidate.score / 1.6, classification.confidence));
       resolvedRelation = classification.relation;
+      if (classification.relation === 'same') {
+        matched = candidate.claim;
+      }
       break;
     }
     const supportingSignalIds = mergeUniqueStrings([...(matched?.supportingSignalIds ?? []), input.signal.id]);
@@ -3444,7 +4480,15 @@ async function syncLinkedClaimsForEvent(input: {
     const linkedClaim = await input.store.createIntelligenceLinkedClaim({
       id: matched?.id ?? randomUUID(),
       workspaceId: input.workspaceId,
-      claimFingerprint: matched?.claimFingerprint ?? buildClaimFingerprint(claim, signalObservedAt),
+      claimFingerprint:
+        matched?.claimFingerprint ??
+        (genericClaim
+          ? buildEventScopedClaimFingerprint({
+              claim,
+              fallbackAt: signalObservedAt,
+              eventId: input.eventId,
+            })
+          : buildClaimFingerprint(claim, signalObservedAt)),
       canonicalSubject: matched?.canonicalSubject ?? normalizeClaimPart(claim.subjectEntity),
       canonicalPredicate: matched?.canonicalPredicate ?? normalizeClaimPart(claim.predicate),
       canonicalObject: matched?.canonicalObject ?? normalizeClaimPart(claim.object),
@@ -3707,15 +4751,27 @@ export async function runIntelligenceSemanticPass(input: {
           limit: Math.max(1, input.signalBatch),
           processingStatus: 'pending',
         }),
-    input.store.listIntelligenceEvents({ workspaceId: input.workspaceId, limit: 200 }),
+    input.store.listIntelligenceEvents({ workspaceId: input.workspaceId, limit: SEMANTIC_MATCH_EVENT_LIMIT }),
   ]);
+  const eventDocumentIds = mergeUniqueStrings(existingEvents.flatMap((event) => event.documentIds));
   const documents = await input.store.listIntelligenceRawDocumentsByIds({
     workspaceId: input.workspaceId,
-    documentIds: mergeUniqueStrings(signals.map((signal) => signal.documentId)),
+    documentIds: mergeUniqueStrings([...signals.map((signal) => signal.documentId), ...eventDocumentIds]),
   });
   const sourceById = new Map(sources.map((row) => [row.id, row] as const));
   const documentById = new Map(documents.map((row) => [row.id, row] as const));
-  let clusteredEventCount = 0;
+  const eventCanonicalUrlsById = new Map<string, Set<string>>();
+  for (const event of existingEvents) {
+    eventCanonicalUrlsById.set(
+      event.id,
+      new Set(
+        event.documentIds
+          .map((documentId) => documentById.get(documentId)?.canonicalUrl)
+          .filter((canonicalUrl): canonicalUrl is string => Boolean(canonicalUrl)),
+      ),
+    );
+  }
+  const clusteredCanonicalEventIds = new Set<string>();
   let deliberationCount = 0;
   let executionCount = 0;
   let failedCount = 0;
@@ -3723,11 +4779,15 @@ export async function runIntelligenceSemanticPass(input: {
   const touchedEventIds = new Set<string>();
 
   for (const signal of signals) {
-    await input.store.updateIntelligenceSignalProcessing({
+    const processingLeaseId = randomUUID();
+    const claimedSignal = await input.store.updateIntelligenceSignalProcessing({
       workspaceId: input.workspaceId,
       signalId: signal.id,
       processingStatus: 'processing',
+      expectedCurrentStatus: 'pending',
+      processingLeaseId,
     });
+    if (!claimedSignal) continue;
     try {
       const source = signal.sourceId ? sourceById.get(signal.sourceId) ?? null : null;
       const document = documentById.get(signal.documentId) ?? null;
@@ -3742,26 +4802,118 @@ export async function runIntelligenceSemanticPass(input: {
         title: document.title,
         rawText: document.rawText,
         entityHints: signal.entityHints,
+        sourceEntityHints: source.entityHints,
       });
+      const leaseStillActive = await hasActiveSignalProcessingLease({
+        store: input.store,
+        workspaceId: input.workspaceId,
+        signalId: signal.id,
+        processingLeaseId,
+      });
+      if (!leaseStillActive) continue;
+      const canonicalEvents = existingEvents.filter((event) => event.lifecycleState === 'canonical');
+      const exactCanonicalUrlMatch = findExactCanonicalUrlEvent({
+        events: canonicalEvents,
+        document,
+        eventCanonicalUrlsById,
+      });
+      const exactAnyLifecycleMatch = findExactCanonicalUrlEvent({
+        events: existingEvents,
+        document,
+        eventCanonicalUrlsById,
+      });
+      const restrictedSource = isRestrictedPromotionSource(source);
+      const matchPool = restrictedSource ? canonicalEvents : existingEvents;
       const matchedByLinkedClaims = await findMatchingEventByLinkedClaims({
         store: input.store,
         workspaceId: input.workspaceId,
-        events: existingEvents,
+        events: matchPool,
         semantics,
         document,
+        source,
       });
-      const matched = matchedByLinkedClaims ?? findMatchingEvent({
-        events: existingEvents,
-        semantics,
-        document,
-      });
+      const matched =
+        exactCanonicalUrlMatch ??
+        exactAnyLifecycleMatch ??
+        matchedByLinkedClaims ??
+        findMatchingEvent({
+          events: matchPool,
+          semantics,
+          document,
+          source,
+          eventCanonicalUrlsById,
+        });
+      if (validationBlocksCanonicalWrite({
+        validation: semantics.validation,
+        hasExactCanonicalUrlMatch: Boolean(exactCanonicalUrlMatch),
+      })) {
+        await input.store.updateIntelligenceSignalProcessing({
+          workspaceId: input.workspaceId,
+          signalId: signal.id,
+          processingStatus: 'processed',
+          expectedCurrentStatus: 'processing',
+          expectedCurrentLeaseId: processingLeaseId,
+          processingLeaseId: null,
+          promotionState: 'quarantined',
+          promotionReasons: semantics.validation.reasons,
+          linkedEventId: null,
+          processingError: null,
+          processedAt: nowIso(),
+        });
+        continue;
+      }
       const merged = mergeEvent(matched, {
         source,
         signal,
         document,
         semantics,
       });
-      const persisted = await input.store.upsertIntelligenceEvent(merged);
+      const promotionPlan = determinePromotionPlan({
+        existing: matched,
+        merged,
+        source,
+        validation: semantics.validation,
+        exactCanonicalUrlMatch,
+      });
+      const persisted = await input.store.upsertIntelligenceEvent({
+        ...merged,
+        lifecycleState: promotionPlan.lifecycleState,
+        validationReasons: promotionPlan.promotionReasons,
+        narrativeClusterId: promotionPlan.lifecycleState === 'canonical' ? merged.narrativeClusterId ?? null : null,
+        narrativeClusterState: promotionPlan.lifecycleState === 'canonical' ? merged.narrativeClusterState ?? null : null,
+        executionCandidates: promotionPlan.lifecycleState === 'canonical' ? merged.executionCandidates : [],
+      });
+      const existingIndex = existingEvents.findIndex((event) => event.id === persisted.id);
+      if (existingIndex >= 0) {
+        existingEvents.splice(existingIndex, 1, persisted);
+      } else {
+        existingEvents.unshift(persisted);
+      }
+      eventCanonicalUrlsById.set(
+        persisted.id,
+        new Set(
+          persisted.documentIds
+            .map((documentId) => documentById.get(documentId)?.canonicalUrl)
+            .filter((canonicalUrl): canonicalUrl is string => Boolean(canonicalUrl)),
+        ),
+      );
+      touchedEventIds.add(persisted.id);
+      if (persisted.lifecycleState !== 'canonical') {
+        await input.store.updateIntelligenceSignalProcessing({
+          workspaceId: input.workspaceId,
+          signalId: signal.id,
+          processingStatus: 'processed',
+          expectedCurrentStatus: 'processing',
+          expectedCurrentLeaseId: processingLeaseId,
+          processingLeaseId: null,
+          promotionState: promotionPlan.promotionState,
+          promotionReasons: promotionPlan.promotionReasons,
+          linkedEventId: persisted.id,
+          processingError: null,
+          processedAt: nowIso(),
+        });
+        continue;
+      }
       const linkedClaimSync = await syncLinkedClaimsForEvent({
         store: input.store,
         providerRouter: input.providerRouter,
@@ -3773,13 +4925,55 @@ export async function runIntelligenceSemanticPass(input: {
         signal,
         semantics,
       });
+      let eventLinkedClaims = linkedClaimSync.linkedClaims;
+      if (matched?.lifecycleState !== 'canonical' && persisted.lifecycleState === 'canonical') {
+        const currentClaimLinks = await input.store.listIntelligenceClaimLinks({
+          workspaceId: input.workspaceId,
+          eventId: persisted.id,
+          limit: 400,
+        });
+        const linkedSignalIds = new Set(currentClaimLinks.map((row) => row.signalId));
+        const backfillSignals = await input.store.listIntelligenceSignalsByIds({
+          workspaceId: input.workspaceId,
+          signalIds: persisted.signalIds.filter((signalId) => signalId !== signal.id && !linkedSignalIds.has(signalId)),
+        });
+        for (const backfillSignal of backfillSignals) {
+          const backfillSource = backfillSignal.sourceId
+            ? sourceById.get(backfillSignal.sourceId) ?? null
+            : null;
+          const backfillDocument = documentById.get(backfillSignal.documentId) ?? null;
+          if (!backfillSource || !backfillDocument) continue;
+          const backfillSemantics = await extractEventSemantics({
+            store: input.store as JarvisStore,
+            env: input.env,
+            providerRouter: input.providerRouter,
+            workspaceId: input.workspaceId,
+            title: backfillDocument.title,
+            rawText: backfillDocument.rawText,
+            entityHints: backfillSignal.entityHints,
+            sourceEntityHints: backfillSource.entityHints,
+          });
+          const backfillSync = await syncLinkedClaimsForEvent({
+            store: input.store,
+            providerRouter: input.providerRouter,
+            env: input.env,
+            workspaceId: input.workspaceId,
+            eventId: persisted.id,
+            source: backfillSource,
+            document: backfillDocument,
+            signal: backfillSignal,
+            semantics: backfillSemantics,
+          });
+          eventLinkedClaims = backfillSync.linkedClaims;
+        }
+      }
       const linkedClaimEdges = await syncLinkedClaimEdgesForEvent({
         store: input.store,
         providerRouter: input.providerRouter,
         env: input.env,
         workspaceId: input.workspaceId,
         eventId: persisted.id,
-        linkedClaims: linkedClaimSync.linkedClaims,
+        linkedClaims: eventLinkedClaims,
       });
       const memberships = await input.store.listIntelligenceEventMemberships({
         workspaceId: input.workspaceId,
@@ -3791,12 +4985,12 @@ export async function runIntelligenceSemanticPass(input: {
           linkedClaimCount: memberships.length,
           contradictionCount: Math.max(
             persisted.contradictionCount,
-            linkedClaimSync.linkedClaims.reduce((total, row) => total + row.contradictionCount, 0),
+            eventLinkedClaims.reduce((total, row) => total + row.contradictionCount, 0),
           ),
           deliberationStatus: summarizeDeliberationStatus(persisted),
           updatedAt: nowIso(),
         },
-        linkedClaims: linkedClaimSync.linkedClaims,
+        linkedClaims: eventLinkedClaims,
         edges: linkedClaimEdges,
       });
       const reconciled = reconcileExpectedSignalAbsence(enrichedDraft);
@@ -3811,28 +5005,34 @@ export async function runIntelligenceSemanticPass(input: {
         store: input.store,
         workspaceId: input.workspaceId,
         event: enrichedEvent,
-        linkedClaims: linkedClaimSync.linkedClaims,
+        linkedClaims: eventLinkedClaims,
       });
       await syncWorldModelTracksForEvent({
         store: input.store,
         workspaceId: input.workspaceId,
         event: enrichedEvent,
       });
+      const currentCandidateEvents = await input.store.listIntelligenceEvents({
+        workspaceId: input.workspaceId,
+        limit: 200,
+      });
       const temporal = await syncTemporalNarrativeLedgerForEvent({
         store: input.store,
         workspaceId: input.workspaceId,
         event: enrichedEvent,
-        candidateEvents: existingEvents,
+        candidateEvents: currentCandidateEvents,
       });
       const narrativeClusterSync = await syncNarrativeClusterForEvent({
         store: input.store,
         workspaceId: input.workspaceId,
         event: enrichedEvent,
         temporal,
-        candidateEvents: existingEvents,
+        candidateEvents: currentCandidateEvents,
       });
       let latestEvent = await input.store.upsertIntelligenceEvent({
         ...enrichedEvent,
+        lifecycleState: 'canonical',
+        validationReasons: [],
         narrativeClusterId: narrativeClusterSync.cluster.id,
         narrativeClusterState: narrativeClusterSync.cluster.state,
         executionCandidates: buildExecutionCandidate({
@@ -3844,18 +5044,31 @@ export async function runIntelligenceSemanticPass(input: {
           cluster: narrativeClusterSync.cluster,
         }),
       });
-      const existingIndex = existingEvents.findIndex((event) => event.id === persisted.id);
-      if (existingIndex >= 0) {
-        existingEvents.splice(existingIndex, 1, latestEvent);
+      const existingIndexAfterCanonicalization = existingEvents.findIndex((event) => event.id === persisted.id);
+      if (existingIndexAfterCanonicalization >= 0) {
+        existingEvents.splice(existingIndexAfterCanonicalization, 1, latestEvent);
       } else {
         existingEvents.unshift(latestEvent);
-        clusteredEventCount += 1;
       }
+      eventCanonicalUrlsById.set(
+        latestEvent.id,
+        new Set(
+          latestEvent.documentIds
+            .map((documentId) => documentById.get(documentId)?.canonicalUrl)
+            .filter((canonicalUrl): canonicalUrl is string => Boolean(canonicalUrl)),
+        ),
+      );
       touchedEventIds.add(latestEvent.id);
+      clusteredCanonicalEventIds.add(latestEvent.id);
       await input.store.updateIntelligenceSignalProcessing({
         workspaceId: input.workspaceId,
         signalId: signal.id,
         processingStatus: 'processed',
+        expectedCurrentStatus: 'processing',
+        expectedCurrentLeaseId: processingLeaseId,
+        processingLeaseId: null,
+        promotionState: promotionPlan.promotionState,
+        promotionReasons: promotionPlan.promotionReasons,
         linkedEventId: latestEvent.id,
         processingError: null,
         processedAt: nowIso(),
@@ -3889,12 +5102,31 @@ export async function runIntelligenceSemanticPass(input: {
         executionCount += 1;
       }
     } catch (error) {
+      if (isRetryableIntelligenceProcessingError(error)) {
+        await input.store.updateIntelligenceSignalProcessing({
+          workspaceId: input.workspaceId,
+          signalId: signal.id,
+          processingStatus: 'pending',
+          expectedCurrentStatus: 'processing',
+          expectedCurrentLeaseId: processingLeaseId,
+          promotionState: 'pending_validation',
+          promotionReasons: [],
+          processingLeaseId: null,
+          linkedEventId: null,
+          processingError: null,
+          processedAt: null,
+        });
+        continue;
+      }
       failedCount += 1;
       failedSignalIds.push(signal.id);
       await input.store.updateIntelligenceSignalProcessing({
         workspaceId: input.workspaceId,
         signalId: signal.id,
         processingStatus: 'failed',
+        expectedCurrentStatus: 'processing',
+        expectedCurrentLeaseId: processingLeaseId,
+        processingLeaseId: null,
         processingError: error instanceof Error ? error.message : String(error),
         processedAt: nowIso(),
       });
@@ -3903,6 +5135,7 @@ export async function runIntelligenceSemanticPass(input: {
 
     for (let index = 0; index < existingEvents.length; index += 1) {
       const event = existingEvents[index]!;
+      if (event.lifecycleState !== 'canonical') continue;
       const reconciled = reconcileExpectedSignalAbsence(event);
       if (!reconciled.changed) continue;
       const nextEvent = await input.store.upsertIntelligenceEvent({
@@ -3916,18 +5149,22 @@ export async function runIntelligenceSemanticPass(input: {
         workspaceId: input.workspaceId,
         event: nextEvent,
       });
+      const currentCandidateEvents = await input.store.listIntelligenceEvents({
+        workspaceId: input.workspaceId,
+        limit: 200,
+      });
       const temporal = await syncTemporalNarrativeLedgerForEvent({
         store: input.store,
         workspaceId: input.workspaceId,
         event: nextEvent,
-        candidateEvents: existingEvents,
+        candidateEvents: currentCandidateEvents,
       });
       const narrativeClusterSync = await syncNarrativeClusterForEvent({
         store: input.store,
         workspaceId: input.workspaceId,
         event: nextEvent,
         temporal,
-        candidateEvents: existingEvents,
+        candidateEvents: currentCandidateEvents,
       });
       const guardedEvent = await input.store.upsertIntelligenceEvent({
         ...nextEvent,
@@ -3943,12 +5180,20 @@ export async function runIntelligenceSemanticPass(input: {
         }),
       });
       existingEvents.splice(index, 1, guardedEvent);
+      eventCanonicalUrlsById.set(
+        guardedEvent.id,
+        new Set(
+          guardedEvent.documentIds
+            .map((documentId) => documentById.get(documentId)?.canonicalUrl)
+            .filter((canonicalUrl): canonicalUrl is string => Boolean(canonicalUrl)),
+        ),
+      );
       touchedEventIds.add(guardedEvent.id);
     }
 
   return {
     processedSignalCount: signals.length - failedCount,
-    clusteredEventCount,
+    clusteredEventCount: clusteredCanonicalEventIds.size,
     deliberationCount,
     executionCount,
     failedCount,
@@ -4013,7 +5258,7 @@ export async function listSuspiciousIntelligenceEvents(input: {
         limit: 200,
       }),
     ]);
-    const genericPredicateCount = linkedClaims.filter((row) => row.canonicalPredicate === 'signals').length;
+    const genericPredicateCount = linkedClaims.filter((row) => isGenericLinkedClaim(row)).length;
     const genericPredicateRatio = linkedClaims.length > 0 ? genericPredicateCount / linkedClaims.length : 0;
     const reasons: string[] = [];
     let staleScore = 0;
@@ -4080,6 +5325,209 @@ async function selectRebuiltEvent(input: {
     }
   }
   return best?.event ?? null;
+}
+
+async function requeueWorkspaceSignals(input: {
+  store: WorkspaceScopedStore;
+  workspaceId: string;
+}): Promise<string[]> {
+  const signals = await input.store.listIntelligenceSignals({
+    workspaceId: input.workspaceId,
+    limit: 10_000,
+  });
+  for (const signal of signals) {
+    await input.store.updateIntelligenceSignalProcessing({
+      workspaceId: input.workspaceId,
+      signalId: signal.id,
+      processingStatus: 'pending',
+      promotionState: 'pending_validation',
+      promotionReasons: [],
+      processingLeaseId: null,
+      linkedEventId: null,
+      processingError: null,
+      processedAt: null,
+    });
+  }
+  return signals.map((signal) => signal.id);
+}
+
+async function cleanupOrphanEvents(input: {
+  store: WorkspaceScopedStore;
+  workspaceId: string;
+  signalIds?: string[] | null;
+}): Promise<string[]> {
+  const signalIds = mergeUniqueStrings(input.signalIds ?? []);
+  const signals =
+    signalIds.length > 0
+      ? await input.store.listIntelligenceSignalsByIds({
+          workspaceId: input.workspaceId,
+          signalIds,
+        })
+      : await input.store.listIntelligenceSignals({
+          workspaceId: input.workspaceId,
+          limit: 10_000,
+        });
+  const events = await input.store.listIntelligenceEvents({
+    workspaceId: input.workspaceId,
+    limit: 2_000,
+  });
+  const signalById = new Map(signals.map((signal) => [signal.id, signal] as const));
+  const liveEventIds = new Set(
+    signals.map((signal) => signal.linkedEventId).filter((eventId): eventId is string => Boolean(eventId)),
+  );
+  const orphanCandidates = events.filter((event) => {
+    if (liveEventIds.has(event.id)) return false;
+    if (signalIds.length === 0) {
+      return event.signalIds.length === 0 || event.signalIds.some((signalId) => signalById.has(signalId));
+    }
+    return event.signalIds.some((signalId) => signalById.has(signalId));
+  });
+  const deletedEventIds: string[] = [];
+
+  for (const event of orphanCandidates) {
+    const overlappingSignalIds = event.signalIds.filter((signalId) => signalById.has(signalId));
+    if (overlappingSignalIds.length === 0) continue;
+    const stillLinked = overlappingSignalIds.some((signalId) => signalById.get(signalId)?.linkedEventId === event.id);
+    if (stillLinked) continue;
+
+    const memberships = await input.store.listIntelligenceNarrativeClusterMemberships({
+      workspaceId: input.workspaceId,
+      eventId: event.id,
+      limit: 20,
+    });
+    await input.store.deleteIntelligenceEventById({
+      workspaceId: input.workspaceId,
+      eventId: event.id,
+    });
+    await Promise.all(
+      mergeUniqueStrings(memberships.map((membership) => membership.clusterId)).map((clusterId) =>
+        reconcileNarrativeClusterAfterEventRemoval({
+          store: input.store,
+          workspaceId: input.workspaceId,
+          clusterId,
+        }),
+      ),
+    );
+    deletedEventIds.push(event.id);
+  }
+
+  return deletedEventIds;
+}
+
+export async function cleanupOrphanIntelligenceEvents(input: {
+  store: WorkspaceScopedStore;
+  workspaceId: string;
+}): Promise<{ workspaceId: string; deletedEventIds: string[] }> {
+  const deletedEventIds = await cleanupOrphanEvents({
+    store: input.store,
+    workspaceId: input.workspaceId,
+  });
+  return {
+    workspaceId: input.workspaceId,
+    deletedEventIds,
+  };
+}
+
+async function cleanupWorkspaceOrphansIfIdle(input: {
+  store: WorkspaceScopedStore;
+  workspaceId: string;
+}): Promise<{ ran: boolean; deletedEventIds: string[] }> {
+  const [pendingSignals, processingSignals] = await Promise.all([
+    input.store.listIntelligenceSignals({
+      workspaceId: input.workspaceId,
+      processingStatus: 'pending',
+      limit: 1,
+    }),
+    input.store.listIntelligenceSignals({
+      workspaceId: input.workspaceId,
+      processingStatus: 'processing',
+      limit: 1,
+    }),
+  ]);
+  if (pendingSignals.length > 0 || processingSignals.length > 0) {
+    return {
+      ran: false,
+      deletedEventIds: [],
+    };
+  }
+  const deletedEventIds = await cleanupOrphanEvents({
+    store: input.store,
+    workspaceId: input.workspaceId,
+  });
+  return {
+    ran: true,
+    deletedEventIds,
+  };
+}
+
+async function runWorkspaceSemanticBackgroundLoop(input: {
+  store: WorkspaceScopedStore;
+  providerRouter: ProviderRouter;
+  env: AppEnv;
+  workspaceId: string;
+  userId: string;
+  notificationService?: NotificationService;
+}) {
+  const batchSize = Math.max(1, input.env.INTELLIGENCE_SEMANTIC_WORKER_BATCH);
+  while (true) {
+    const pendingSignals = await input.store.listIntelligenceSignals({
+      workspaceId: input.workspaceId,
+      limit: batchSize,
+      processingStatus: 'pending',
+    });
+    if (pendingSignals.length === 0) break;
+    const result = await runIntelligenceSemanticPass({
+      store: input.store,
+      providerRouter: input.providerRouter,
+      env: input.env,
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+      signalBatch: batchSize,
+      signalIds: pendingSignals.map((signal) => signal.id),
+      notificationService: input.notificationService,
+    });
+    if (result.processedSignalCount === 0 && result.failedCount === 0) {
+      break;
+    }
+  }
+  await cleanupWorkspaceOrphansIfIdle({
+    store: input.store,
+    workspaceId: input.workspaceId,
+  });
+}
+
+export async function rebuildIntelligenceWorkspace(input: {
+  store: WorkspaceScopedStore;
+  providerRouter: ProviderRouter;
+  env: AppEnv;
+  workspaceId: string;
+  userId: string;
+  executionMode: 'worker' | 'background_loop';
+  notificationService?: NotificationService;
+}): Promise<IntelligenceWorkspaceRebuildResult> {
+  const resetResult = await input.store.resetIntelligenceDerivedWorkspaceState({
+    workspaceId: input.workspaceId,
+  });
+  const requeuedSignalIds = await requeueWorkspaceSignals({
+    store: input.store,
+    workspaceId: input.workspaceId,
+  });
+  if (input.executionMode === 'background_loop') {
+    void runWorkspaceSemanticBackgroundLoop({
+      store: input.store,
+      providerRouter: input.providerRouter,
+      env: input.env,
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+      notificationService: input.notificationService,
+    });
+  }
+  return {
+    ...resetResult,
+    mode: 'hard_reset',
+    queuedSignalCount: requeuedSignalIds.length,
+    executionMode: input.executionMode,
+  };
 }
 
 export async function rebuildIntelligenceEvent(input: {
@@ -4151,6 +5599,9 @@ export async function rebuildIntelligenceEvent(input: {
       workspaceId: input.workspaceId,
       signalId,
       processingStatus: 'pending',
+      promotionState: 'pending_validation',
+      promotionReasons: [],
+      processingLeaseId: null,
       linkedEventId: null,
       processingError: null,
       processedAt: null,
@@ -4171,6 +5622,11 @@ export async function rebuildIntelligenceEvent(input: {
     store: input.store,
     workspaceId: input.workspaceId,
     eventIds: semanticSummary.eventIds,
+    signalIds,
+  });
+  await cleanupOrphanEvents({
+    store: input.store,
+    workspaceId: input.workspaceId,
     signalIds,
   });
 

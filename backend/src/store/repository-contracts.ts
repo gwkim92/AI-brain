@@ -215,7 +215,9 @@ export const INTELLIGENCE_REPOSITORY_METHOD_KEYS = [
   'createIntelligenceFetchFailure',
   'listIntelligenceFetchFailures',
   'findIntelligenceRawDocumentByFingerprint',
+  'findIntelligenceRawDocumentByIdentityKey',
   'createIntelligenceRawDocument',
+  'updateIntelligenceRawDocumentObservation',
   'listIntelligenceRawDocuments',
   'listIntelligenceRawDocumentsByIds',
   'createIntelligenceSignal',
@@ -236,6 +238,7 @@ export const INTELLIGENCE_REPOSITORY_METHOD_KEYS = [
   'listIntelligenceEvents',
   'getIntelligenceEventById',
   'deleteIntelligenceEventById',
+  'resetIntelligenceDerivedWorkspaceState',
   'updateIntelligenceEventReviewState',
   'createIntelligenceOperatorNote',
   'listIntelligenceOperatorNotes',
@@ -498,7 +501,9 @@ export type IntelligenceRepositoryContract = Pick<
   | 'createIntelligenceFetchFailure'
   | 'listIntelligenceFetchFailures'
   | 'findIntelligenceRawDocumentByFingerprint'
+  | 'findIntelligenceRawDocumentByIdentityKey'
   | 'createIntelligenceRawDocument'
+  | 'updateIntelligenceRawDocumentObservation'
   | 'listIntelligenceRawDocuments'
   | 'listIntelligenceRawDocumentsByIds'
   | 'createIntelligenceSignal'
@@ -519,6 +524,7 @@ export type IntelligenceRepositoryContract = Pick<
   | 'listIntelligenceEvents'
   | 'getIntelligenceEventById'
   | 'deleteIntelligenceEventById'
+  | 'resetIntelligenceDerivedWorkspaceState'
   | 'updateIntelligenceEventReviewState'
   | 'createIntelligenceOperatorNote'
   | 'listIntelligenceOperatorNotes'

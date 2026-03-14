@@ -323,7 +323,9 @@ function describeNovelty(signals: Array<{ item: RadarItemRecord }>, eventType: R
   const nowMs = nowIso ? Date.parse(nowIso) : Date.now();
   const baseNowMs = Number.isFinite(nowMs) ? nowMs : Date.now();
   const ageHours = Number.isFinite(latestPublishedAt) ? Math.max(0, (baseNowMs - latestPublishedAt) / 3_600_000) : 12;
-  const recency = clamp01(1 - Math.min(1, ageHours / 48));
+  const freshnessWindowHours =
+    eventType === 'geopolitical_flashpoint' || eventType === 'policy_change' ? 7 * 24 : 48;
+  const recency = clamp01(1 - Math.min(1, ageHours / freshnessWindowHours));
   const typeBoost = eventType === 'geopolitical_flashpoint' || eventType === 'policy_change' ? 0.18 : 0;
   const sourceBonus = signals.length >= 2 ? Math.min(0.14, signals.length * 0.03) : 0;
   return clamp01(0.28 + recency * 0.44 + typeBoost + sourceBonus);

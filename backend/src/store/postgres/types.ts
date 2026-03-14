@@ -318,6 +318,7 @@ export type IntelligenceRawDocumentRow = {
   source_id: string | null;
   source_url: string;
   canonical_url: string;
+  document_identity_key: string;
   title: string;
   summary: string;
   raw_text: string;
@@ -349,6 +350,9 @@ export type IntelligenceSignalRow = {
   entity_hints_json: unknown;
   trust_hint: string | null;
   processing_status: 'pending' | 'processing' | 'processed' | 'failed';
+  promotion_state: 'pending_validation' | 'quarantined' | 'attached' | 'promoted';
+  promotion_reasons_json: unknown;
+  processing_lease_id: string | null;
   processing_error: string | null;
   processed_at: Date | null;
   created_at: Date;
@@ -423,6 +427,8 @@ export type IntelligenceEventRow = {
   title: string;
   summary: string;
   event_family: IntelligenceEventFamily;
+  lifecycle_state: 'provisional' | 'canonical';
+  validation_reasons_json: unknown;
   signal_ids_json: unknown;
   document_ids_json: unknown;
   entities_json: unknown;
