@@ -111,6 +111,8 @@ import type {
   UpgradeStatus,
   GeneratePlanRequest,
   GeneratePlanResponse,
+  V2CommandCompileResponse,
+  V2TaskViewSchemaResponse,
   IntelligenceBridgeDispatchRecord,
   AliasRolloutRecord,
   ClaimLinkRecord,
@@ -2118,5 +2120,22 @@ export async function decideApproval(
   return apiRequest<import("./types").ApprovalRecord>(`/api/v1/approvals/${approvalId}/decision`, {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export async function compileV2Command(payload: {
+  prompt: string;
+  session_id?: string;
+  mode_hint?: string;
+}): Promise<V2CommandCompileResponse> {
+  return apiRequest<V2CommandCompileResponse>("/api/v2/command/compile", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getV2TaskViewSchema(taskId: string): Promise<V2TaskViewSchemaResponse> {
+  return apiRequest<V2TaskViewSchemaResponse>(`/api/v2/tasks/${taskId}/view-schema`, {
+    method: "GET",
   });
 }

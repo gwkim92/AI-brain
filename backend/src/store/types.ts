@@ -1649,6 +1649,337 @@ export type EvaluateRadarInput = {
   itemIds: string[];
 };
 
+export type V2RiskLevel = 'low' | 'medium' | 'high';
+export type V2RoutingIntent = 'code' | 'research' | 'finance' | 'news' | 'general';
+export type V2RoutingComplexity = 'simple' | 'moderate' | 'complex';
+export type V2TeamRole = 'planner' | 'researcher' | 'coder' | 'critic' | 'risk' | 'synthesizer';
+export type V2CodeLoopStatus =
+  | 'planned'
+  | 'patched'
+  | 'tested'
+  | 'linted'
+  | 'reviewed'
+  | 'pr_opened'
+  | 'completed'
+  | 'blocked'
+  | 'failed';
+export type V2PolicyDecision = 'allow' | 'deny' | 'approval_required';
+export type V2RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'blocked';
+
+export type V2ExecutionContractRecord = {
+  id: string;
+  userId: string;
+  prompt: string;
+  goal: string;
+  successCriteria: string[];
+  constraints: Record<string, unknown>;
+  riskLevel: V2RiskLevel;
+  riskReasons: string[];
+  deliverables: Array<Record<string, unknown>>;
+  domainMix: Record<string, number>;
+  intent: V2RoutingIntent;
+  complexity: V2RoutingComplexity;
+  intentConfidence: number;
+  contractConfidence: number;
+  uncertainty: number;
+  clarificationQuestions: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type V2RetrievalQueryRecord = {
+  id: string;
+  contractId: string;
+  userId: string;
+  query: string;
+  connector: string;
+  status: V2RunStatus;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type V2RetrievalEvidenceItemRecord = {
+  id: string;
+  queryId: string;
+  url: string;
+  title: string;
+  domain: string;
+  snippet: string;
+  publishedAt: string | null;
+  connector: string;
+  rankScore: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type V2RetrievalScoreRecord = {
+  id: string;
+  contractId: string;
+  trustScore: number;
+  coverageScore: number;
+  freshnessScore: number;
+  diversityScore: number;
+  blocked: boolean;
+  blockedReasons: string[];
+  createdAt: string;
+};
+
+export type V2TeamRunRecord = {
+  id: string;
+  contractId: string;
+  userId: string;
+  status: V2RunStatus;
+  arbitrationRounds: number;
+  escalatedToHuman: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type V2TeamAgentRecord = {
+  id: string;
+  runId: string;
+  role: V2TeamRole;
+  provider: string | null;
+  model: string | null;
+  status: V2RunStatus;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type V2TeamOutputRecord = {
+  id: string;
+  runId: string;
+  agentId: string;
+  output: string;
+  confidence: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type V2TeamArbitrationRecord = {
+  id: string;
+  runId: string;
+  round: number;
+  decision: string;
+  rationale: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type V2CodeLoopRunRecord = {
+  id: string;
+  contractId: string;
+  userId: string;
+  status: V2CodeLoopStatus;
+  retryCount: number;
+  prUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type V2CodeLoopStepRecord = {
+  id: string;
+  runId: string;
+  stepName: string;
+  status: V2RunStatus;
+  startedAt: string | null;
+  completedAt: string | null;
+  log: string | null;
+  metadata: Record<string, unknown>;
+};
+
+export type V2CodeLoopArtifactRecord = {
+  id: string;
+  runId: string;
+  stepId: string | null;
+  artifactType: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type V2FinanceProfileRecord = {
+  id: string;
+  userId: string;
+  riskProfile: string;
+  baseCurrency: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type V2FinancePositionRecord = {
+  id: string;
+  userId: string;
+  symbol: string;
+  quantity: number;
+  avgPrice: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type V2FinanceScenarioRecord = {
+  id: string;
+  userId: string;
+  scenarioType: string;
+  input: Record<string, unknown>;
+  result: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type V2FinanceComplianceCheckRecord = {
+  id: string;
+  userId: string;
+  requestPayload: Record<string, unknown>;
+  decision: V2PolicyDecision;
+  reasons: string[];
+  createdAt: string;
+};
+
+export type V2TaskViewSchemaRecord = {
+  id: string;
+  taskId: string;
+  schemaVersion: string;
+  schema: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type V2CapabilityModuleRecord = {
+  id: string;
+  moduleId: string;
+  title: string;
+  description: string;
+  owner: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type V2CapabilityModuleVersionRecord = {
+  id: string;
+  moduleId: string;
+  moduleRecordId: string;
+  moduleVersion: string;
+  abiVersion: string;
+  inputSchemaRef: string;
+  outputSchemaRef: string;
+  requiredPermissions: string[];
+  dependencies: string[];
+  failureModes: string[];
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type V2CapabilityModuleRegistrationInput = {
+  moduleId: string;
+  title: string;
+  description: string;
+  owner?: string | null;
+  moduleVersion: string;
+  abiVersion: string;
+  inputSchemaRef: string;
+  outputSchemaRef: string;
+  requiredPermissions: string[];
+  dependencies: string[];
+  failureModes: string[];
+  metadata?: Record<string, unknown>;
+};
+
+export type V2CapabilityModuleRegistrationRecord = {
+  module: V2CapabilityModuleRecord;
+  version: V2CapabilityModuleVersionRecord;
+};
+
+export type V2PolicyRuleRecord = {
+  id: string;
+  policyKey: string;
+  scope: string;
+  rule: Record<string, unknown>;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type V2PolicyAuditRecord = {
+  id: string;
+  policyRuleId: string | null;
+  userId: string | null;
+  action: string;
+  beforeData: Record<string, unknown> | null;
+  afterData: Record<string, unknown> | null;
+  createdAt: string;
+};
+
+export type V2EvalRunRecord = {
+  id: string;
+  suite: string;
+  status: V2RunStatus;
+  summary: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type V2EvalResultRecord = {
+  id: string;
+  runId: string;
+  caseId: string;
+  status: 'passed' | 'failed';
+  score: number;
+  details: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type V2IncidentRecord = {
+  id: string;
+  incidentType: string;
+  severity: string;
+  status: V2RunStatus;
+  summary: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type V2RollbackActionRecord = {
+  id: string;
+  incidentId: string;
+  actorUserId: string | null;
+  actionType: string;
+  status: V2RunStatus;
+  result: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type V2LineageNodeRecord = {
+  id: string;
+  nodeType: string;
+  referenceId: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type V2LineageEdgeRecord = {
+  id: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  edgeType: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type V2RepositoryContract = {
+  createCommandCompilation: (input: Omit<V2ExecutionContractRecord, 'id' | 'createdAt' | 'updatedAt'>) => Promise<V2ExecutionContractRecord>;
+  getCommandCompilationById: (input: { id: string; userId: string }) => Promise<V2ExecutionContractRecord | null>;
+  createRetrievalQuery: (input: Omit<V2RetrievalQueryRecord, 'id' | 'createdAt'>) => Promise<V2RetrievalQueryRecord>;
+  createRetrievalEvidenceItems: (
+    input: Array<Omit<V2RetrievalEvidenceItemRecord, 'id' | 'createdAt'>>
+  ) => Promise<V2RetrievalEvidenceItemRecord[]>;
+  createRetrievalScore: (input: Omit<V2RetrievalScoreRecord, 'id' | 'createdAt'>) => Promise<V2RetrievalScoreRecord>;
+  registerCapabilityModule: (input: V2CapabilityModuleRegistrationInput) => Promise<V2CapabilityModuleRegistrationRecord>;
+  listCapabilityModules: () => Promise<V2CapabilityModuleRecord[]>;
+  listCapabilityModuleVersions: (input: { moduleId: string }) => Promise<V2CapabilityModuleVersionRecord[]>;
+  saveTaskViewSchema: (input: Omit<V2TaskViewSchemaRecord, 'id' | 'createdAt'>) => Promise<V2TaskViewSchemaRecord>;
+};
+
 export type IntelligenceWorkspaceRole = 'owner' | 'admin' | 'member';
 export type IntelligenceSourceKind =
   | 'rss'

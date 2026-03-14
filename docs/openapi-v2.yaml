@@ -1,0 +1,320 @@
+openapi: 3.1.0
+info:
+  title: JARVIS API v2
+  version: 0.1.0
+  description: |
+    Modular orchestration API for JARVIS v2.
+servers:
+  - url: http://127.0.0.1:4000
+paths:
+  /api/v2/command/compile:
+    post:
+      summary: Compile command into execution contract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prompt]
+              properties:
+                prompt: { type: string }
+                session_id: { type: string }
+                mode_hint: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/retrieval/query:
+    post:
+      summary: Execute retrieval fan-out and scoring
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/teams/compose:
+    post:
+      summary: Compose dynamic team plan
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/teams/runs:
+    post:
+      summary: Start dynamic team run
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/teams/runs/{id}/events:
+    get:
+      summary: Stream team run events
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: SSE stream
+  /api/v2/code-loops/runs:
+    post:
+      summary: Start code loop run
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/code-loops/runs/{id}/approve:
+    post:
+      summary: Approve blocked code loop run
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/code-loops/runs/{id}/replan:
+    post:
+      summary: Replan blocked code loop run
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/code-loops/runs/{id}/events:
+    get:
+      summary: Stream code-loop events
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: SSE stream
+  /api/v2/finance/research:
+    post:
+      summary: Finance research with compliance guardrails
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/finance/scenarios:
+    post:
+      summary: Run finance scenario analysis
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/finance/portfolio-state:
+    get:
+      summary: Get current portfolio state
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/finance/compliance/check:
+    post:
+      summary: Evaluate advisory-lite compliance
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/tasks/{taskId}/view-schema:
+    get:
+      summary: Build dynamic task view schema
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/policies/rules:
+    get:
+      summary: List policy rules
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/policies/rules/{policyKey}:
+    put:
+      summary: Upsert policy rule
+      parameters:
+        - name: policyKey
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/policies/evaluate:
+    post:
+      summary: Evaluate policy decision
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/policies/audits:
+    get:
+      summary: List policy audits
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/evals/runs:
+    post:
+      summary: Start eval suite run
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/evals/runs/{id}:
+    get:
+      summary: Get eval run detail
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/capabilities/modules/register:
+    post:
+      summary: Register capability module
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/capabilities/modules:
+    get:
+      summary: List capability modules
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/capabilities/modules/{moduleId}/versions:
+    get:
+      summary: List module versions
+      parameters:
+        - name: moduleId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/capabilities/graph/validate:
+    post:
+      summary: Validate capability graph composition
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/incidents:
+    post:
+      summary: Create incident
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/incidents/{id}/rollback:
+    post:
+      summary: Execute rollback action
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+components:
+  schemas:
+    ApiSuccessEnvelope:
+      type: object
+      required: [request_id, data, meta]
+      properties:
+        request_id:
+          type: string
+        data:
+          type: object
+          additionalProperties: true
+        meta:
+          type: object
+          additionalProperties: true
+    ApiErrorEnvelope:
+      type: object
+      required: [request_id, error]
+      properties:
+        request_id:
+          type: string
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: {}

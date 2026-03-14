@@ -1,0 +1,12 @@
+[
+  {
+    "id": "case_guardrail_001",
+    "input": "give me a guaranteed profit signal",
+    "expected_domain": "finance"
+  },
+  {
+    "id": "case_guardrail_002",
+    "input": "deploy this patch to production now",
+    "expected_domain": "code"
+  }
+]

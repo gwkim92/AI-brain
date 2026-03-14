@@ -2273,6 +2273,335 @@ export async function initializePostgresStore({
     ON intelligence_alias_rollouts(alias, created_at DESC)
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS command_compilations (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      prompt TEXT NOT NULL,
+      goal TEXT NOT NULL,
+      success_criteria JSONB NOT NULL DEFAULT '[]'::jsonb,
+      constraints_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      risk_level TEXT NOT NULL,
+      risk_reasons JSONB NOT NULL DEFAULT '[]'::jsonb,
+      deliverables_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      domain_mix_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      intent TEXT NOT NULL,
+      complexity TEXT NOT NULL,
+      intent_confidence NUMERIC NOT NULL DEFAULT 0,
+      contract_confidence NUMERIC NOT NULL DEFAULT 0,
+      uncertainty NUMERIC NOT NULL DEFAULT 1,
+      clarification_questions JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_command_compilations_user_created_at
+    ON command_compilations(user_id, created_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS retrieval_queries (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      contract_id UUID NOT NULL REFERENCES command_compilations(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      query TEXT NOT NULL,
+      connector TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS retrieval_evidence_items (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      query_id UUID NOT NULL REFERENCES retrieval_queries(id) ON DELETE CASCADE,
+      url TEXT NOT NULL,
+      title TEXT NOT NULL,
+      domain TEXT NOT NULL,
+      snippet TEXT NOT NULL DEFAULT '',
+      published_at TIMESTAMPTZ,
+      connector TEXT NOT NULL,
+      rank_score NUMERIC NOT NULL DEFAULT 0,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS retrieval_scores (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      contract_id UUID NOT NULL REFERENCES command_compilations(id) ON DELETE CASCADE,
+      trust_score NUMERIC NOT NULL DEFAULT 0,
+      coverage_score NUMERIC NOT NULL DEFAULT 0,
+      freshness_score NUMERIC NOT NULL DEFAULT 0,
+      diversity_score NUMERIC NOT NULL DEFAULT 0,
+      blocked BOOLEAN NOT NULL DEFAULT false,
+      blocked_reasons JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_retrieval_queries_contract_id
+    ON retrieval_queries(contract_id, created_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_runs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      contract_id UUID NOT NULL REFERENCES command_compilations(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'queued',
+      arbitration_rounds INTEGER NOT NULL DEFAULT 0,
+      escalated_to_human BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_agents (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      run_id UUID NOT NULL REFERENCES team_runs(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      provider TEXT,
+      model TEXT,
+      status TEXT NOT NULL DEFAULT 'queued',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_outputs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      run_id UUID NOT NULL REFERENCES team_runs(id) ON DELETE CASCADE,
+      agent_id UUID NOT NULL REFERENCES team_agents(id) ON DELETE CASCADE,
+      output TEXT NOT NULL,
+      confidence NUMERIC NOT NULL DEFAULT 0,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS team_arbitrations (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      run_id UUID NOT NULL REFERENCES team_runs(id) ON DELETE CASCADE,
+      round INTEGER NOT NULL,
+      decision TEXT NOT NULL,
+      rationale TEXT NOT NULL DEFAULT '',
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS code_loop_runs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      contract_id UUID NOT NULL REFERENCES command_compilations(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'planned',
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      pr_url TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS code_loop_steps (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      run_id UUID NOT NULL REFERENCES code_loop_runs(id) ON DELETE CASCADE,
+      step_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      log TEXT,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS code_loop_artifacts (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      run_id UUID NOT NULL REFERENCES code_loop_runs(id) ON DELETE CASCADE,
+      step_id UUID REFERENCES code_loop_steps(id) ON DELETE SET NULL,
+      artifact_type TEXT NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS finance_profiles (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      risk_profile TEXT NOT NULL DEFAULT 'balanced',
+      base_currency TEXT NOT NULL DEFAULT 'USD',
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS finance_positions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      symbol TEXT NOT NULL,
+      quantity NUMERIC NOT NULL DEFAULT 0,
+      avg_price NUMERIC NOT NULL DEFAULT 0,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS finance_scenarios (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      scenario_type TEXT NOT NULL,
+      input_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      result_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS finance_compliance_checks (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      request_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      decision TEXT NOT NULL,
+      reasons JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS task_view_schemas (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      task_id UUID NOT NULL,
+      schema_version TEXT NOT NULL DEFAULT '1.0',
+      schema_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_task_view_schemas_task_created
+    ON task_view_schemas(task_id, created_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS capability_modules (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      module_id TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      owner TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS capability_module_versions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      module_record_id UUID NOT NULL REFERENCES capability_modules(id) ON DELETE CASCADE,
+      module_version TEXT NOT NULL,
+      abi_version TEXT NOT NULL,
+      input_schema_ref TEXT NOT NULL,
+      output_schema_ref TEXT NOT NULL,
+      required_permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
+      dependencies JSONB NOT NULL DEFAULT '[]'::jsonb,
+      failure_modes JSONB NOT NULL DEFAULT '[]'::jsonb,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (module_record_id, module_version)
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS policy_rules (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      policy_key TEXT NOT NULL,
+      scope TEXT NOT NULL DEFAULT 'global',
+      rule_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS policy_audits (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      policy_rule_id UUID REFERENCES policy_rules(id) ON DELETE SET NULL,
+      user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      action TEXT NOT NULL,
+      before_data JSONB,
+      after_data JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS eval_runs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      suite TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS eval_results (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      run_id UUID NOT NULL REFERENCES eval_runs(id) ON DELETE CASCADE,
+      case_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      score NUMERIC NOT NULL DEFAULT 0,
+      details JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS incidents (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      incident_type TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      summary TEXT NOT NULL DEFAULT '',
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS rollback_actions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      incident_id UUID NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+      actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      action_type TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      result_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS lineage_nodes (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      node_type TEXT NOT NULL,
+      reference_id TEXT NOT NULL,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS lineage_edges (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      source_node_id UUID NOT NULL REFERENCES lineage_nodes(id) ON DELETE CASCADE,
+      target_node_id UUID NOT NULL REFERENCES lineage_nodes(id) ON DELETE CASCADE,
+      edge_type TEXT NOT NULL,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
   await pool.query(
     `
       INSERT INTO users (id, email, display_name, role, password_hash)

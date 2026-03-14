@@ -14,11 +14,13 @@ import { WidgetErrorBoundary } from "@/components/ui/WidgetErrorBoundary";
 import { AnimatePresence } from "framer-motion";
 import { getDashboardOverview, getMission, streamDashboardOverviewEvents, streamMissionEvents } from "@/lib/api/endpoints";
 import type { DashboardOverviewData, MissionRecord, TaskRecord } from "@/lib/api/types";
+import { TaskViewRenderer } from "@/components/runtime/TaskViewRenderer";
 import { resolveJarvis3DScene } from "@/lib/visual-core/resolve-mode";
 import { canTransitionBaseMode, getBaseModePriority, getRemainingHoldMs } from "@/lib/visual-core/stability";
 import type { Jarvis3DBaseMode, Jarvis3DScene } from "@/lib/visual-core/types";
 import { canAccessWidget, useCurrentRoleState } from "@/lib/auth/role";
 import { resolveMissionFocus } from "@/lib/hud/mission-focus";
+import { isFeatureEnabled } from "@/lib/feature-flags";
 import { ContextDockBar } from "@/components/layout/ContextDockBar";
 import { useLocale } from "@/components/providers/LocaleProvider";
 import { loadLegacyWidgetLayout, measureHudViewport, saveWidgetLayout, spotlightWidgetLayout, tileWidgetLayouts } from "@/lib/hud/widget-layout";
@@ -417,6 +419,7 @@ export default function JarvisHUD() {
   const { hydrated: hudHydrated, activeWidgets, mountedWidgets, focusedWidget, openWidgets, dropWidget, setVisualCoreScene } = useHUD();
   const { t } = useLocale();
   const { role, hydrated: roleHydrated } = useCurrentRoleState();
+  const schemaUiEnabled = isFeatureEnabled("v2.schema_ui", false);
   const { tasks, pendingApprovalCount, hasRecentEventPulse } = useVisualCoreSignals();
   const requestedWidgetsRef = useRef<RequestedWidgetPlan | null>(null);
   const requestedMissionRef = useRef<RequestedMissionPlan | null>(null);
@@ -996,6 +999,7 @@ export default function JarvisHUD() {
         <div className="w-full h-full pointer-events-none">
           <HUDWidgetRenderer mountedWidgets={mountedWidgets} activeWidgets={roleFilteredWidgets} />
         </div>
+        {schemaUiEnabled ? <TaskViewRenderer /> : null}
         <ContextDockBar
           mountedWidgets={mountedWidgets}
           activeWidgets={roleFilteredWidgets}

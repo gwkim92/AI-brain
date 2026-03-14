@@ -746,3 +746,5 @@ export function summarizeResult(result: ProviderGenerateResult): {
     credential: result.credential
   };
 }
+
+export type ProviderRouterLike = Pick<ProviderRouter, 'generate' | 'listAvailability'>;

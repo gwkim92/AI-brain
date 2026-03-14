@@ -5,7 +5,12 @@ import { usePathname, useRouter } from "next/navigation";
 import { useHUD } from "@/components/providers/HUDProvider";
 import { canAccessWidget, useCurrentRole } from "@/lib/auth/role";
 import { ApiRequestError } from "@/lib/api/client";
-import { createJarvisRequest, runAssistantContextWithMeta } from "@/lib/api/endpoints";
+import {
+  compileV2Command,
+  createJarvisRequest,
+  getV2TaskViewSchema,
+  runAssistantContextWithMeta,
+} from "@/lib/api/endpoints";
 import { dispatchCouncilIntake } from "@/lib/hud/council-intake";
 import { dispatchJarvisDataRefresh } from "@/lib/hud/data-refresh";
 import { buildMissionIntake, dispatchMissionIntake, dispatchMissionIntakeTaskLink } from "@/lib/hud/mission-intake";
@@ -86,6 +91,35 @@ export function useQuickCommand() {
     const intake = buildMissionIntake(trimmed, "inbox_quick_command", {
       requestNonce,
     });
+    const v2CommandCompilerEnabled = isFeatureEnabled("v2.command_compiler", false);
+    const v2SchemaUiEnabled = isFeatureEnabled("v2.schema_ui", false);
+    if (v2CommandCompilerEnabled) {
+      try {
+        const compiled = await compileV2Command({
+          prompt: trimmed,
+          session_id: intake.id,
+          mode_hint: intake.taskMode,
+        });
+        emitRuntimeEvent("v2_command_compiled", {
+          intakeId: intake.id,
+          sessionId: intake.id,
+          requestNonce,
+          executionContract: compiled.execution_contract,
+          routing: compiled.routing,
+          clarification: compiled.clarification,
+        });
+      } catch (compileError) {
+        emitRuntimeEvent("quick_command_failed", {
+          intakeId: intake.id,
+          requestNonce,
+          prompt: trimmed,
+          code: "v2_compile_failed",
+          message: compileError instanceof Error ? compileError.message : "v2 compile failed",
+          taskMode: intake.taskMode,
+          singleFlightEnabled,
+        });
+      }
+    }
     const complexity = classifyPromptComplexity(trimmed);
     const forceIntentWorkspace = intake.intent === "council";
     emitRuntimeEvent("quick_command_started", {
@@ -177,6 +211,20 @@ export function useQuickCommand() {
 
       if (linkedTaskId || linkedMissionId) {
         linkSessionTask(sessionId, linkedTaskId ?? undefined, linkedMissionId ?? undefined);
+      }
+
+      if (v2SchemaUiEnabled && linkedTaskId) {
+        try {
+          const schema = await getV2TaskViewSchema(linkedTaskId);
+          emitRuntimeEvent("v2_task_view_schema_updated", {
+            intakeId: intake.id,
+            taskId: linkedTaskId,
+            schema: schema.task_view_schema,
+            policy: schema.policy,
+          });
+        } catch {
+          // Keep the jarvis workflow intact when the schema API is unavailable.
+        }
       }
 
       if (result.delegation.primary_target === "assistant" && result.delegation.assistant_context_id) {

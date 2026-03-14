@@ -138,7 +138,26 @@ const EnvSchema = z.object({
   NOTIFICATION_TELEGRAM_MIN_SEVERITY: z.enum(['info', 'warning', 'critical']).default('critical'),
 
   MODEL_REGISTRY_REFRESH_MS: z.coerce.number().int().min(10000).default(300000),
-  ROUTING_EXPLORATION_RATE: z.coerce.number().min(0).max(1).default(0.05)
+  ROUTING_EXPLORATION_RATE: z.coerce.number().min(0).max(1).default(0.05),
+
+  V2_ROUTES_ENABLED: EnvBooleanSchema.default(false),
+  V2_COMMAND_COMPILER_ENABLED: EnvBooleanSchema.default(false),
+  V2_RETRIEVAL_ENABLED: EnvBooleanSchema.default(false),
+  V2_TEAM_ENABLED: EnvBooleanSchema.default(false),
+  V2_CODE_LOOP_ENABLED: EnvBooleanSchema.default(false),
+  V2_FINANCE_ENABLED: EnvBooleanSchema.default(false),
+  V2_SCHEMA_UI_ENABLED: EnvBooleanSchema.default(false),
+
+  BRAVE_API_KEY: z.string().optional(),
+  CROSSREF_MAILTO: z.string().email().optional(),
+  GITHUB_TOKEN: z.string().optional(),
+  GITHUB_OWNER: z.string().optional(),
+  GITHUB_REPO: z.string().optional(),
+  CODE_LOOP_LOCAL_EXEC_ENABLED: EnvBooleanSchema.default(false),
+
+  FRED_API_KEY: z.string().optional(),
+  SEC_USER_AGENT: z.string().optional(),
+  ALPHAVANTAGE_API_KEY: z.string().optional()
 });
 
 export type AppEnv = z.infer<typeof EnvSchema> & {
