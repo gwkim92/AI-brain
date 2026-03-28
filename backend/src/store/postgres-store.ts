@@ -3,12 +3,14 @@ import { Pool } from 'pg';
 import { createAssistantContextRepository } from './postgres/assistant-context-repository';
 import { createAuthRepository } from './postgres/auth-repository';
 import { createCouncilExecutionApprovalRepository } from './postgres/council-execution-approval-repository';
+import { createExternalWorkRepository } from './postgres/external-work-repository';
 import { initializePostgresStore } from './postgres/initializer';
 import { createJarvisRepository } from './postgres/jarvis-repository';
 import { createPostgresIntelligenceRepository } from './postgres/intelligence-repository';
 import { createMemoryRepository } from './postgres/memory-repository';
 import { createMissionRepository } from './postgres/mission-repository';
 import { createRadarUpgradeRepository } from './postgres/radar-upgrade-repository';
+import { createRunnerRepository } from './postgres/runner-repository';
 import { createTaskRepository } from './postgres/task-repository';
 import { createTelegramReportRepository } from './postgres/telegram-report-repository';
 import { createPostgresUpgradeExecutorGateway } from './postgres/upgrade-executor-gateway';
@@ -71,6 +73,14 @@ export function createPostgresStore(options: PostgresStoreOptions): JarvisStore 
     ...createTaskRepository({
       pool,
       defaultUserId: options.defaultUserId
+    }),
+
+    ...createExternalWorkRepository({
+      pool
+    }),
+
+    ...createRunnerRepository({
+      pool
     }),
 
     ...createRadarUpgradeRepository({

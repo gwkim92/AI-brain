@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import { startCouncilRun } from '../council/run-service';
+import { createDerivedExternalWorkLink, getLinkedExternalWorkSummary } from '../external-work/service';
 import type { CouncilPhaseStatusRecord, CouncilRunRecord } from '../store/types';
 import { sendError, sendSuccess } from '../lib/http';
 import type { RouteContext } from './types';
@@ -170,6 +171,19 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
       const linkedSession = parsed.data.client_session_id
         ? await store.getJarvisSessionById({ userId, sessionId: parsed.data.client_session_id })
         : null;
+      if (linkedSession) {
+        await createDerivedExternalWorkLink(store, {
+          fromTargetType: 'session',
+          fromTargetId: linkedSession.id,
+          toTargetType: 'council_run',
+          toTargetId: result.run.id
+        });
+      }
+      const linkedExternalWork = await getLinkedExternalWorkSummary(store, {
+        userId,
+        targetType: 'council_run',
+        targetId: result.run.id
+      });
 
       return sendSuccess(
         reply,
@@ -182,11 +196,12 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
             strict_provider: result.resolvedModelSelection.strictProvider,
             source: result.resolvedModelSelection.source
           }),
-          session: linkedSession
+          session: linkedSession,
+          linked_external_work: linkedExternalWork
         },
         {
-        accepted: result.idempotentReplay !== true,
-        idempotent_replay: result.idempotentReplay
+          accepted: result.idempotentReplay !== true,
+          idempotent_replay: result.idempotentReplay
         }
       );
     } catch {
@@ -215,7 +230,16 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
       return sendError(reply, request, 404, 'NOT_FOUND', 'council run not found');
     }
 
-    return sendSuccess(reply, request, 200, withRunCredential(run));
+    const linkedExternalWork = await getLinkedExternalWorkSummary(store, {
+      userId: ctx.resolveRequestUserId(request),
+      targetType: 'council_run',
+      targetId: run.id
+    });
+
+    return sendSuccess(reply, request, 200, {
+      ...withRunCredential(run),
+      linked_external_work: linkedExternalWork
+    });
   });
 
   app.get('/api/v1/councils/runs/:runId/events', async (request, reply) => {

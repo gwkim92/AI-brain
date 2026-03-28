@@ -1,6 +1,8 @@
-import { runDag, type DagStep } from './dag-runner';
 import type { AppEnv } from '../config/env';
-import type { JarvisStore, MissionRecord, MissionStepRecord, MissionStepStatus } from '../store/types';
+import { GraphCallbackRegistry } from '../graph-runtime/callbacks';
+import { executeExecutionGraph, GraphExecutionHalt } from '../graph-runtime/executor';
+import { createMissionExecutionGraph } from '../graph-runtime/graph';
+import type { GraphRunRecord, JarvisStore, MissionRecord, MissionStepRecord, MissionStepStatus, ToolInvocation } from '../store/types';
 import type { ProviderRouter } from '../providers/router';
 import type { ProviderCredentialsByProvider, RoutingTaskType } from '../providers/types';
 import { runContextPipeline } from '../context/pipeline';
@@ -9,25 +11,13 @@ import { resolveModelSelection, type ResolvedModelSelection } from '../providers
 import { generateWithPreferenceRecovery } from '../providers/preference-recovery';
 import { withAiInvocationTrace } from '../observability/ai-trace';
 import type { ModelSelectionOverrideInput } from '../providers/model-selection';
+import { evaluateToolInvocationPolicy } from '../tools/gateway';
 
 export type MissionExecutionCallbacks = {
   onStepStarted?: (stepId: string) => void | Promise<void>;
   onStepCompleted?: (stepId: string, result: unknown) => void | Promise<void>;
   onStepFailed?: (stepId: string, error: string) => void | Promise<void>;
 };
-
-function inferDependencies(step: MissionStepRecord, allSteps: MissionStepRecord[]): string[] {
-  const preceding = allSteps
-    .filter((s) => s.order < step.order)
-    .sort((a, b) => b.order - a.order);
-
-  if (preceding.length === 0) return [];
-
-  const maxPrecedingOrder = preceding[0]!.order;
-  return preceding
-    .filter((s) => s.order === maxPrecedingOrder)
-    .map((s) => s.id);
-}
 
 function resolveStepPattern(step: MissionStepRecord): 'llm_generate' | 'council_debate' | 'human_gate' | 'tool_call' | 'sub_mission' {
   switch (step.type) {
@@ -177,6 +167,28 @@ async function executeStep(
   }
 }
 
+function shouldPromoteMissionResult(step: MissionStepRecord): boolean {
+  return step.metadata?.promote_memory === true || step.metadata?.memory_promotion === true;
+}
+
+function buildMissionToolInvocation(step: MissionStepRecord): ToolInvocation {
+  return {
+    source:
+      step.metadata?.tool_source === 'mcp' || step.metadata?.tool_source === 'openapi'
+        ? step.metadata.tool_source
+        : 'internal',
+    name:
+      typeof step.metadata?.tool_name === 'string' && step.metadata.tool_name.trim().length > 0
+        ? step.metadata.tool_name
+        : `mission.${step.id}`,
+    metadata: {
+      ...step.metadata,
+      mission_step_id: step.id,
+      mission_step_type: step.type
+    }
+  };
+}
+
 export async function executeMission(
   mission: MissionRecord,
   store: JarvisStore,
@@ -189,8 +201,9 @@ export async function executeMission(
     resolvedModelSelection?: ResolvedModelSelection;
   },
   credentialsByProvider?: ProviderCredentialsByProvider
-): Promise<{ success: boolean; results: Record<string, unknown>; completedOrder: string[] }> {
-  const steps = [...mission.steps].sort((a, b) => a.order - b.order);
+): Promise<{ success: boolean; results: Record<string, unknown>; completedOrder: string[]; graphRun: GraphRunRecord }> {
+  const graph = createMissionExecutionGraph(mission);
+  const stepsByNodeId = new Map(graph.nodes.map((node) => [node.id, mission.steps.find((step) => step.id === node.id) ?? null]));
 
   await store.updateMission({
     missionId: mission.id,
@@ -198,23 +211,111 @@ export async function executeMission(
     status: 'running'
   });
 
-  const dagSteps: DagStep[] = steps.map((step) => ({
-    id: step.id,
-    dependencies: inferDependencies(step, steps),
-    run: async (ctx) => {
-      await updateStepStatus(store, mission, userId, step.id, 'running');
-      await callbacks?.onStepStarted?.(step.id);
+  const graphCallbacks = new GraphCallbackRegistry();
+  graphCallbacks.register('beforeNode', async ({ node }) => {
+    const step = stepsByNodeId.get(node.id);
+    if (!step) {
+      return;
+    }
+    await updateStepStatus(store, mission, userId, step.id, 'running');
+    await callbacks?.onStepStarted?.(step.id);
+  });
+  graphCallbacks.register('afterNode', async ({ node, result }) => {
+    const step = stepsByNodeId.get(node.id);
+    if (!step) {
+      return;
+    }
+    await updateStepStatus(store, mission, userId, step.id, 'done');
+    await callbacks?.onStepCompleted?.(step.id, result);
+    if (typeof result === 'string' && result.length > 0 && shouldPromoteMissionResult(step)) {
+      void embedAndStore(store, null, {
+        userId,
+        content: `Mission step [${step.title}]: ${result}`,
+        segmentType: 'mission_step_result',
+        taskId: mission.id,
+        confidence: 0.7,
+      }).catch(() => undefined);
+    }
+  });
+  graphCallbacks.register('onBlocked', async ({ node }) => {
+    const step = stepsByNodeId.get(node.id);
+    if (!step) {
+      return;
+    }
+    await updateStepStatus(store, mission, userId, step.id, 'blocked');
+  });
+  graphCallbacks.register('onFail', async ({ node, error }) => {
+    if (!node) {
+      return;
+    }
+    const step = stepsByNodeId.get(node.id);
+    if (!step) {
+      return;
+    }
+    await updateStepStatus(store, mission, userId, step.id, 'failed');
+    await callbacks?.onStepFailed?.(step.id, error.message);
+  });
 
-      try {
+  try {
+    const result = await executeExecutionGraph(graph, {
+      callbacks: graphCallbacks,
+      maxConcurrency: 4,
+      failFast: false,
+      defaultExecutor: async ({ node, graphRun, state, dependencyResults }) => {
+        const step = stepsByNodeId.get(node.id);
+        if (!step) {
+          throw new Error(`mission_step_missing:${node.id}`);
+        }
         const pattern = resolveStepPattern(step);
         if (pattern === 'human_gate') {
-          await updateStepStatus(store, mission, userId, step.id, 'blocked');
-          return { status: 'approval_required', step_id: step.id };
+          throw new GraphExecutionHalt({
+            message: 'approval_required',
+            nodeStatus: 'blocked',
+            graphStatus: 'blocked'
+          });
         }
-
-        const result = await executeStep(
+        if (pattern === 'tool_call') {
+          const invocation = buildMissionToolInvocation(step);
+          const policy = evaluateToolInvocationPolicy(invocation);
+          if (policy.disposition !== 'allow') {
+            throw new GraphExecutionHalt({
+              message: policy.rationale,
+              nodeStatus: 'blocked',
+              graphStatus: 'blocked'
+            });
+          }
+          await graphCallbacks.emit('beforeTool', {
+            graph,
+            graphRun,
+            node,
+            state,
+            invocation
+          });
+          const toolResult = await executeStep(
+            step,
+            dependencyResults,
+            store,
+            env,
+            providerRouter,
+            mission.id,
+            userId,
+            options?.modelSelectionOverride,
+            options?.resolvedModelSelection,
+            credentialsByProvider
+          );
+          await graphCallbacks.emit('afterTool', {
+            graph,
+            graphRun,
+            node,
+            state,
+            invocation,
+            result: toolResult
+          });
+          return toolResult;
+        }
+        return executeStep(
           step,
-          ctx.dependencyResults,
+          dependencyResults,
           store,
           env,
           providerRouter,
@@ -224,45 +325,21 @@ export async function executeMission(
           options?.resolvedModelSelection,
           credentialsByProvider
         );
-        await updateStepStatus(store, mission, userId, step.id, 'done');
-        await callbacks?.onStepCompleted?.(step.id, result);
-
-        if (typeof result === 'string' && result.length > 0) {
-          void embedAndStore(store, null, {
-            userId,
-            content: `Mission step [${step.title}]: ${result}`,
-            segmentType: 'mission_step_result',
-            taskId: mission.id,
-            confidence: 0.7,
-          }).catch(() => undefined);
-        }
-
-        return result;
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        await updateStepStatus(store, mission, userId, step.id, 'failed');
-        await callbacks?.onStepFailed?.(step.id, errorMsg);
-        throw err;
       }
-    }
-  }));
-
-  try {
-    const result = await runDag(dagSteps, { maxConcurrency: 4, failFast: false });
-
-    const allDone = steps.every((s) => {
-      const stepResult = result.results[s.id];
-      const pattern = resolveStepPattern(s);
-      return stepResult !== undefined || pattern === 'human_gate';
     });
 
     await store.updateMission({
       missionId: mission.id,
       userId,
-      status: allDone ? 'completed' : 'blocked'
+      status: result.halted ? 'blocked' : 'completed'
     });
 
-    return { success: allDone, results: result.results, completedOrder: result.completedOrder };
+    return {
+      success: !result.halted,
+      results: result.results,
+      completedOrder: result.completedOrder,
+      graphRun: result.graphRun
+    };
   } catch (err) {
     await store.updateMission({
       missionId: mission.id,

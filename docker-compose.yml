@@ -1,13 +1,12 @@
 services:
   postgres:
     image: pgvector/pgvector:pg18
-    container_name: jarvis-postgres
     environment:
       POSTGRES_USER: jarvis
       POSTGRES_PASSWORD: jarvis
       POSTGRES_DB: jarvis
     ports:
-      - '5432:5432'
+      - '${JARVIS_POSTGRES_PORT:-5432}:5432'
     volumes:
       - jarvis-postgres18-data:/var/lib/postgresql
     healthcheck:
@@ -18,9 +17,8 @@ services:
 
   valkey:
     image: valkey/valkey:9
-    container_name: jarvis-valkey
     ports:
-      - '6380:6379'
+      - '${JARVIS_VALKEY_PORT:-6380}:6379'
     command: ['valkey-server', '--save', '', '--appendonly', 'no']
     healthcheck:
       test: ['CMD', 'valkey-cli', 'ping']
@@ -32,21 +30,20 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: jarvis-backend
     env_file:
       - ./backend/.env.example
       - ./backend/.env
     environment:
       STORE_BACKEND: postgres
       DATABASE_URL: postgres://jarvis:jarvis@postgres:5432/jarvis
-      ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://web:3000
+      ALLOWED_ORIGINS: http://localhost:${JARVIS_WEB_PORT:-3000},http://127.0.0.1:${JARVIS_WEB_PORT:-3000},http://web:3000
       PROVIDER_USER_CREDENTIALS_ENABLED: 'true'
       PROVIDER_OAUTH_OPENAI_ENABLED: 'true'
       PROVIDER_OAUTH_PUBLIC_CLIENT_FALLBACK: 'true'
       OPENAI_OAUTH_CLIENT_ID: app_EMoamEEZ73f0CkXaXp7hrann
       OPENAI_OAUTH_REDIRECT_URI: http://localhost:1455/auth/callback
     ports:
-      - '4000:4000'
+      - '${JARVIS_BACKEND_PORT:-4000}:4000'
       - '1455:1455'
     depends_on:
       postgres:
@@ -55,17 +52,44 @@ services:
         condition: service_healthy
     command: ['sh', '-c', 'pnpm db:init && pnpm start']
 
+  runner:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    profiles: ['runner']
+    env_file:
+      - ./backend/.env.example
+    environment:
+      STORE_BACKEND: postgres
+      DATABASE_URL: postgres://jarvis:jarvis@postgres:5432/jarvis
+      RUNNER_ENABLED: 'true'
+      RUNNER_REPO_ROOT: /workspace
+      RUNNER_STALL_TERMINATE_ENABLED: '${RUNNER_STALL_TERMINATE_ENABLED:-true}'
+      NOTIFICATION_WEBHOOK_ENABLED: '${NOTIFICATION_WEBHOOK_ENABLED:-false}'
+      NOTIFICATION_TELEGRAM_ENABLED: '${NOTIFICATION_TELEGRAM_ENABLED:-false}'
+    working_dir: /workspace/backend
+    volumes:
+      - .:/workspace
+      - jarvis-runner-node-modules:/workspace/backend/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    command: ['sh', '-c', 'pnpm install --frozen-lockfile && pnpm runner:local']
+
   web:
     build:
       context: ./web
       dockerfile: Dockerfile
-    container_name: jarvis-web
     environment:
-      NEXT_PUBLIC_BACKEND_BASE_URL: http://backend:4000
+      BACKEND_BASE_URL: http://backend:4000
+      NEXT_PUBLIC_BACKEND_BASE_URL: http://127.0.0.1:${JARVIS_BACKEND_PORT:-4000}
     ports:
-      - '3000:3000'
+      - '${JARVIS_WEB_PORT:-3000}:3000'
     depends_on:
       - backend
 
 volumes:
   jarvis-postgres18-data:
+  jarvis-runner-node-modules:

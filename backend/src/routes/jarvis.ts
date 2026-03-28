@@ -1,11 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
+import { getLinkedExternalWorkSummary } from '../external-work/service';
+import { buildRunnerCompatSteps } from '../graph-runtime/graph';
 import { executeJarvisRequest, mapMissionStatusToSessionStatus } from '../jarvis/request-service';
 import { resolveJarvisMemoryContext, resolveJarvisMemoryPlan, resolveJarvisMemoryPreferences } from '../jarvis/memory-context';
 import { getJarvisSessionOrchestrationSnapshot, syncJarvisSessionFromStages } from '../jarvis/stages';
 import { sendError, sendSuccess } from '../lib/http';
-import type { JarvisSessionRecord } from '../store/types';
+import type { ActionProposalRecord, JarvisSessionEventRecord, JarvisSessionRecord, JarvisSessionStageRecord, RunnerRunRecord } from '../store/types';
 import { WorkspaceProposalPayloadSchema } from '../workspaces/proposal';
 import { getWorkspaceRuntimeManager } from '../workspaces/runtime-manager';
 import type { RouteContext } from './types';
@@ -35,6 +37,50 @@ function isSessionLikelyStalled(session: JarvisSessionRecord): boolean {
   const updatedAtMs = Date.parse(session.updatedAt);
   if (!Number.isFinite(updatedAtMs)) return false;
   return Date.now() - updatedAtMs >= 2 * 60_000;
+}
+
+function readRunnerRunId(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function resolveLinkedRunnerRunId(input: {
+  events: JarvisSessionEventRecord[];
+  actions: ActionProposalRecord[];
+  stages: JarvisSessionStageRecord[];
+}): string | null {
+  for (const event of input.events) {
+    const id = readRunnerRunId(event.data?.runner_run_id);
+    if (id) {
+      return id;
+    }
+  }
+
+  for (const action of input.actions) {
+    const id = readRunnerRunId(action.payload?.runner_run_id);
+    if (id) {
+      return id;
+    }
+  }
+
+  for (const stage of input.stages) {
+    const id = readRunnerRunId(stage.artifactRefsJson?.runner_run_id);
+    if (id) {
+      return id;
+    }
+  }
+
+  return null;
+}
+
+function buildRunnerDetailPayload(run: RunnerRunRecord) {
+  return {
+    run,
+    graph: run.graphSpec,
+    node_runs: run.graphRun?.nodeRuns ?? [],
+    artifacts: run.artifacts,
+    session_state_summary: run.sessionState,
+    compat_steps: buildRunnerCompatSteps(run)
+  };
 }
 
 async function hydrateLinkedSessionState(ctx: RouteContext, session: JarvisSessionRecord): Promise<JarvisSessionRecord> {
@@ -230,6 +276,22 @@ export async function jarvisRoutes(app: FastifyInstance, ctx: RouteContext) {
     const actions = await store.listActionProposals({ userId, sessionId, limit: 20 });
     const briefing = hydrated.briefingId ? await store.getBriefingById({ userId, briefingId: hydrated.briefingId }) : null;
     const dossier = hydrated.dossierId ? await store.getDossierById({ userId, dossierId: hydrated.dossierId }) : null;
+    const linkedRunnerRunId = resolveLinkedRunnerRunId({
+      events,
+      actions,
+      stages: orchestration?.stages ?? []
+    });
+    const linkedRunner = linkedRunnerRunId
+      ? await store.getRunnerRunById({
+          runId: linkedRunnerRunId,
+          userId
+        })
+      : null;
+    const linkedExternalWork = await getLinkedExternalWorkSummary(store, {
+      userId,
+      targetType: 'session',
+      targetId: hydrated.id
+    });
     return sendSuccess(reply, request, 200, {
       session: hydrated,
       requested_capabilities: orchestration?.requestedCapabilities ?? [],
@@ -262,6 +324,8 @@ export async function jarvisRoutes(app: FastifyInstance, ctx: RouteContext) {
       monitoring_preference_applied: memoryContext?.preferences?.monitoringPreference ?? null,
       events,
       actions,
+      runner_detail: linkedRunner ? buildRunnerDetailPayload(linkedRunner) : null,
+      linked_external_work: linkedExternalWork,
       briefing,
       dossier
     });

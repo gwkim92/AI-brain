@@ -3,6 +3,7 @@
 import React, { useMemo, useState } from "react";
 import { AgentArgumentCard } from "@/components/ui/AgentArgumentCard";
 import { CouncilConsensusPanel } from "@/components/ui/CouncilConsensusPanel";
+import { RunnerGraphSummaryPanel } from "@/components/modules/RunnerGraphSummaryPanel";
 import { Network, AlertCircle, Loader2 } from "lucide-react";
 
 import { getCouncilRun, getJarvisSession, listProviderModels, listProviders, startCouncilRun, streamCouncilRunEvents } from "@/lib/api/endpoints";
@@ -759,6 +760,15 @@ export function CouncilModule() {
                     })}
                   </div>
                 </div>
+              </div>
+            )}
+            {jarvisSessionDetail && (
+              <div className="mt-4">
+                <RunnerGraphSummaryPanel
+                  detail={jarvisSessionDetail.runner_detail ?? null}
+                  emptyMessage={t("actionCenter.runner.empty")}
+                  className="rounded border border-cyan-500/20 bg-cyan-500/5 p-3"
+                />
               </div>
             )}
           </div>

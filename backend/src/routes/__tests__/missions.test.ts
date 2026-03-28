@@ -4,6 +4,26 @@ import { buildServer } from '../../server';
 
 const ENV_SNAPSHOT = { ...process.env };
 
+async function waitForMissionTerminalState(app: Awaited<ReturnType<typeof buildServer>>["app"], missionId: string) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/v1/missions/${missionId}`
+    });
+    const body = detail.json() as {
+      data: {
+        status: string;
+        steps: Array<{ status: string }>;
+      };
+    };
+    if (body.data.status !== 'running' && body.data.status !== 'draft') {
+      return body.data;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`mission ${missionId} did not reach a terminal state`);
+}
+
 describe('missions api', () => {
   beforeEach(() => {
     process.env.STORE_BACKEND = 'memory';
@@ -105,6 +125,9 @@ describe('missions api', () => {
       data: {
         id: string;
         title: string;
+        graph: {
+          nodes: Array<{ key: string }>;
+        };
         missionContract: {
           constraints: {
             maxCostUsd?: number;
@@ -115,6 +138,26 @@ describe('missions api', () => {
     expect(detailBody.data.id).toBe(created.data.id);
     expect(detailBody.data.title).toBe('Codebase refactor plan');
     expect(detailBody.data.missionContract.constraints.maxCostUsd).toBe(250);
+    expect(detailBody.data.graph.nodes.length).toBeGreaterThan(0);
+
+    const graph = await app.inject({
+      method: 'GET',
+      url: `/api/v1/missions/${created.data.id}/graph`
+    });
+
+    expect(graph.statusCode).toBe(200);
+    const graphBody = graph.json() as {
+      data: {
+        mission_id: string;
+        graph: {
+          nodes: Array<{ key: string }>;
+        };
+        compat_steps: Array<{ id: string }>;
+      };
+    };
+    expect(graphBody.data.mission_id).toBe(created.data.id);
+    expect(graphBody.data.graph.nodes.length).toBe(detailBody.data.graph.nodes.length);
+    expect(graphBody.data.compat_steps.length).toBeGreaterThan(0);
 
     await app.close();
   });
@@ -215,6 +258,92 @@ describe('missions api', () => {
     expect(patched.data.missionContract.constraints.maxRetriesPerStep).toBe(2);
     expect(patched.data.missionContract.approvalPolicy.mode).toBe('required_for_all');
     expect(patched.data.steps[0]?.status).toBe('running');
+
+    await app.close();
+  });
+
+  it('executes missions through the graph runtime and blocks human gate steps', async () => {
+    const { app } = await buildServer();
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/missions',
+      payload: {
+        title: 'Approval mission',
+        objective: 'Pause at human gate',
+        domain: 'mixed',
+        steps: [
+          {
+            type: 'human_gate',
+            title: 'Need approval',
+            description: 'Stop before executing'
+          }
+        ]
+      }
+    });
+    expect(create.statusCode).toBe(201);
+    const created = create.json() as {
+      data: {
+        id: string;
+        steps: Array<{ id: string }>;
+      };
+    };
+
+    const execute = await app.inject({
+      method: 'POST',
+      url: `/api/v1/missions/${created.data.id}/execute`,
+      payload: {}
+    });
+    expect(execute.statusCode).toBe(202);
+
+    const detail = await waitForMissionTerminalState(app, created.data.id);
+    expect(detail.status).toBe('blocked');
+    expect(detail.steps[0]?.status).toBe('blocked');
+
+    await app.close();
+  });
+
+  it('blocks tool_call missions when gateway policy requires approval', async () => {
+    const { app } = await buildServer();
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/missions',
+      payload: {
+        title: 'Tool gateway mission',
+        objective: 'Respect tool policy',
+        domain: 'mixed',
+        steps: [
+          {
+            type: 'tool_call',
+            title: 'Protected tool',
+            description: 'Do not run directly',
+            metadata: {
+              tool_name: 'git.push',
+              requiresApproval: true,
+              severity: 'high'
+            }
+          }
+        ]
+      }
+    });
+    expect(create.statusCode).toBe(201);
+    const created = create.json() as {
+      data: {
+        id: string;
+      };
+    };
+
+    const execute = await app.inject({
+      method: 'POST',
+      url: `/api/v1/missions/${created.data.id}/execute`,
+      payload: {}
+    });
+    expect(execute.statusCode).toBe(202);
+
+    const detail = await waitForMissionTerminalState(app, created.data.id);
+    expect(detail.status).toBe('blocked');
+    expect(detail.steps[0]?.status).toBe('blocked');
 
     await app.close();
   });

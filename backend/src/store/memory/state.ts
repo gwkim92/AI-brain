@@ -13,6 +13,8 @@ import type {
   DossierRecord,
   DossierSourceRecord,
   ExecutionRunRecord,
+  ExternalWorkItemRecord,
+  ExternalWorkLinkRecord,
   JarvisSessionEventRecord,
   JarvisSessionRecord,
   JarvisSessionStageRecord,
@@ -62,6 +64,8 @@ import type {
   RadarItemRecord,
   RadarOperatorFeedbackRecord,
   RadarRecommendationRecord,
+  RunnerRunRecord,
+  RunnerStateRecord,
   TaskEventRecord,
   TaskRecord,
   TelegramReportRecord,
@@ -174,6 +178,10 @@ export type MemoryIntelligenceAliasBindingRow = CapabilityAliasBindingRecord;
 export type MemoryIntelligenceFetchFailureRow = IntelligenceFetchFailureRecord;
 export type MemoryIntelligenceProviderHealthRow = ProviderHealthRecord;
 export type MemoryIntelligenceAliasRolloutRow = AliasRolloutRecord;
+export type MemoryRunnerRunRow = RunnerRunRecord;
+export type MemoryRunnerStateRow = RunnerStateRecord;
+export type MemoryExternalWorkItemRow = ExternalWorkItemRecord;
+export type MemoryExternalWorkLinkRow = ExternalWorkLinkRecord;
 
 export type MemoryStoreState = {
   users: Map<string, AuthUserWithPasswordRecord>;
@@ -215,6 +223,11 @@ export type MemoryStoreState = {
   assistantContextEventSequence: number;
   tasks: Map<string, TaskRecord>;
   taskEvents: Map<string, TaskEventRecord[]>;
+  externalWorkItems: Map<string, MemoryExternalWorkItemRow>;
+  externalWorkItemBySource: Map<string, string>;
+  externalWorkLinks: Map<string, MemoryExternalWorkLinkRow>;
+  runnerRuns: Map<string, MemoryRunnerRunRow>;
+  runnerState: MemoryRunnerStateRow | null;
   radarFeedSources: Map<string, MemoryRadarFeedSourceRow>;
   radarFeedCursors: Map<string, MemoryRadarFeedCursorRow>;
   radarIngestRuns: Map<string, MemoryRadarIngestRunRow>;
@@ -309,6 +322,11 @@ export function createMemoryStoreState(): MemoryStoreState {
     assistantContextEventSequence: 0,
     tasks: new Map<string, TaskRecord>(),
     taskEvents: new Map<string, TaskEventRecord[]>(),
+    externalWorkItems: new Map<string, MemoryExternalWorkItemRow>(),
+    externalWorkItemBySource: new Map<string, string>(),
+    externalWorkLinks: new Map<string, MemoryExternalWorkLinkRow>(),
+    runnerRuns: new Map<string, MemoryRunnerRunRow>(),
+    runnerState: null,
     radarFeedSources: new Map<string, MemoryRadarFeedSourceRow>(),
     radarFeedCursors: new Map<string, MemoryRadarFeedCursorRow>(),
     radarIngestRuns: new Map<string, MemoryRadarIngestRunRow>(),

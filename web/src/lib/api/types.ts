@@ -1,4 +1,5 @@
 import type { components as OpenApiComponents } from "@/lib/api/generated/openapi";
+import type { RunnerRunDetail } from "@/lib/api/runner-types";
 
 type ApiSchemas = OpenApiComponents["schemas"];
 
@@ -168,6 +169,60 @@ export type AiInvocationMetrics = {
   p95LatencyMs: number;
   providerDistribution: Array<{ provider: ProviderName; count: number }>;
   credentialSourceDistribution: Array<{ source: UserProviderCredentialSource; count: number }>;
+};
+export type ExternalWorkSource = "linear";
+export type ExternalWorkState = "queued" | "running" | "blocked" | "completed" | "failed" | "cancelled";
+export type ExternalWorkTriageStatus = "new" | "imported" | "ignored" | "sync_error";
+export type ExternalRouteAction =
+  | "task_code"
+  | "mission_code"
+  | "session_research"
+  | "mission_research"
+  | "session_council"
+  | "ignore";
+export type ExternalLinkTargetType = "task" | "mission" | "session" | "council_run" | "runner";
+export type LinkedExternalWorkSummary = {
+  itemId: string;
+  source: ExternalWorkSource;
+  identifier: string;
+  title: string;
+  url: string | null;
+  triageStatus: ExternalWorkTriageStatus;
+};
+export type ExternalWorkItemRecord = {
+  id: string;
+  userId: string;
+  source: ExternalWorkSource;
+  externalId: string;
+  identifier: string;
+  title: string;
+  description: string;
+  url: string | null;
+  state: ExternalWorkState;
+  labels: string[];
+  priority: number | null;
+  displayMetadata: Record<string, unknown>;
+  rawPayload: Record<string, unknown>;
+  triageStatus: ExternalWorkTriageStatus;
+  lastSeenAt: string;
+  lastSyncedAt: string | null;
+  lastSyncError: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+export type ExternalWorkLinkRecord = {
+  id: string;
+  externalWorkItemId: string;
+  targetType: ExternalLinkTargetType;
+  targetId: string;
+  role: "primary" | "derived";
+  createdAt: string;
+};
+export type ExternalWorkListResponse = {
+  enabled: boolean;
+  refresh_error: string | null;
+  counts: Record<ExternalWorkTriageStatus, number>;
+  items: ExternalWorkItemRecord[];
 };
 export type JarvisSessionIntent = "general" | "code" | "research" | "finance" | "news" | "council";
 export type JarvisSessionStatus = "queued" | "running" | "blocked" | "needs_approval" | "completed" | "failed" | "stale";
@@ -343,6 +398,8 @@ export type JarvisSessionDetail = {
   monitoring_preference_applied: string | null;
   events: JarvisSessionEventRecord[];
   actions: ActionProposalRecord[];
+  runner_detail: RunnerRunDetail | null;
+  linked_external_work?: LinkedExternalWorkSummary | null;
   briefing: BriefingRecord | null;
   dossier: DossierRecord | null;
 };
@@ -704,7 +761,9 @@ export type ProviderConnectionTestResult = {
 
 export type TaskMode = ApiSchemas["Task"]["mode"];
 export type TaskStatus = ApiSchemas["Task"]["status"];
-export type TaskRecord = ApiSchemas["Task"];
+export type TaskRecord = ApiSchemas["Task"] & {
+  linked_external_work?: LinkedExternalWorkSummary | null;
+};
 export type TaskEventRecord = ApiSchemas["TaskEventRecord"];
 
 export type MemoryCategory = ApiSchemas["MemorySnapshotEntry"]["category"];
@@ -1194,6 +1253,7 @@ export type CouncilRunRecord = ApiSchemas["CouncilRun"] & {
   structured_result?: CouncilStructuredResult | null;
   idempotent_replay?: boolean;
   session?: JarvisSessionRecord | null;
+  linked_external_work?: LinkedExternalWorkSummary | null;
 };
 
 export type CouncilRunRequest = OptionalByDefault<
@@ -1652,6 +1712,7 @@ export type MissionRecord = {
   status: MissionStatus;
   missionContract: MissionContract;
   steps: MissionStepRecord[];
+  linked_external_work?: LinkedExternalWorkSummary | null;
   createdAt: string;
   updatedAt: string;
 };

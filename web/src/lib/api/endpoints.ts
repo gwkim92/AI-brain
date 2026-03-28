@@ -1,5 +1,15 @@
 import { apiRequest, apiRequestEnvelope, buildApiUrl, createClientRequestId, tryParseSseData } from "@/lib/api/client";
 import type {
+  RunnerRunArtifactsResponse,
+  RunnerRunDetail,
+  RunnerRunRecord,
+  RunnerRunStatus,
+  RunnerSnapshot,
+  RunnerStateRecord,
+  RunnerWorkflowValidationResult,
+  RunnerStats,
+} from "@/lib/api/runner-types";
+import type {
   AssistantContextCreateRequest,
   AssistantContextEventRecord,
   AssistantContextGroundingEvidenceData,
@@ -50,6 +60,10 @@ import type {
   DossierRecord,
   DossierRefreshResult,
   SystemNotification,
+  ExternalRouteAction,
+  ExternalWorkItemRecord,
+  ExternalWorkLinkRecord,
+  ExternalWorkListResponse,
   WatcherKind,
   WatcherRecord,
   WatcherRunRecord,
@@ -838,6 +852,37 @@ export async function listJarvisSessions(query: { status?: JarvisSessionRecord["
   return apiRequest<{ sessions: JarvisSessionRecord[] }>("/api/v1/jarvis/sessions", {
     method: "GET",
     query,
+  });
+}
+
+export async function listExternalWork(query: { limit?: number; refresh?: 0 | 1 } = {}): Promise<ExternalWorkListResponse> {
+  return apiRequest<ExternalWorkListResponse>("/api/v1/inbox/external-work", {
+    method: "GET",
+    query,
+  });
+}
+
+export async function getExternalWorkItem(itemId: string): Promise<{
+  item: ExternalWorkItemRecord;
+  links: ExternalWorkLinkRecord[];
+}> {
+  return apiRequest<{
+    item: ExternalWorkItemRecord;
+    links: ExternalWorkLinkRecord[];
+  }>(`/api/v1/inbox/external-work/${itemId}`, { method: "GET" });
+}
+
+export async function routeExternalWorkItem(itemId: string, action: ExternalRouteAction): Promise<{
+  item: ExternalWorkItemRecord;
+  action: ExternalRouteAction;
+  target_type: ExternalWorkLinkRecord["targetType"] | null;
+  target_id: string | null;
+  target?: Record<string, unknown>;
+  existing: boolean;
+}> {
+  return apiRequest(`/api/v1/inbox/external-work/${itemId}/route`, {
+    method: "POST",
+    body: JSON.stringify({ action }),
   });
 }
 
@@ -1716,6 +1761,53 @@ export async function listTasks(query: TaskListQuery = {}): Promise<TaskRecord[]
 
 export async function getTask(taskId: string): Promise<TaskRecord> {
   return apiRequest<TaskRecord>(`/api/v1/tasks/${taskId}`, { method: "GET" });
+}
+
+export async function getRunnerState(): Promise<RunnerSnapshot> {
+  return apiRequest<RunnerSnapshot>("/api/v1/runner/state", {
+    method: "GET",
+  });
+}
+
+export async function requestRunnerRefresh(): Promise<{ accepted: boolean; state: RunnerStateRecord }> {
+  return apiRequest<{ accepted: boolean; state: RunnerStateRecord }>("/api/v1/runner/refresh", {
+    method: "POST",
+  });
+}
+
+export async function listRunnerRuns(query: {
+  status?: RunnerRunStatus;
+  limit?: number;
+  scope?: "mine" | "all";
+} = {}): Promise<{ runs: RunnerRunRecord[]; stats: RunnerStats }> {
+  return apiRequest<{ runs: RunnerRunRecord[]; stats: RunnerStats }>("/api/v1/runner/runs", {
+    method: "GET",
+    query,
+  });
+}
+
+export async function getRunnerRun(runId: string): Promise<RunnerRunDetail> {
+  return apiRequest<RunnerRunDetail>(`/api/v1/runner/runs/${runId}`, {
+    method: "GET",
+  });
+}
+
+export async function cancelRunnerRun(runId: string): Promise<{ run: RunnerRunRecord | null; terminated: boolean }> {
+  return apiRequest<{ run: RunnerRunRecord | null; terminated: boolean }>(`/api/v1/runner/runs/${runId}/cancel`, {
+    method: "POST",
+  });
+}
+
+export async function validateRunnerWorkflow(): Promise<RunnerWorkflowValidationResult> {
+  return apiRequest<RunnerWorkflowValidationResult>("/api/v1/runner/workflow/validate", {
+    method: "POST",
+  });
+}
+
+export async function getRunnerRunArtifacts(runId: string): Promise<RunnerRunArtifactsResponse> {
+  return apiRequest<RunnerRunArtifactsResponse>(`/api/v1/runner/runs/${runId}/artifacts`, {
+    method: "GET",
+  });
 }
 
 export async function getMemorySnapshot(query: { limit?: number } = {}): Promise<MemorySnapshotData> {

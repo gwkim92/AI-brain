@@ -92,6 +92,8 @@ export function createMemoryMissionRepository({
             title: step.title,
             description: step.description ?? '',
             route: step.route,
+            taskType: step.taskType,
+            metadata: step.metadata,
             status: step.status ?? 'pending',
             order: index + 1
           })),

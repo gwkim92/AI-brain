@@ -1,12 +1,14 @@
 import { createMemoryAssistantContextRepository } from './memory/assistant-context-repository';
 import { createMemoryAuthRepository } from './memory/auth-repository';
 import { createMemoryCouncilExecutionApprovalRepository } from './memory/council-execution-approval-repository';
+import { createMemoryExternalWorkRepository } from './memory/external-work-repository';
 import { initializeMemoryStore } from './memory/initializer';
 import { createMemoryJarvisRepository } from './memory/jarvis-repository';
 import { createMemoryIntelligenceRepository } from './memory/intelligence-repository';
 import { createMemoryMemoryRepository } from './memory/memory-repository';
 import { createMemoryMissionRepository } from './memory/mission-repository';
 import { createMemoryRadarUpgradeRepository } from './memory/radar-upgrade-repository';
+import { createMemoryRunnerRepository } from './memory/runner-repository';
 import { createMemoryStoreState, nowIso } from './memory/state';
 import { createMemoryTaskRepository } from './memory/task-repository';
 import { createMemoryTelegramReportRepository } from './memory/telegram-report-repository';
@@ -66,6 +68,16 @@ export function createMemoryStore(defaultUserId: string, defaultUserEmail = 'jar
     ...createMemoryTaskRepository({
       state,
       defaultUserId,
+      nowIso
+    }),
+
+    ...createMemoryExternalWorkRepository({
+      state,
+      nowIso
+    }),
+
+    ...createMemoryRunnerRepository({
+      state,
       nowIso
     }),
 

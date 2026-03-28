@@ -1,6 +1,9 @@
 node_modules
+.pnpm-store
 .next
 playwright-report
 test-results
 coverage
 dist
+.env.local
+.DS_Store

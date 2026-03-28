@@ -21,11 +21,12 @@ import {
   BookOpenText,
   ChevronLeft,
   ChevronRight,
+  GitBranch,
 } from "lucide-react";
 
 import { useHUD } from "@/components/providers/HUDProvider";
 import { useLocale } from "@/components/providers/LocaleProvider";
-import { canAccessWidget, useCurrentRole } from "@/lib/auth/role";
+import { canAccessWidget, hasMinRole, useCurrentRole } from "@/lib/auth/role";
 import { ApiRequestError } from "@/lib/api/client";
 import { authLogout } from "@/lib/api/endpoints";
 import { clearAuthSession } from "@/lib/auth/session";
@@ -417,6 +418,23 @@ function SidebarContent() {
           }}
           onTooltipChange={handleTooltipChange}
         />
+        {hasMinRole(role, "operator") ? (
+          <NavItem
+            testId="sidebar-workspace-runner"
+            compact={compact}
+            icon={<GitBranch size={18} />}
+            label={t("sidebar.item.runner.title")}
+            description={t("sidebar.item.runner.description")}
+            actionHint={t("sidebar.item.runner.hint")}
+            active={pathname.startsWith("/system/runner")}
+            onClick={() => {
+              if (!pathname.startsWith("/system/runner")) {
+                router.push("/system/runner");
+              }
+            }}
+            onTooltipChange={handleTooltipChange}
+          />
+        ) : null}
 
         {!compact && (
           <p className="px-2 pt-2 pb-1 text-[9px] font-mono tracking-widest text-white/40 uppercase">

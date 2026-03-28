@@ -46,6 +46,8 @@ import { councilRoutes } from './councils';
 import { executionRoutes } from './executions';
 import { workspaceRoutes } from './workspaces';
 import { taskRoutes } from './tasks';
+import { externalWorkRoutes } from './external-work';
+import { runnerRoutes } from './runner';
 import { watcherRoutes } from './watchers';
 import { memoryRoutes } from './memory';
 import { approvalRoutes } from './approvals';
@@ -419,6 +421,8 @@ export async function registerRoutes(
   await executionRoutes(app, ctx);
   await workspaceRoutes(app, ctx);
   await taskRoutes(app, ctx);
+  await externalWorkRoutes(app, ctx);
+  await runnerRoutes(app, ctx);
   await memoryRoutes(app, ctx);
   await approvalRoutes(app, ctx);
   await reportRoutes(app, ctx);
