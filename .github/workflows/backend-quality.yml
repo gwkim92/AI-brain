@@ -32,14 +32,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: "pnpm"
-          cache-dependency-path: backend/pnpm-lock.yaml
 
       - name: Enable Corepack
         run: corepack enable
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Build backend devcontainer base image
+        run: docker build -t brain-backend:latest .
 
       - name: Typecheck
         run: pnpm typecheck
@@ -69,8 +70,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: "pnpm"
-          cache-dependency-path: backend/pnpm-lock.yaml
 
       - name: Enable Corepack
         run: corepack enable

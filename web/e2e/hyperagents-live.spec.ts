@@ -99,9 +99,7 @@ test("runs the live HyperAgent operator flow against the real backend", async ({
 
   await expect(page.getByText(/candidate .* promotion 1\.000/u)).toBeVisible();
 
-  const operatorNote = page.getByRole("textbox", {
-    name: "accept/reject 이유, observed risk, follow-up 조건을 남긴다.",
-  });
+  const operatorNote = page.getByPlaceholder("accept/reject 이유, observed risk, follow-up 조건을 남긴다.");
   await operatorNote.fill("live integration e2e against the real backend");
 
   await page.getByRole("button", { name: "Accept" }).click();

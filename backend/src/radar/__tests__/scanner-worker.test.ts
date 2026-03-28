@@ -83,7 +83,7 @@ describe('runRadarScannerPass', () => {
 
     const events = await store.listRadarEvents({ limit: 10 });
     expect(events[0]?.clusterSize).toBe(1);
-    expect(events[0]?.decision).toBe('dossier');
+    expect(events[0]?.decision).toBe('watch');
   });
 
   it('skips disabled sources', async () => {

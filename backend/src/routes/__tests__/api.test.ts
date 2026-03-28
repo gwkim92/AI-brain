@@ -6956,6 +6956,7 @@ describe('API routes', () => {
   it('creates safe workspaces, runs low-risk commands, and routes high-risk member commands through approval proposals', async () => {
     const { app } = await buildServer();
     const userId = '55555555-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const expectedWorkspaceCwd = path.resolve(process.cwd(), '..');
 
     const createWorkspace = await app.inject({
       method: 'POST',
@@ -7118,7 +7119,7 @@ describe('API routes', () => {
         until: (response) => {
           if (response.statusCode !== 200) return false;
           const body = response.json() as { data: { workspace: { status: string }; chunks: Array<{ text: string }> } };
-          return body.data.workspace.status !== 'running' && body.data.chunks.some((chunk) => chunk.text.includes('/Users/woody/ai/brain'));
+          return body.data.workspace.status !== 'running' && body.data.chunks.some((chunk) => chunk.text.includes(expectedWorkspaceCwd));
         }
       }
     );
