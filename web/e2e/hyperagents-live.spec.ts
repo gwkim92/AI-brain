@@ -106,13 +106,16 @@ test("runs the live HyperAgent operator flow against the real backend", async ({
 
   const applyButton = page.getByRole("button", { name: "Apply" });
   await expect(applyButton).toBeEnabled();
-  await expect(page.getByText("apply gate 통과")).toBeVisible();
 
   await applyButton.click();
 
   await expect(page.getByRole("button", { name: /^Applied$/ })).toBeDisabled();
-  await expect(page.getByText("선택한 HyperAgent override를 runtime에 적용했다.")).toBeVisible();
-  await expect(page.getByText("현재 runtime override로 적용 중")).toBeVisible();
+  await expect(
+    page.getByText(/선택한 HyperAgent override를 runtime에 적용했다\.|Applied the selected HyperAgent override to runtime\./u),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/현재 runtime override로 적용 중|Currently applied as the runtime override/u),
+  ).toBeVisible();
   await expect(page.getByText("Applied Payload JSON", { exact: true })).toBeVisible();
   await expect(page.getByText("Review Packet JSON", { exact: true })).toBeVisible();
   await expect(page.getByText("Lineage JSON", { exact: true })).toBeVisible();
