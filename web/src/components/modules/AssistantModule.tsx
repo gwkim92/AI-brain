@@ -134,10 +134,15 @@ const ASSISTANT_SESSION_MESSAGES_STORAGE_KEY = "assistant-session-messages-v1";
 const MAX_ASSISTANT_SESSION_MESSAGES = 120;
 const ASSISTANT_SYSTEM_GREETING = "Connected to backend. Ask anything and I will route this to available providers.";
 const STALE_AUTO_CONTEXT_ERROR_CODE = "server_state_lost";
-const STALE_AUTO_CONTEXT_ERROR_CODES = new Set([STALE_AUTO_CONTEXT_ERROR_CODE, "SERVER_RUN_STATE_LOST"]);
+const STALE_AUTO_CONTEXT_ERROR_CODES = new Set([
+    STALE_AUTO_CONTEXT_ERROR_CODE,
+    "SERVER_RUN_STATE_LOST",
+    "stale_running_context_not_found_on_server",
+]);
 const STALE_AUTO_CONTEXT_MESSAGE = "Server state was lost for this run. Re-run this session.";
 const AUTO_CONTEXT_STALE_TIMEOUT_MS = 45_000;
 const SESSION_LAUNCH_HIGHLIGHT_MS = 90_000;
+const STALE_RUNNING_CONTEXT_GRACE_MS = AUTO_CONTEXT_STALE_TIMEOUT_MS;
 
 function isStaleAutoContext(context: AutoMissionContext): boolean {
     return typeof context.error === "string" && STALE_AUTO_CONTEXT_ERROR_CODES.has(context.error);
@@ -1550,9 +1555,39 @@ export function AssistantModule() {
         try {
             const rows = await listAssistantContexts({ limit: 120 });
             const restored = rows.contexts.map((record) => toAutoContextFromServer(record));
-            if (restored.length > 0) {
-                setAutoContexts((prev) => mergeAutoContexts(prev, restored));
-            }
+            const restoredByClientId = new Set(restored.map((context) => context.id));
+            const restoredByServerId = new Set(
+                restored
+                    .map((context) => context.serverContextId)
+                    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+            );
+            const nowMs = Date.now();
+            setAutoContexts((prev) => {
+                const merged = mergeAutoContexts(prev, restored);
+                return merged.map((context) => {
+                    if (context.status !== "running") {
+                        return context;
+                    }
+                    if (restoredByClientId.has(context.id)) {
+                        return context;
+                    }
+                    if (context.serverContextId && restoredByServerId.has(context.serverContextId)) {
+                        return context;
+                    }
+                    const startedAtMs = Date.parse(context.startedAt);
+                    const ageMs = Number.isNaN(startedAtMs) ? STALE_RUNNING_CONTEXT_GRACE_MS + 1 : nowMs - startedAtMs;
+                    if (ageMs <= STALE_RUNNING_CONTEXT_GRACE_MS) {
+                        return context;
+                    }
+                    return {
+                        ...context,
+                        status: "error",
+                        output: "Server state was lost for this run. Re-run this session.",
+                        completedAt: new Date().toISOString(),
+                        error: STALE_AUTO_CONTEXT_ERROR_CODE,
+                    };
+                });
+            });
             return true;
         } catch {
             return false;
@@ -3648,6 +3683,31 @@ export function AssistantModule() {
             return;
         }
 
+        const activeSession = sessions.find((session) => session.id === activeSessionId);
+        const matchingContexts = activeSession
+            ? autoContexts
+                  .filter((context) => context.id === activeSession.id || (activeSession.taskId && context.taskId === activeSession.taskId))
+                  .sort((left, right) => {
+                      const leftTime = Date.parse(left.completedAt ?? left.startedAt);
+                      const rightTime = Date.parse(right.completedAt ?? right.startedAt);
+                      const normalizedLeftTime = Number.isNaN(leftTime) ? 0 : leftTime;
+                      const normalizedRightTime = Number.isNaN(rightTime) ? 0 : rightTime;
+                      return normalizedRightTime - normalizedLeftTime;
+                  })
+            : [];
+        const freshestContext = matchingContexts[0];
+        const deliveredRevision =
+            freshestContext && activeSession?.lastDeliveredContextRevision
+                ? activeSession.lastDeliveredContextRevision[freshestContext.id]
+                : undefined;
+        const shouldPreferServerState =
+            Boolean(freshestContext) &&
+            (
+                freshestContext?.status === "running" ||
+                (typeof freshestContext?.revision === "number" &&
+                    (typeof deliveredRevision !== "number" || freshestContext.revision > deliveredRevision))
+            );
+
         const cached = sessionMessageStoreRef.current[activeSessionId];
         const hasMeaningfulCachedMessage =
             Array.isArray(cached) &&
@@ -3657,14 +3717,13 @@ export function AssistantModule() {
                     row.role === "user" ||
                     row.content !== ASSISTANT_SYSTEM_GREETING
             );
-        if (Array.isArray(cached) && cached.length > 0 && hasMeaningfulCachedMessage) {
+        if (Array.isArray(cached) && cached.length > 0 && hasMeaningfulCachedMessage && !shouldPreferServerState) {
             pendingSessionPersistSkipRef.current = activeSessionId;
             activeMessageSessionRef.current = activeSessionId;
             setMessages(cached);
             return;
         }
 
-        const activeSession = sessions.find((session) => session.id === activeSessionId);
         if (!activeSession) {
             const fallbackMessages = defaultMessages();
             pendingSessionPersistSkipRef.current = activeSessionId;
@@ -3675,28 +3734,21 @@ export function AssistantModule() {
             return;
         }
 
-        const candidateContexts = autoContexts
-            .filter((context) => context.status !== "running")
-            .filter((context) => context.id === activeSession.id || (activeSession.taskId && context.taskId === activeSession.taskId))
-            .sort((left, right) => {
-                const leftTime = Date.parse(left.completedAt ?? left.startedAt);
-                const rightTime = Date.parse(right.completedAt ?? right.startedAt);
-                const normalizedLeftTime = Number.isNaN(leftTime) ? 0 : leftTime;
-                const normalizedRightTime = Number.isNaN(rightTime) ? 0 : rightTime;
-                return normalizedRightTime - normalizedLeftTime;
-            });
-
-        const restoredContext = candidateContexts[0];
+        const restoredContext = freshestContext;
         if (restoredContext) {
             rememberContextSessionLink(restoredContext.id, activeSessionId);
         }
         const restoredGrounding = restoredContext ? resolveAutoContextGrounding(restoredContext) : undefined;
+        const restoredContent =
+            restoredContext?.output && restoredContext.output.trim().length > 0
+                ? restoredContext.output
+                : "작업이 진행 중입니다. 상단 단계 패널에서 실시간 상태를 확인하세요.";
         const fallbackMessages = restoredContext
             ? [
                 buildSystemMessage(),
                 {
                     role: "assistant" as const,
-                    content: restoredContext.output,
+                    content: restoredContent,
                     status: buildAutoContextStatusLabel(restoredContext),
                     contextId: restoredContext.id,
                     route: "auto_context" as const,
@@ -3713,6 +3765,26 @@ export function AssistantModule() {
         sessionMessageStoreRef.current[activeSessionId] = normalizedFallbackMessages;
         persistStoredSessionMessages(sessionMessageStoreRef.current);
     }, [activeSessionId, autoContexts, buildAutoContextStatusLabel, rememberContextSessionLink, resolveAutoContextGrounding, sessions]);
+
+    useEffect(() => {
+        if (!activeSessionId) {
+            return;
+        }
+        void syncAutoContextsWithRetry({ attempts: 2, baseDelayMs: 160 });
+    }, [activeSessionId, syncAutoContextsWithRetry]);
+
+    useEffect(() => {
+        const hasRunning = autoContexts.some((context) => context.status === "running");
+        if (!hasRunning) {
+            return;
+        }
+        const timer = window.setInterval(() => {
+            void syncAutoContexts();
+        }, 15_000);
+        return () => {
+            window.clearInterval(timer);
+        };
+    }, [autoContexts, syncAutoContexts]);
 
     useEffect(() => {
         if (!activeSessionId || activeMessageSessionRef.current !== activeSessionId) {

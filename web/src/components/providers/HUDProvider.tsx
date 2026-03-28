@@ -606,7 +606,7 @@ export function HUDProvider({ children }: { children: ReactNode }) {
                 derivedWidgets = ["assistant", "tasks"];
             }
 
-            const resolvedTargetMountedWidgets = Array.from(
+            let resolvedTargetMountedWidgets = Array.from(
                 new Set(
                     (targetMountedWidgets.length > 0 && !hasOnlyInboxMounted
                         ? targetMountedWidgets
@@ -622,6 +622,11 @@ export function HUDProvider({ children }: { children: ReactNode }) {
             const restoreMode =
                 options?.restoreMode ??
                 (deterministicRestoreEnabled ? "focus_only" : target.restoreMode ?? "full");
+            if (restoreMode === "full" && (target.taskId || target.missionId)) {
+                resolvedTargetMountedWidgets = Array.from(
+                    new Set([...resolvedTargetMountedWidgets, "assistant", "tasks", "approvals"])
+                );
+            }
             const candidateFocused = resolvePreferredSessionFocus(
                 resolvedTargetMountedWidgets,
                 targetActiveWidgets,

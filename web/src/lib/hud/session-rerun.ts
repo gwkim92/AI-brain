@@ -1,4 +1,5 @@
 export const JARVIS_SESSION_RERUN_EVENT = "jarvis:session-rerun";
+export const SESSION_RERUN_EVENT = JARVIS_SESSION_RERUN_EVENT;
 
 export type SessionRerunPayload = {
   sessionId: string;

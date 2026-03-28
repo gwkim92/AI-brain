@@ -2,14 +2,14 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ListTodo, RefreshCw, Search } from "lucide-react";
+import { AlertTriangle, ListTodo, RefreshCw, Search } from "lucide-react";
 
+import { useHUD } from "@/components/providers/HUDProvider";
 import { ApiRequestError } from "@/lib/api/client";
 import { listJarvisSessions, listTasks, streamDashboardOverviewEvents } from "@/lib/api/endpoints";
 import type { JarvisSessionRecord, TaskRecord, TaskStatus } from "@/lib/api/types";
 import { AsyncState } from "@/components/ui/AsyncState";
 import { TaskStatusBadge } from "@/components/ui/TaskStatusBadge";
-import { useHUD } from "@/components/providers/HUDProvider";
 import { subscribeJarvisDataRefresh } from "@/lib/hud/data-refresh";
 import { useLocale } from "@/components/providers/LocaleProvider";
 import type { TranslationKey } from "@/lib/locale";

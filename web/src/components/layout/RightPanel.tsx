@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { AlertCircle, Clock3, PlayCircle, Sparkles, Layers, X } from "lucide-react";
+import { AlertCircle, Check, Clock3, Copy, PlayCircle, RotateCcw, Sparkles, Layers, X } from "lucide-react";
 import { useHUD } from "@/components/providers/HUDProvider";
 import { useLocale } from "@/components/providers/LocaleProvider";
 import { ApiRequestError } from "@/lib/api/client";
@@ -175,6 +175,7 @@ export function RightPanel() {
     const [runtimeRecovered, setRuntimeRecovered] = useState(false);
     const [runtimeDebugEnabled, setRuntimeDebugEnabled] = useState(false);
     const [runtimeEvents, setRuntimeEvents] = useState<Array<JarvisRuntimeEventDetail>>([]);
+    const [copiedSessionId, setCopiedSessionId] = useState<string | null>(null);
     const optimisticRunningTaskEnabled = isFeatureEnabled("assistant.optimistic_running_task", true);
     const mountedRef = useRef(true);
 
@@ -328,6 +329,48 @@ export function RightPanel() {
             nextSearchParams.set("replace", "1");
             nextSearchParams.set("activation", "focus_only");
             router.push(`/studio?${nextSearchParams.toString()}`);
+        }
+    };
+
+    const copySessionIdentifiers = useCallback(async (session: JarvisSessionView) => {
+        if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+            return;
+        }
+        const payload = [
+            `session_id=${session.id}`,
+            session.taskId ? `task_id=${session.taskId}` : null,
+            session.missionId ? `mission_id=${session.missionId}` : null,
+        ]
+            .filter((line): line is string => Boolean(line))
+            .join("\n");
+        if (!payload) {
+            return;
+        }
+        try {
+            await navigator.clipboard.writeText(payload);
+            setCopiedSessionId(session.id);
+            window.setTimeout(() => {
+                setCopiedSessionId((current) => (current === session.id ? null : current));
+            }, 1200);
+        } catch {
+            // ignore clipboard failures
+        }
+    }, []);
+
+    const rerunSession = (session: JarvisSessionView) => {
+        const prompt = session.prompt.trim();
+        if (prompt.length === 0) {
+            return;
+        }
+        dispatchSessionRerun({
+            sessionId: session.id,
+            prompt,
+            taskId: session.taskId ?? undefined,
+            missionId: session.missionId ?? undefined,
+        });
+        const targetSession = mergedSessions.find((row) => row.id === session.id);
+        if (targetSession) {
+            activateSession(targetSession, "full");
         }
     };
 
@@ -725,6 +768,14 @@ export function RightPanel() {
                                                         {t("rightPanel.staleReason", { value: hudSession?.staleReason ?? "server_state_lost" })}
                                                     </span>
                                                 )}
+                                                <span className="rounded border border-white/15 px-1.5 py-0.5 text-white/45">
+                                                    sid:{session.id.slice(0, 8)}
+                                                </span>
+                                                {session.taskId && (
+                                                    <span className="rounded border border-cyan-500/25 px-1.5 py-0.5 text-cyan-200/85">
+                                                        task:{session.taskId.slice(0, 8)}
+                                                    </span>
+                                                )}
                                             </div>
                                         </div>
                                     </div>
@@ -754,39 +805,48 @@ export function RightPanel() {
                                     >
                                         {t("rightPanel.focusOnly")}
                                     </button>
-                                    {isStale && (
-                                        <button
-                                            type="button"
-                                            onClick={(e) => {
-                                                e.preventDefault();
-                                                e.stopPropagation();
-                                                dispatchSessionRerun({
-                                                    sessionId: session.id,
-                                                    prompt: session.prompt,
-                                                    taskId: session.taskId ?? undefined,
-                                                    missionId: session.missionId ?? undefined,
-                                                });
-                                            }}
-                                            className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[9px] font-mono text-amber-200 hover:bg-amber-500/20"
-                                            data-testid={`session-rerun-${session.id}`}
-                                        >
-                                            {t("rightPanel.rerun")}
-                                        </button>
-                                    )}
-                                    {hudSession ? (
-                                        <button
-                                            type="button"
-                                            onClick={(e) => {
-                                                e.preventDefault();
-                                                e.stopPropagation();
-                                                archiveSession(session.id);
-                                            }}
-                                            className="ml-auto text-white/40 hover:text-white p-1 rounded"
-                                            aria-label={`Archive session ${session.id}`}
-                                        >
-                                            <X size={12} />
-                                        </button>
-                                    ) : null}
+                                    <button
+                                        type="button"
+                                        onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            void copySessionIdentifiers(session);
+                                        }}
+                                        className="rounded border border-white/20 bg-white/5 px-2 py-1 text-[9px] font-mono text-white/70 hover:bg-white/10 inline-flex items-center gap-1"
+                                        aria-label={`Copy identifiers for session ${session.id}`}
+                                    >
+                                        {copiedSessionId === session.id ? <Check size={10} /> : <Copy size={10} />}
+                                        {copiedSessionId === session.id ? "copied" : "copy ids"}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            rerunSession(session);
+                                        }}
+                                        className={`rounded border px-2 py-1 text-[9px] font-mono inline-flex items-center gap-1 ${
+                                            isStale
+                                                ? "border-amber-500/40 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20"
+                                                : "border-cyan-500/30 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20"
+                                        }`}
+                                        aria-label={`Re-run session ${session.id}`}
+                                    >
+                                        <RotateCcw size={10} />
+                                        {t("rightPanel.rerun")}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            archiveSession(session.id);
+                                        }}
+                                        className="ml-auto text-white/40 hover:text-white p-1 rounded"
+                                        aria-label={`Archive session ${session.id}`}
+                                    >
+                                        <X size={12} />
+                                    </button>
                                 </div>
                             </div>
                         );
