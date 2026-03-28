@@ -3,10 +3,17 @@ import type {
   IntelligenceCapabilityAlias,
   IntelligenceDomainId,
   IntelligenceEventFamily,
-  IntelligenceExecutionStatus,
   IntelligenceScanRunStatus,
   IntelligenceSourceKind,
   CouncilRunRecord,
+  ArtifactRecord,
+  ExecutionGraphSpec,
+  ExternalLinkTargetType,
+  ExternalWorkItemRecord,
+  ExternalWorkLinkRole,
+  ExternalWorkSource,
+  ExternalWorkTriageStatus,
+  GraphRunRecord,
   ExecutionRunRecord,
   MissionRecord,
   MissionStepRecord,
@@ -17,8 +24,18 @@ import type {
   RadarItemStatus,
   RadarPromotionDecision,
   RadarRiskBand,
+  RunnerClaimState,
+  RunnerProofOfWork,
+  RunnerRunStatus,
+  RunnerStateErrorRecord,
+  RunnerVerificationSummary,
+  RunnerWorkspaceKind,
   TaskRecord,
   UpgradeStatus,
+  WorkItem,
+  WorkflowValidationError,
+  WorkflowValidationStatus,
+  SessionStateSnapshot,
   UserRole
 } from '../types';
 
@@ -49,6 +66,84 @@ export type TaskEventRow = {
   trace_id: string | null;
   span_id: string | null;
   created_at: Date;
+};
+
+export type ExternalWorkItemRow = {
+  id: string;
+  user_id: string;
+  source: ExternalWorkSource;
+  external_id: string;
+  identifier: string;
+  title: string;
+  description: string;
+  url: string | null;
+  state: ExternalWorkItemRecord['state'];
+  priority: number | null;
+  labels_json: string[];
+  triage_status: ExternalWorkTriageStatus;
+  display_metadata_json: Record<string, unknown>;
+  raw_payload_json: Record<string, unknown>;
+  last_seen_at: Date;
+  last_synced_at: Date | null;
+  last_sync_error: string | null;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type ExternalWorkLinkRow = {
+  id: string;
+  external_work_item_id: string;
+  target_type: ExternalLinkTargetType;
+  target_id: string;
+  role: ExternalWorkLinkRole;
+  created_at: Date;
+};
+
+export type RunnerStateRow = {
+  id: string;
+  dispatch_enabled: boolean;
+  refresh_requested_at: Date | null;
+  refreshed_at: Date | null;
+  workflow_path: string | null;
+  workflow_validation: WorkflowValidationStatus;
+  workflow_errors_json: WorkflowValidationError[];
+  last_loaded_workflow_at: Date | null;
+  last_loop_started_at: Date | null;
+  active_sources_json: WorkItem['source'][];
+  recent_errors_json: RunnerStateErrorRecord[];
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type RunnerRunRow = {
+  id: string;
+  user_id: string;
+  work_item_json: WorkItem;
+  claim_state: RunnerClaimState;
+  status: RunnerRunStatus;
+  attempt_count: number;
+  session_snapshot_json: Record<string, unknown> | null;
+  workspace_id: string | null;
+  workspace_path: string | null;
+  workspace_kind: RunnerWorkspaceKind;
+  branch_name: string | null;
+  pr_url: string | null;
+  pr_number: number | null;
+  verification_summary_json: RunnerVerificationSummary;
+  proof_of_work_json: RunnerProofOfWork;
+  last_process_pid: number | null;
+  blocked_reason: string | null;
+  failure_reason: string | null;
+  next_retry_at: Date | null;
+  started_at: Date | null;
+  completed_at: Date | null;
+  last_heartbeat_at: Date | null;
+  graph_spec_json: ExecutionGraphSpec | null;
+  graph_run_json: GraphRunRecord | null;
+  artifacts_json: ArtifactRecord[] | null;
+  session_state_json: SessionStateSnapshot | null;
+  created_at: Date;
+  updated_at: Date;
 };
 
 export type RadarItemRow = {

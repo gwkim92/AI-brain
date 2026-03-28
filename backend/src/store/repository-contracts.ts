@@ -132,6 +132,29 @@ export const TASK_REPOSITORY_METHOD_KEYS = [
   'listTaskEvents'
 ] as const satisfies readonly (keyof JarvisStore)[];
 
+export const EXTERNAL_WORK_REPOSITORY_METHOD_KEYS = [
+  'upsertExternalWorkItems',
+  'listExternalWorkItems',
+  'getExternalWorkItemById',
+  'getExternalWorkItemBySource',
+  'updateExternalWorkItem',
+  'createExternalWorkLink',
+  'listExternalWorkLinksByItem',
+  'listExternalWorkLinksByTarget',
+  'getPrimaryExternalWorkLinkByItem',
+  'getPrimaryExternalWorkLinkByTarget'
+] as const satisfies readonly (keyof JarvisStore)[];
+
+export const RUNNER_REPOSITORY_METHOD_KEYS = [
+  'getRunnerState',
+  'upsertRunnerState',
+  'createRunnerRun',
+  'listRunnerRuns',
+  'getRunnerRunById',
+  'findActiveRunnerRunByWorkItem',
+  'updateRunnerRun'
+] as const satisfies readonly (keyof JarvisStore)[];
+
 export const RADAR_UPGRADE_REPOSITORY_METHOD_KEYS = [
   'upsertRadarFeedSources',
   'listRadarFeedSources',
@@ -283,6 +306,8 @@ export const STORE_METHOD_KEY_GROUPS = {
   mission: MISSION_REPOSITORY_METHOD_KEYS,
   assistant_context: ASSISTANT_CONTEXT_REPOSITORY_METHOD_KEYS,
   task: TASK_REPOSITORY_METHOD_KEYS,
+  external_work: EXTERNAL_WORK_REPOSITORY_METHOD_KEYS,
+  runner: RUNNER_REPOSITORY_METHOD_KEYS,
   radar_upgrade: RADAR_UPGRADE_REPOSITORY_METHOD_KEYS,
   telegram_report: TELEGRAM_REPORT_REPOSITORY_METHOD_KEYS,
   council_execution_approval: COUNCIL_EXECUTION_APPROVAL_REPOSITORY_METHOD_KEYS,
@@ -429,6 +454,31 @@ export type AssistantContextRepositoryContract = Pick<
 export type TaskRepositoryContract = Pick<
   JarvisStore,
   'createTask' | 'setTaskStatus' | 'listTasks' | 'getTaskById' | 'appendTaskEvent' | 'listTaskEvents'
+>;
+
+export type ExternalWorkRepositoryContract = Pick<
+  JarvisStore,
+  | 'upsertExternalWorkItems'
+  | 'listExternalWorkItems'
+  | 'getExternalWorkItemById'
+  | 'getExternalWorkItemBySource'
+  | 'updateExternalWorkItem'
+  | 'createExternalWorkLink'
+  | 'listExternalWorkLinksByItem'
+  | 'listExternalWorkLinksByTarget'
+  | 'getPrimaryExternalWorkLinkByItem'
+  | 'getPrimaryExternalWorkLinkByTarget'
+>;
+
+export type RunnerRepositoryContract = Pick<
+  JarvisStore,
+  | 'getRunnerState'
+  | 'upsertRunnerState'
+  | 'createRunnerRun'
+  | 'listRunnerRuns'
+  | 'getRunnerRunById'
+  | 'findActiveRunnerRunByWorkItem'
+  | 'updateRunnerRun'
 >;
 
 export type RadarUpgradeRepositoryContract = Pick<

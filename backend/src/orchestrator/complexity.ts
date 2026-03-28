@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
+import { createExecutionGraphFromPlan } from '../graph-runtime/graph';
+
 export type ComplexityLevel = 'simple' | 'moderate' | 'complex';
 
 const MULTI_STEP_KEYWORDS =
@@ -41,20 +43,31 @@ export function classifyComplexity(prompt: string): ComplexityLevel {
 }
 
 export function buildSimplePlan(prompt: string) {
+  const steps = [
+    {
+      id: randomUUID(),
+      type: 'llm_generate' as const,
+      taskType: 'execute',
+      title: 'Execute request',
+      description: prompt,
+      order: 1,
+      dependencies: []
+    }
+  ];
+
   return {
     title: prompt.slice(0, 80),
     objective: prompt,
     domain: 'mixed',
-    steps: [
-      {
-        id: randomUUID(),
-        type: 'llm_generate' as const,
-        taskType: 'execute',
-        title: 'Execute request',
-        description: prompt,
-        order: 1,
-        dependencies: []
-      }
-    ]
+    graph: createExecutionGraphFromPlan({
+      title: prompt.slice(0, 80),
+      objective: prompt,
+      domain: 'mixed',
+      steps: steps.map((step) => ({
+        ...step,
+        route: '/api/v1/tasks'
+      }))
+    }),
+    steps
   };
 }

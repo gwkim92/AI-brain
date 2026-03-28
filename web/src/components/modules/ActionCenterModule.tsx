@@ -5,6 +5,7 @@ import { CheckCircle2, ShieldQuestion, XCircle } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 
 import { useLocale } from "@/components/providers/LocaleProvider";
+import { RunnerGraphSummaryPanel } from "@/components/modules/RunnerGraphSummaryPanel";
 import { ApiRequestError } from "@/lib/api/client";
 import { approveJarvisAction, getJarvisSession, listJarvisSessions, rejectJarvisAction } from "@/lib/api/endpoints";
 import { dispatchJarvisDataRefresh, subscribeJarvisDataRefresh } from "@/lib/hud/data-refresh";
@@ -745,6 +746,11 @@ export function ActionCenterModule() {
                 </div>
                 <p className="mt-1 text-xs font-mono text-white/45">{selected.session.prompt}</p>
               </div>
+              <RunnerGraphSummaryPanel
+                detail={selected?.runner_detail ?? null}
+                emptyMessage={t("actionCenter.runner.empty")}
+                className="rounded border border-cyan-500/20 bg-cyan-500/5 p-3"
+              />
               <div className="space-y-3">
                 {pendingActions.length === 0 && <p className="text-xs font-mono text-white/45">{t("actionCenter.noPendingActions")}</p>}
                 {pendingActions.map((action) => {

@@ -42,6 +42,8 @@ describe('parsePlanFromLLMOutput', () => {
     expect(step1?.id).not.toBe('step-1');
     expect(step2?.id).not.toBe('step-2');
     expect(step2?.dependencies).toEqual([step1?.id]);
+    expect(plan.graph.nodes).toHaveLength(2);
+    expect(plan.graph.entryNodeIds).toEqual([step1?.id]);
   });
 
   it('replaces llm-provided uuid step ids to avoid cross-plan collisions', () => {
@@ -81,5 +83,7 @@ describe('parsePlanFromLLMOutput', () => {
     expect(step1?.id).not.toBe('00000000-0000-4000-8000-000000000001');
     expect(step2?.id).not.toBe('00000000-0000-4000-8000-000000000002');
     expect(step2?.dependencies).toEqual([step1?.id]);
+    expect(plan.graph.nodes[0]?.kind).toBe('tool');
+    expect(plan.graph.nodes[1]?.dependencies).toEqual([step1?.id]);
   });
 });

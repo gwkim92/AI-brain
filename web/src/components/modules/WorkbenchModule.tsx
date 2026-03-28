@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { RunnerGraphSummaryPanel } from "@/components/modules/RunnerGraphSummaryPanel";
 import { CodeExecutionPanel } from "@/components/ui/CodeExecutionPanel";
 import { ComputeResultPanel } from "@/components/ui/ComputeResultPanel";
 import {
@@ -1001,6 +1002,15 @@ export function WorkbenchModule() {
                   })}
                 </div>
               </div>
+            </div>
+          )}
+          {jarvisSessionDetail && (
+            <div className="mt-4">
+              <RunnerGraphSummaryPanel
+                detail={jarvisSessionDetail.runner_detail ?? null}
+                emptyMessage={t("actionCenter.runner.empty")}
+                className="rounded border border-cyan-500/20 bg-cyan-500/5 p-3"
+              />
             </div>
           )}
         </div>

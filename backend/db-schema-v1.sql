@@ -31,6 +31,26 @@ BEGIN
     CREATE TYPE task_status AS ENUM ('queued', 'running', 'blocked', 'retrying', 'done', 'failed', 'cancelled');
   END IF;
 
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'external_work_source') THEN
+    CREATE TYPE external_work_source AS ENUM ('linear');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'external_work_state') THEN
+    CREATE TYPE external_work_state AS ENUM ('queued', 'running', 'blocked', 'completed', 'failed', 'cancelled');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'external_work_triage_status') THEN
+    CREATE TYPE external_work_triage_status AS ENUM ('new', 'imported', 'ignored', 'sync_error');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'external_work_link_role') THEN
+    CREATE TYPE external_work_link_role AS ENUM ('primary', 'derived');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'external_link_target_type') THEN
+    CREATE TYPE external_link_target_type AS ENUM ('task', 'mission', 'session', 'council_run', 'runner');
+  END IF;
+
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'radar_item_status') THEN
     CREATE TYPE radar_item_status AS ENUM ('new', 'scored', 'archived');
   END IF;
@@ -138,6 +158,99 @@ CREATE TABLE IF NOT EXISTS task_events (
   trace_id TEXT,
   span_id TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS external_work_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  source external_work_source NOT NULL,
+  external_id TEXT NOT NULL,
+  identifier TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL,
+  url TEXT,
+  state external_work_state NOT NULL,
+  priority INTEGER,
+  labels_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  triage_status external_work_triage_status NOT NULL DEFAULT 'new',
+  display_metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  raw_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_synced_at TIMESTAMPTZ,
+  last_sync_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, source, external_id)
+);
+
+CREATE TABLE IF NOT EXISTS external_work_links (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  external_work_item_id UUID NOT NULL REFERENCES external_work_items(id) ON DELETE CASCADE,
+  target_type external_link_target_type NOT NULL,
+  target_id TEXT NOT NULL,
+  role external_work_link_role NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (external_work_item_id, target_type, target_id, role)
+);
+
+CREATE TABLE IF NOT EXISTS runner_state (
+  id TEXT PRIMARY KEY,
+  dispatch_enabled BOOLEAN NOT NULL DEFAULT false,
+  refresh_requested_at TIMESTAMPTZ,
+  refreshed_at TIMESTAMPTZ,
+  workflow_path TEXT,
+  workflow_validation TEXT NOT NULL DEFAULT 'unknown',
+  workflow_errors_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  last_loaded_workflow_at TIMESTAMPTZ,
+  last_loop_started_at TIMESTAMPTZ,
+  active_sources_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  recent_errors_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (workflow_validation IN ('unknown', 'valid', 'invalid'))
+);
+
+CREATE TABLE IF NOT EXISTS runner_runs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  work_item_json JSONB NOT NULL,
+  claim_state TEXT NOT NULL DEFAULT 'claimed',
+  status TEXT NOT NULL DEFAULT 'claimed',
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  session_snapshot_json JSONB,
+  workspace_id TEXT,
+  workspace_path TEXT,
+  workspace_kind TEXT NOT NULL DEFAULT 'worktree',
+  branch_name TEXT,
+  pr_url TEXT,
+  pr_number INTEGER,
+  verification_summary_json JSONB NOT NULL DEFAULT '{"commands":[]}'::jsonb,
+  proof_of_work_json JSONB NOT NULL DEFAULT '{"verificationPassed":false,"changedFiles":[],"gitStatus":"","summary":[]}'::jsonb,
+  last_process_pid INTEGER,
+  blocked_reason TEXT,
+  failure_reason TEXT,
+  next_retry_at TIMESTAMPTZ,
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  last_heartbeat_at TIMESTAMPTZ,
+  graph_spec_json JSONB,
+  graph_run_json JSONB,
+  artifacts_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  session_state_json JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (claim_state IN ('unclaimed', 'claimed', 'running', 'retry_queued', 'released')),
+  CHECK (status IN (
+    'claimed',
+    'running',
+    'retry_queued',
+    'blocked_needs_approval',
+    'human_review_ready',
+    'failed_terminal',
+    'cancelled',
+    'released'
+  )),
+  CHECK (workspace_kind IN ('worktree', 'devcontainer'))
 );
 
 CREATE TABLE IF NOT EXISTS assistant_contexts (
@@ -510,6 +623,9 @@ CREATE INDEX IF NOT EXISTS idx_assistant_context_grounding_claims_context_order 
 CREATE INDEX IF NOT EXISTS idx_assistant_context_grounding_claim_citations_claim_order ON assistant_context_grounding_claim_citations(claim_id, citation_order ASC);
 CREATE INDEX IF NOT EXISTS idx_task_events_task_id_created_at ON task_events(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_task_events_trace_id_created_at ON task_events(trace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_external_work_items_user_updated_at ON external_work_items(user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_external_work_items_triage_status ON external_work_items(user_id, triage_status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_external_work_links_target ON external_work_links(target_type, target_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memory_segments_user_id_created_at ON memory_segments(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memory_segments_tsv ON memory_segments USING GIN(content_tsv);
 CREATE INDEX IF NOT EXISTS idx_memory_segments_embedding_hnsw ON memory_segments USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);

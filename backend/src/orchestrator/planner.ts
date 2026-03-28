@@ -6,7 +6,8 @@ import type { ProviderRouter } from '../providers/router';
 import type { ProviderCredentialsByProvider } from '../providers/types';
 import { withAiInvocationTrace } from '../observability/ai-trace';
 import type { AppEnv } from '../config/env';
-import type { JarvisStore, MissionStepPattern } from '../store/types';
+import { createExecutionGraphFromPlan } from '../graph-runtime/graph';
+import type { ExecutionGraphSpec, JarvisStore, MissionStepPattern } from '../store/types';
 
 export type PlanStep = {
   id: string;
@@ -23,6 +24,7 @@ export type OrchestratorPlan = {
   title: string;
   objective: string;
   domain: string;
+  graph: ExecutionGraphSpec;
   steps: PlanStep[];
 };
 
@@ -197,10 +199,28 @@ export function parsePlanFromLLMOutput(output: string): OrchestratorPlan {
     };
   });
 
+  const graph = createExecutionGraphFromPlan({
+    title: String(parsed.title),
+    objective: String(parsed.objective),
+    domain: String(parsed.domain ?? 'mixed'),
+    steps: steps.map((step) => ({
+      id: step.id,
+      type: step.type,
+      taskType: step.taskType,
+      title: step.title,
+      description: step.description,
+      order: step.order,
+      dependencies: step.dependencies,
+      route: patternToRoute(step.type),
+      metadata: step.metadata
+    }))
+  });
+
   return {
     title: String(parsed.title),
     objective: String(parsed.objective),
     domain: String(parsed.domain ?? 'mixed'),
+    graph,
     steps
   };
 }

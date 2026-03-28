@@ -12,7 +12,11 @@ export type NotificationEventType =
   | 'watcher_hit'
   | 'briefing_ready'
   | 'action_proposal_ready'
-  | 'session_stalled';
+  | 'session_stalled'
+  | 'runner_workflow_invalid'
+  | 'runner_run_stalled'
+  | 'runner_handoff_ready'
+  | 'runner_run_failed';
 
 export type SystemNotification = {
   id: string;
@@ -312,6 +316,62 @@ export function createNotificationService(input?: {
     }, { dedupeKey: `session_stalled:${sessionId}`, dedupeWindowMs: 60_000 });
   }
 
+  function emitRunnerWorkflowInvalid(sourcePath: string | null, errors: string[]): void {
+    emit({
+      id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: 'runner_workflow_invalid',
+      title: 'Runner Workflow Invalid',
+      message: `${sourcePath ?? 'WORKFLOW.md'} failed validation${errors.length > 0 ? `: ${errors.join('; ')}` : '.'}`,
+      severity: 'critical',
+      entityType: 'runner_workflow',
+      entityId: sourcePath ?? 'workflow',
+      actionUrl: '/system/runner',
+      createdAt: new Date().toISOString()
+    }, { dedupeKey: `runner_workflow_invalid:${sourcePath ?? 'workflow'}:${errors.join('|')}`, dedupeWindowMs: 60_000 });
+  }
+
+  function emitRunnerRunStalled(runId: string, title: string, reason: string): void {
+    emit({
+      id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: 'runner_run_stalled',
+      title: `Runner Stalled: ${title}`,
+      message: reason,
+      severity: 'warning',
+      entityType: 'runner_run',
+      entityId: runId,
+      actionUrl: `/system/runner?run=${runId}`,
+      createdAt: new Date().toISOString()
+    }, { dedupeKey: `runner_run_stalled:${runId}:${reason}`, dedupeWindowMs: 60_000 });
+  }
+
+  function emitRunnerHandoffReady(runId: string, title: string, prUrl?: string | null): void {
+    emit({
+      id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: 'runner_handoff_ready',
+      title: `Runner Handoff Ready: ${title}`,
+      message: prUrl ? `Pull request is ready for human review: ${prUrl}` : 'Pull request handoff is ready for human review.',
+      severity: 'info',
+      entityType: 'runner_run',
+      entityId: runId,
+      actionUrl: prUrl ?? `/system/runner?run=${runId}`,
+      createdAt: new Date().toISOString()
+    }, { dedupeKey: `runner_handoff_ready:${runId}:${prUrl ?? '-'}`, dedupeWindowMs: 60_000 });
+  }
+
+  function emitRunnerRunFailed(runId: string, title: string, reason: string): void {
+    emit({
+      id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: 'runner_run_failed',
+      title: `Runner Failed: ${title}`,
+      message: reason,
+      severity: 'critical',
+      entityType: 'runner_run',
+      entityId: runId,
+      actionUrl: `/system/runner?run=${runId}`,
+      createdAt: new Date().toISOString()
+    }, { dedupeKey: `runner_run_failed:${runId}:${reason}`, dedupeWindowMs: 60_000 });
+  }
+
   async function checkIdleReminder(store: JarvisStore, userId: string): Promise<void> {
     const missions = await store.listMissions({ userId, status: 'running', limit: 5 });
     if (missions.length > 0) {
@@ -348,6 +408,10 @@ export function createNotificationService(input?: {
     emitBriefingReady,
     emitActionProposalReady,
     emitSessionStalled,
+    emitRunnerWorkflowInvalid,
+    emitRunnerRunStalled,
+    emitRunnerHandoffReady,
+    emitRunnerRunFailed,
     checkIdleReminder,
     getRuntimeStatus
   };

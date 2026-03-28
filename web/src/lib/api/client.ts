@@ -53,7 +53,9 @@ function alignLoopbackHostnameForBrowser(baseUrl: string): string {
 
 export function getBackendBaseUrl(): string {
   const baseUrl = normalizeBaseUrl(
-    process.env.NEXT_PUBLIC_BACKEND_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL
+    typeof window === "undefined"
+      ? process.env.BACKEND_BASE_URL ?? process.env.NEXT_PUBLIC_BACKEND_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL
+      : process.env.NEXT_PUBLIC_BACKEND_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL
   );
   return alignLoopbackHostnameForBrowser(baseUrl);
 }

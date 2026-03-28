@@ -6,16 +6,55 @@ type PostgresInitializerDeps = {
   defaultUserEmail: string;
 };
 
+const SCHEMA_INIT_ADVISORY_LOCK: [number, number] = [1245798486, 1229867348];
+
 export async function initializePostgresStore({
   pool,
   defaultUserId,
   defaultUserEmail
 }: PostgresInitializerDeps): Promise<void> {
-  await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
-  await pool.query(`CREATE EXTENSION IF NOT EXISTS vector`);
-  await pool.query(`
+  const client = await pool.connect();
+  const lockedPool = new Proxy(pool, {
+    get(target, property, receiver) {
+      if (property === 'query') {
+        return client.query.bind(client);
+      }
+      return Reflect.get(target, property, receiver);
+    }
+  }) as Pool;
+
+  try {
+    await client.query('SELECT pg_advisory_lock($1, $2)', SCHEMA_INIT_ADVISORY_LOCK);
+    pool = lockedPool;
+
+    await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
+    await pool.query(`CREATE EXTENSION IF NOT EXISTS vector`);
+    await pool.query(`
     DO $$
     BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'task_mode') THEN
+        CREATE TYPE task_mode AS ENUM (
+          'chat', 'execute', 'council', 'code', 'compute', 'long_run', 'high_risk', 'radar_review', 'upgrade_execution'
+        );
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'task_status') THEN
+        CREATE TYPE task_status AS ENUM ('queued', 'running', 'blocked', 'retrying', 'done', 'failed', 'cancelled');
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'external_work_source') THEN
+        CREATE TYPE external_work_source AS ENUM ('linear');
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'external_work_state') THEN
+        CREATE TYPE external_work_state AS ENUM ('queued', 'running', 'blocked', 'completed', 'failed', 'cancelled');
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'external_work_triage_status') THEN
+        CREATE TYPE external_work_triage_status AS ENUM ('new', 'imported', 'ignored', 'sync_error');
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'external_work_link_role') THEN
+        CREATE TYPE external_work_link_role AS ENUM ('primary', 'derived');
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'external_link_target_type') THEN
+        CREATE TYPE external_link_target_type AS ENUM ('task', 'mission', 'session', 'council_run', 'runner');
+      END IF;
       IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'radar_item_status') THEN
         CREATE TYPE radar_item_status AS ENUM ('new', 'scored', 'archived');
       END IF;
@@ -34,12 +73,105 @@ export async function initializePostgresStore({
     $$;
   `);
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      email TEXT NOT NULL UNIQUE,
+      display_name TEXT,
+      role TEXT NOT NULL DEFAULT 'member',
+      password_hash TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (role IN ('member', 'operator', 'admin'))
+    )
+  `);
+  await pool.query(`
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'member'
   `);
   await pool.query(`
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS password_hash TEXT
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      mode task_mode NOT NULL,
+      status task_status NOT NULL DEFAULT 'queued',
+      title TEXT NOT NULL,
+      input JSONB NOT NULL DEFAULT '{}'::jsonb,
+      idempotency_key TEXT NOT NULL,
+      trace_id TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (user_id, idempotency_key)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS task_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      trace_id TEXT,
+      span_id TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_tasks_user_created_at
+    ON tasks(user_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_task_events_task_id_created_at
+    ON task_events(task_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS external_work_items (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      source external_work_source NOT NULL,
+      external_id TEXT NOT NULL,
+      identifier TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      url TEXT,
+      state external_work_state NOT NULL,
+      priority INTEGER,
+      labels_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      triage_status external_work_triage_status NOT NULL DEFAULT 'new',
+      display_metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      raw_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_synced_at TIMESTAMPTZ,
+      last_sync_error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (user_id, source, external_id)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS external_work_links (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      external_work_item_id UUID NOT NULL REFERENCES external_work_items(id) ON DELETE CASCADE,
+      target_type external_link_target_type NOT NULL,
+      target_id TEXT NOT NULL,
+      role external_work_link_role NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (external_work_item_id, target_type, target_id, role)
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_external_work_items_user_updated_at
+    ON external_work_items(user_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_external_work_items_triage_status
+    ON external_work_items(user_id, triage_status, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_external_work_links_target
+    ON external_work_links(target_type, target_id, created_at DESC)
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS user_sessions (
@@ -219,6 +351,92 @@ export async function initializePostgresStore({
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_ai_invocation_traces_user_feature_created_at
     ON ai_invocation_traces(user_id, feature_key, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS runner_state (
+      id TEXT PRIMARY KEY,
+      dispatch_enabled BOOLEAN NOT NULL DEFAULT false,
+      refresh_requested_at TIMESTAMPTZ,
+      refreshed_at TIMESTAMPTZ,
+      workflow_path TEXT,
+      workflow_validation TEXT NOT NULL DEFAULT 'unknown',
+      workflow_errors_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      last_loaded_workflow_at TIMESTAMPTZ,
+      last_loop_started_at TIMESTAMPTZ,
+      active_sources_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      recent_errors_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (workflow_validation IN ('unknown', 'valid', 'invalid'))
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS runner_runs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      work_item_json JSONB NOT NULL,
+      claim_state TEXT NOT NULL DEFAULT 'claimed',
+      status TEXT NOT NULL DEFAULT 'claimed',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      session_snapshot_json JSONB,
+      workspace_id TEXT,
+      workspace_path TEXT,
+      workspace_kind TEXT NOT NULL DEFAULT 'worktree',
+      branch_name TEXT,
+      pr_url TEXT,
+      pr_number INTEGER,
+      verification_summary_json JSONB NOT NULL DEFAULT '{"commands":[]}'::jsonb,
+      proof_of_work_json JSONB NOT NULL DEFAULT '{"verificationPassed":false,"changedFiles":[],"gitStatus":"","summary":[]}'::jsonb,
+      last_process_pid INTEGER,
+      blocked_reason TEXT,
+      failure_reason TEXT,
+      next_retry_at TIMESTAMPTZ,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      last_heartbeat_at TIMESTAMPTZ,
+      graph_spec_json JSONB,
+      graph_run_json JSONB,
+      artifacts_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      session_state_json JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (claim_state IN ('unclaimed', 'claimed', 'running', 'retry_queued', 'released')),
+      CHECK (status IN (
+        'claimed',
+        'running',
+        'retry_queued',
+        'blocked_needs_approval',
+        'human_review_ready',
+        'failed_terminal',
+        'cancelled',
+        'released'
+      )),
+      CHECK (workspace_kind IN ('worktree', 'devcontainer'))
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_runner_runs_user_updated_at
+    ON runner_runs(user_id, updated_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_runner_runs_status_updated_at
+    ON runner_runs(status, updated_at DESC)
+  `);
+  await pool.query(`
+    ALTER TABLE runner_runs
+    ADD COLUMN IF NOT EXISTS graph_spec_json JSONB
+  `);
+  await pool.query(`
+    ALTER TABLE runner_runs
+    ADD COLUMN IF NOT EXISTS graph_run_json JSONB
+  `);
+  await pool.query(`
+    ALTER TABLE runner_runs
+    ADD COLUMN IF NOT EXISTS artifacts_json JSONB NOT NULL DEFAULT '[]'::jsonb
+  `);
+  await pool.query(`
+    ALTER TABLE runner_runs
+    ADD COLUMN IF NOT EXISTS session_state_json JSONB
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS memory_segments (
@@ -2614,4 +2832,11 @@ export async function initializePostgresStore({
     `,
     [defaultUserId, defaultUserEmail, 'Jarvis Local User']
   );
+  } finally {
+    try {
+      await client.query('SELECT pg_advisory_unlock($1, $2)', SCHEMA_INIT_ADVISORY_LOCK);
+    } finally {
+      client.release();
+    }
+  }
 }

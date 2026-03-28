@@ -1,12 +1,26 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Clock, AlertTriangle } from "lucide-react";
+import { Clock, AlertTriangle, RefreshCw } from "lucide-react";
 
 import { ApiRequestError } from "@/lib/api/client";
-import { listBriefings, listJarvisSessions, listRadarRecommendations, listTasks, listUpgradeProposals } from "@/lib/api/endpoints";
+import {
+  listBriefings,
+  listExternalWork,
+  listJarvisSessions,
+  listTasks,
+  listUpgradeProposals,
+  routeExternalWorkItem,
+} from "@/lib/api/endpoints";
 import { hasMinRole, useCurrentRole } from "@/lib/auth/role";
-import type { BriefingRecord, JarvisSessionRecord, TaskRecord } from "@/lib/api/types";
+import type {
+  BriefingRecord,
+  ExternalRouteAction,
+  ExternalWorkItemRecord,
+  ExternalWorkTriageStatus,
+  JarvisSessionRecord,
+  TaskRecord,
+} from "@/lib/api/types";
 import { subscribeJarvisDataRefresh } from "@/lib/hud/data-refresh";
 import { useLocale } from "@/components/providers/LocaleProvider";
 
@@ -36,16 +50,83 @@ type SummaryRow = {
   status: "done" | "running" | "queued" | "failed" | "blocked";
 };
 
+const EMPTY_EXTERNAL_COUNTS: Record<ExternalWorkTriageStatus, number> = {
+  new: 0,
+  imported: 0,
+  ignored: 0,
+  sync_error: 0,
+};
+
+const EXTERNAL_ROUTE_ACTIONS: ExternalRouteAction[] = [
+  "task_code",
+  "mission_code",
+  "session_research",
+  "mission_research",
+  "session_council",
+  "ignore",
+];
+
+function getExternalWorkStatusTone(status: ExternalWorkItemRecord["triageStatus"]): string {
+  if (status === "imported") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+  if (status === "ignored") return "border-white/15 bg-white/[0.04] text-white/60";
+  if (status === "sync_error") return "border-rose-500/30 bg-rose-500/10 text-rose-200";
+  return "border-cyan-500/30 bg-cyan-500/10 text-cyan-200";
+}
+
+function getExternalWorkStatusLabel(status: ExternalWorkItemRecord["triageStatus"], t: ReturnType<typeof useLocale>["t"]): string {
+  if (status === "imported") return t("inbox.externalWorkStatus.imported");
+  if (status === "ignored") return t("inbox.externalWorkStatus.ignored");
+  if (status === "sync_error") return t("inbox.externalWorkStatus.sync_error");
+  return t("inbox.externalWorkStatus.new");
+}
+
+function getExternalWorkActionLabel(action: ExternalRouteAction, t: ReturnType<typeof useLocale>["t"]): string {
+  if (action === "task_code") return t("inbox.externalWorkAction.taskCode");
+  if (action === "mission_code") return t("inbox.externalWorkAction.missionCode");
+  if (action === "session_research") return t("inbox.externalWorkAction.sessionResearch");
+  if (action === "mission_research") return t("inbox.externalWorkAction.missionResearch");
+  if (action === "session_council") return t("inbox.externalWorkAction.sessionCouncil");
+  return t("inbox.externalWorkAction.ignore");
+}
+
 export function InboxModule() {
   const role = useCurrentRole();
   const { t } = useLocale();
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [briefings, setBriefings] = useState<BriefingRecord[]>([]);
   const [sessions, setSessions] = useState<JarvisSessionRecord[]>([]);
+  const [externalWork, setExternalWork] = useState<ExternalWorkItemRecord[]>([]);
+  const [externalWorkEnabled, setExternalWorkEnabled] = useState(false);
+  const [externalWorkCounts, setExternalWorkCounts] = useState<Record<ExternalWorkTriageStatus, number>>(EMPTY_EXTERNAL_COUNTS);
+  const [externalWorkError, setExternalWorkError] = useState<string | null>(null);
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
-  const [adoptRecommendationCount, setAdoptRecommendationCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [externalWorkBusy, setExternalWorkBusy] = useState<string | null>(null);
+
+  const loadExternalWork = useCallback(async (refreshRemote = false) => {
+    try {
+      const result = await listExternalWork({
+        limit: 8,
+        refresh: refreshRemote ? 1 : 0,
+      });
+      setExternalWorkEnabled(result.enabled);
+      setExternalWork(result.items);
+      setExternalWorkCounts(result.counts ?? EMPTY_EXTERNAL_COUNTS);
+      setExternalWorkError(result.refresh_error ?? null);
+    } catch (err) {
+      if (err instanceof ApiRequestError) {
+        setExternalWorkError(`${err.code}: ${err.message}`);
+      } else if (err instanceof Error && err.message.trim().length > 0) {
+        setExternalWorkError(err.message);
+      } else {
+        setExternalWorkError(t("inbox.externalWorkLoadFailed"));
+      }
+      setExternalWork([]);
+      setExternalWorkCounts(EMPTY_EXTERNAL_COUNTS);
+      setExternalWorkEnabled(false);
+    }
+  }, [t]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -64,29 +145,17 @@ export function InboxModule() {
       // Operator-only signal APIs should not break inbox for member users.
       if (!hasMinRole(role, "operator")) {
         setPendingApprovalCount(sessionRows.filter((session) => session.status === "needs_approval").length);
-        setAdoptRecommendationCount(0);
-        return;
-      }
-
-      const [proposalsResult, recommendationsResult] = await Promise.allSettled([
-        listUpgradeProposals({ status: "proposed" }),
-        listRadarRecommendations({ decision: "adopt" }),
-      ]);
-
-      if (proposalsResult.status === "fulfilled") {
-        const legacyCount = Array.isArray(proposalsResult.value.proposals) ? proposalsResult.value.proposals.length : 0;
-        const sessionCount = sessionRows.filter((session) => session.status === "needs_approval").length;
-        setPendingApprovalCount(legacyCount + sessionCount);
       } else {
-        setPendingApprovalCount(sessionRows.filter((session) => session.status === "needs_approval").length);
-      }
+        const proposalsResult = await Promise.allSettled([listUpgradeProposals({ status: "proposed" })]);
+        const proposalResult = proposalsResult[0];
 
-      if (recommendationsResult.status === "fulfilled") {
-        setAdoptRecommendationCount(
-          Array.isArray(recommendationsResult.value.recommendations) ? recommendationsResult.value.recommendations.length : 0
-        );
-      } else {
-        setAdoptRecommendationCount(0);
+        if (proposalResult?.status === "fulfilled") {
+          const legacyCount = Array.isArray(proposalResult.value.proposals) ? proposalResult.value.proposals.length : 0;
+          const sessionCount = sessionRows.filter((session) => session.status === "needs_approval").length;
+          setPendingApprovalCount(legacyCount + sessionCount);
+        } else {
+          setPendingApprovalCount(sessionRows.filter((session) => session.status === "needs_approval").length);
+        }
       }
     } catch (err) {
       if (err instanceof ApiRequestError) {
@@ -100,11 +169,35 @@ export function InboxModule() {
       setBriefings([]);
       setSessions([]);
       setPendingApprovalCount(0);
-      setAdoptRecommendationCount(0);
     } finally {
       setLoading(false);
+      await loadExternalWork(false);
     }
-  }, [role, t]);
+  }, [loadExternalWork, role, t]);
+
+  const syncExternalQueue = useCallback(async () => {
+    setExternalWorkBusy("sync");
+    await loadExternalWork(true);
+    setExternalWorkBusy(null);
+  }, [loadExternalWork]);
+
+  const handleExternalRoute = useCallback(async (itemId: string, action: ExternalRouteAction) => {
+    setExternalWorkBusy(itemId);
+    try {
+      await routeExternalWorkItem(itemId, action);
+      await refresh();
+    } catch (err) {
+      if (err instanceof ApiRequestError) {
+        setExternalWorkError(`${err.code}: ${err.message}`);
+      } else if (err instanceof Error && err.message.trim().length > 0) {
+        setExternalWorkError(err.message);
+      } else {
+        setExternalWorkError(t("inbox.externalWorkRouteFailed"));
+      }
+    } finally {
+      setExternalWorkBusy(null);
+    }
+  }, [refresh, t]);
 
   useEffect(() => {
     void refresh();
@@ -204,6 +297,110 @@ export function InboxModule() {
                 </div>
               </div>
             </div>
+          </div>
+
+          <div className="glass-panel rounded-lg border border-cyan-500/20 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-xs font-mono font-bold tracking-widest text-cyan-300">{t("inbox.externalWork")}</h2>
+                <p className="mt-1 text-xs text-white/45">{t("inbox.externalWorkSubtitle")}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono text-white/50">
+                  <span>{t("inbox.externalWorkCount.new", { value: externalWorkCounts.new })}</span>
+                  <span>{t("inbox.externalWorkCount.imported", { value: externalWorkCounts.imported })}</span>
+                  <span>{t("inbox.externalWorkCount.ignored", { value: externalWorkCounts.ignored })}</span>
+                  <span>{t("inbox.externalWorkCount.sync_error", { value: externalWorkCounts.sync_error })}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void syncExternalQueue();
+                  }}
+                  disabled={externalWorkBusy === "sync"}
+                  className="inline-flex items-center gap-2 rounded border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-[11px] font-mono text-cyan-100 transition hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <RefreshCw size={12} className={externalWorkBusy === "sync" ? "animate-spin" : ""} />
+                  {externalWorkBusy === "sync" ? t("inbox.externalWorkSyncing") : t("inbox.externalWorkSync")}
+                </button>
+              </div>
+            </div>
+
+            {externalWorkError ? (
+              <p className="mt-3 text-xs font-mono text-rose-300">{externalWorkError}</p>
+            ) : null}
+
+            {!externalWorkEnabled ? (
+              <p className="mt-4 text-sm text-white/55">{t("inbox.externalWorkDisabled")}</p>
+            ) : externalWork.length === 0 ? (
+              <p className="mt-4 text-sm text-white/55">{t("inbox.externalWorkEmpty")}</p>
+            ) : (
+              <div className="mt-4 space-y-3">
+                {externalWork.map((item) => {
+                  const isBusy = externalWorkBusy === item.id;
+                  return (
+                    <div key={item.id} className="rounded border border-white/10 bg-black/25 p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-[11px] font-mono uppercase tracking-[0.2em] text-cyan-300">
+                              {item.identifier}
+                            </span>
+                            <span className={`rounded border px-2 py-0.5 text-[9px] font-mono ${getExternalWorkStatusTone(item.triageStatus)}`}>
+                              {getExternalWorkStatusLabel(item.triageStatus, t)}
+                            </span>
+                          </div>
+                          <p className="mt-2 text-sm font-medium text-white">{item.title}</p>
+                          <p className="mt-1 line-clamp-2 text-xs text-white/60">{item.description}</p>
+                          <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-white/45">
+                            <span>
+                              {t("inbox.externalWorkState")}: {item.state}
+                            </span>
+                            {item.labels.length > 0 ? (
+                              <span>
+                                {t("inbox.externalWorkLabels")}: {item.labels.join(", ")}
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                        {item.url ? (
+                          <a
+                            href={item.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[11px] font-mono text-cyan-200 underline decoration-cyan-500/40 underline-offset-4"
+                          >
+                            {t("inbox.externalWorkOpen")}
+                          </a>
+                        ) : null}
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {EXTERNAL_ROUTE_ACTIONS.map((action) => {
+                          const disabled =
+                            isBusy ||
+                            (item.triageStatus === "imported" && action !== "ignore") ||
+                            item.triageStatus === "ignored";
+                          return (
+                            <button
+                              key={`${item.id}:${action}`}
+                              type="button"
+                              disabled={disabled}
+                              onClick={() => {
+                                void handleExternalRoute(item.id, action);
+                              }}
+                              className="rounded border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-mono text-white/75 transition hover:border-cyan-500/30 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              {getExternalWorkActionLabel(action, t)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       </div>

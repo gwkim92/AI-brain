@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { RunnerGraphSummaryPanel } from "@/components/modules/RunnerGraphSummaryPanel";
 import { ToolCallTimeline, ToolCall } from "@/components/ui/ToolCallTimeline";
 import { EvidencePanel, Evidence } from "@/components/ui/EvidencePanel";
 import { MarkdownLite } from "@/components/ui/MarkdownLite";
@@ -4305,6 +4306,15 @@ export function AssistantModule() {
                                                         </p>
                                                         <p className="mt-1 text-sm text-white/90">{sessionExecutionOptionDescriptor.label}</p>
                                                         <p className="mt-1 text-[11px] text-white/55">{sessionExecutionOptionDescriptor.hint}</p>
+                                                    </div>
+                                                ) : null}
+                                                {jarvisSessionDetail ? (
+                                                    <div className="mt-3">
+                                                        <RunnerGraphSummaryPanel
+                                                            detail={jarvisSessionDetail.runner_detail ?? null}
+                                                            emptyMessage={t("actionCenter.runner.empty")}
+                                                            className="rounded border border-cyan-500/20 bg-cyan-500/5 p-3"
+                                                        />
                                                     </div>
                                                 ) : null}
                                                 <div className="mt-3 space-y-3">

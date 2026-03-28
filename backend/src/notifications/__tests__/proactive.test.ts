@@ -111,4 +111,31 @@ describe('notification service', () => {
       vi.useRealTimers();
     }
   });
+
+  it('emits runner workflow, stalled, handoff, and failure notifications with stable types', () => {
+    const service = createNotificationService();
+    const received: Array<{ type: string; title: string; message: string }> = [];
+    service.subscribe((event) => {
+      received.push({
+        type: event.type,
+        title: event.title,
+        message: event.message
+      });
+    });
+
+    service.emitRunnerWorkflowInvalid('/workspace/WORKFLOW.md', ['codex.command: required']);
+    service.emitRunnerRunStalled('run-1', 'Sync issue', 'runner stalled after 600000ms; queued retry');
+    service.emitRunnerHandoffReady('run-1', 'Sync issue', 'https://github.com/example/repo/pull/1');
+    service.emitRunnerRunFailed('run-1', 'Sync issue', 'github_pr_failed');
+
+    expect(received.map((entry) => entry.type)).toEqual([
+      'runner_workflow_invalid',
+      'runner_run_stalled',
+      'runner_handoff_ready',
+      'runner_run_failed'
+    ]);
+    expect(received[0]?.message).toContain('codex.command: required');
+    expect(received[2]?.message).toContain('https://github.com/example/repo/pull/1');
+    expect(received[3]?.title).toContain('Runner Failed');
+  });
 });

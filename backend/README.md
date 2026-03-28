@@ -41,6 +41,22 @@ They are documentation/reference only and are not the production init path.
 STORE_BACKEND=postgres DATABASE_URL=postgres://jarvis:jarvis@127.0.0.1:5432/jarvis pnpm dev
 ```
 
+6. Run the delivery runner as a separate process
+
+```bash
+pnpm runner:local
+```
+
+`pnpm runner:local` forces `RUNNER_ENABLED=true`, defaults `RUNNER_REPO_ROOT` to the repository root, and keeps `RUNNER_STALL_TERMINATE_ENABLED=true` unless you explicitly disable it. Use plain `pnpm runner` when you want to override those values explicitly.
+
+7. Optional: run the delivery runner in Docker Compose
+
+```bash
+docker compose --profile runner up runner
+```
+
+The compose runner mounts the full repository at `/workspace` and keeps Linux-native backend dependencies in a dedicated volume. If git push or PR handoff needs your personal credentials, host-local `pnpm runner:local` is still the safer default.
+
 ## Core Endpoints
 
 - `GET /health`
@@ -67,6 +83,44 @@ STORE_BACKEND=postgres DATABASE_URL=postgres://jarvis:jarvis@127.0.0.1:5432/jarv
 - `POST /api/v1/upgrades/proposals/:proposalId/approve`
 - `POST /api/v1/upgrades/runs`
 - `GET /api/v1/upgrades/runs/:runId`
+- `GET /api/v1/runner/state`
+- `POST /api/v1/runner/refresh`
+- `GET /api/v1/runner/runs`
+- `GET /api/v1/runner/runs/:runId`
+- `POST /api/v1/runner/runs/:runId/cancel`
+- `POST /api/v1/runner/workflow/validate`
+
+## Delivery Runner
+
+- The runner is a separate daemon. Keep `pnpm dev` and `pnpm runner:local` running independently.
+- The execution contract is loaded from the repository root `WORKFLOW.md`.
+- Internal tasks can feed the runner without extra credentials.
+- Linear is now treated as external inbox intake by default, not as the runner's primary input source.
+- `GET /api/v1/inbox/external-work` and `POST /api/v1/inbox/external-work/:itemId/route` drive manual Linear triage into tasks, missions, and sessions.
+- Linear sync requires `LINEAR_API_KEY` and at least one of `LINEAR_TEAM_ID` or `LINEAR_PROJECT_ID`.
+- Direct `Linear -> runner` polling is compatibility-only and stays off unless `RUNNER_LINEAR_DIRECT_ENABLED=true`.
+- PR creation requires `GITHUB_TOKEN`, `GITHUB_OWNER`, and `GITHUB_REPO`.
+- `git push` still depends on the local runner process having working git credentials.
+- Stalled runs are retried automatically. Set `RUNNER_STALL_TERMINATE_ENABLED=true` to terminate an orphaned local process group before queueing the retry.
+- `GET /api/v1/runner/state` now includes operational metrics for due retries, stalled runs, cleanup-pending workspaces, workflow validation errors, and recent runner errors.
+- Runner notifications reuse the standard notification channels. Configure `NOTIFICATION_WEBHOOK_*` and/or `NOTIFICATION_TELEGRAM_*` to receive workflow-invalid, stalled-run, failed-run, and handoff-ready alerts.
+
+Example runner env overrides:
+
+```bash
+RUNNER_ENABLED=true \
+RUNNER_REPO_ROOT=/absolute/path/to/repo \
+RUNNER_POLL_INTERVAL_MS=30000 \
+RUNNER_STALL_TERMINATE_ENABLED=true \
+RUNNER_LINEAR_DIRECT_ENABLED=false \
+NOTIFICATION_WEBHOOK_ENABLED=true \
+LINEAR_API_KEY=lin_api_xxx \
+LINEAR_TEAM_ID=team_xxx \
+GITHUB_TOKEN=ghp_xxx \
+GITHUB_OWNER=your-org \
+GITHUB_REPO=your-repo \
+pnpm runner
+```
 
 ## Auth + Admin Bootstrap
 

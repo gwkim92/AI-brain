@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { getLinkedExternalWorkSummary } from '../external-work/service';
 import { sendError, sendSuccess } from '../lib/http';
 import type { TaskMode } from '../store/types';
 import { applySseCorsHeaders, type RouteContext } from './types';
@@ -94,7 +95,15 @@ export async function taskRoutes(app: FastifyInstance, ctx: RouteContext) {
     if (role !== 'admin' && task.userId !== resolveRequestUserId(request)) {
       return sendError(reply, request, 404, 'NOT_FOUND', 'task not found');
     }
-    return sendSuccess(reply, request, 200, task);
+    const linkedExternalWork = await getLinkedExternalWorkSummary(store, {
+      userId: task.userId,
+      targetType: 'task',
+      targetId: task.id
+    });
+    return sendSuccess(reply, request, 200, {
+      ...task,
+      linked_external_work: linkedExternalWork
+    });
   });
 
   app.get('/api/v1/tasks/:taskId/events', async (request, reply) => {

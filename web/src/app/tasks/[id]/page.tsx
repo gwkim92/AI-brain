@@ -5,9 +5,11 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, RefreshCw, Activity } from "lucide-react";
 
-import { getTask, streamTaskEvents } from "@/lib/api/endpoints";
+import { RunnerGraphSummaryPanel } from "@/components/modules/RunnerGraphSummaryPanel";
+import { getRunnerRun, getTask, streamTaskEvents } from "@/lib/api/endpoints";
 import { ApiRequestError } from "@/lib/api/client";
 import type { TaskRecord } from "@/lib/api/types";
+import type { RunnerRunDetail } from "@/lib/api/runner-types";
 import { useLocale } from "@/components/providers/LocaleProvider";
 import { TaskStatusBadge } from "@/components/ui/TaskStatusBadge";
 
@@ -55,14 +57,31 @@ function parseTimelineEvent(payload: unknown, eventType: string): TimelineEvent 
 export default function TaskDetailPage() {
   const params = useParams<{ id: string }>();
   const taskId = Array.isArray(params?.id) ? params.id[0] : params?.id;
-  const { t, formatDateTime } = useLocale();
+  const { locale, t, formatDateTime } = useLocale();
+  const runnerCopy = locale === "ko"
+    ? {
+        empty: "이 task에는 아직 runner 실행이 연결되지 않았다.",
+        loading: "runner 상세를 불러오는 중...",
+        loadFailed: "runner 상세를 불러오지 못했다.",
+        latestRun: "최근 런",
+      }
+    : {
+        empty: "No runner execution is linked to this task yet.",
+        loading: "Loading runner detail...",
+        loadFailed: "Failed to load runner detail.",
+        latestRun: "Latest Run",
+      };
 
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [events, setEvents] = useState<TimelineEvent[]>([]);
+  const [runnerDetail, setRunnerDetail] = useState<RunnerRunDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [runnerLoading, setRunnerLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [runnerError, setRunnerError] = useState<string | null>(null);
   const [streamState, setStreamState] = useState<"idle" | "streaming" | "closed" | "error">("idle");
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
+  const [selectedRunnerRunId, setSelectedRunnerRunId] = useState<string | null>(null);
 
   const loadTask = useCallback(async () => {
     if (!taskId) return;
@@ -181,6 +200,70 @@ export default function TaskDetailPage() {
     return sortedEvents.filter((event) => (event.traceId ?? task?.traceId) === selectedTraceId);
   }, [selectedTraceId, sortedEvents, task?.traceId]);
 
+  const runnerRunIds = useMemo(() => {
+    const ids: string[] = [];
+    const pushId = (value: unknown) => {
+      if (typeof value !== "string" || ids.includes(value)) return;
+      ids.push(value);
+    };
+
+    for (const event of sortedEvents) {
+      pushId(event.data.runner_run_id);
+    }
+    pushId(task?.input?.runner_run_id);
+
+    return ids;
+  }, [sortedEvents, task?.input]);
+
+  useEffect(() => {
+    setSelectedRunnerRunId((current) => {
+      if (current && runnerRunIds.includes(current)) {
+        return current;
+      }
+      return runnerRunIds[0] ?? null;
+    });
+  }, [runnerRunIds]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!selectedRunnerRunId) {
+      setRunnerDetail(null);
+      setRunnerError(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const loadRunnerDetail = async () => {
+      setRunnerLoading(true);
+      setRunnerError(null);
+      try {
+        const detail = await getRunnerRun(selectedRunnerRunId);
+        if (cancelled) return;
+        setRunnerDetail(detail);
+      } catch (err) {
+        if (cancelled) return;
+        if (err instanceof ApiRequestError) {
+          setRunnerError(`${err.code}: ${err.message}`);
+        } else {
+          setRunnerError(runnerCopy.loadFailed);
+        }
+        setRunnerDetail(null);
+      } finally {
+        if (!cancelled) {
+          setRunnerLoading(false);
+        }
+      }
+    };
+
+    void loadRunnerDetail();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRunnerRunId, runnerCopy.loadFailed]);
+
+  const activeRunnerDetail = runnerDetail?.run.id === selectedRunnerRunId ? runnerDetail : null;
   if (!taskId) {
     return (
       <main className="w-full h-full bg-black text-white p-8">
@@ -257,6 +340,44 @@ export default function TaskDetailPage() {
           </section>
 
           <section className="xl:col-span-2 flex flex-col gap-6">
+            <div className="bg-white/5 border border-white/10 rounded-lg p-5">
+              {runnerRunIds.length > 1 ? (
+                <div className="mb-4 flex flex-wrap gap-2">
+                  {runnerRunIds.map((runnerRunId, index) => (
+                    <button
+                      key={runnerRunId}
+                      type="button"
+                      onClick={() => setSelectedRunnerRunId(runnerRunId)}
+                      className={`rounded border px-2 py-1 text-[10px] font-mono transition-colors ${
+                        selectedRunnerRunId === runnerRunId
+                          ? "border-cyan-400/60 bg-cyan-500/20 text-cyan-200"
+                          : "border-white/15 bg-black/40 text-white/60 hover:text-white/80"
+                      }`}
+                    >
+                      {runnerCopy.latestRun} {index + 1}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+
+              {runnerRunIds.length > 0 && runnerLoading ? (
+                <p className="text-sm font-mono text-cyan-200">{runnerCopy.loading}</p>
+              ) : null}
+
+              {runnerRunIds.length > 0 && runnerError ? (
+                <p className="text-sm font-mono text-red-400">{runnerError}</p>
+              ) : null}
+
+              {(runnerRunIds.length === 0 || activeRunnerDetail) && (
+                <RunnerGraphSummaryPanel
+                  detail={activeRunnerDetail}
+                  emptyMessage={runnerCopy.empty}
+                  maxNodes={6}
+                  className="rounded border border-cyan-500/20 bg-cyan-500/5 p-3"
+                />
+              )}
+            </div>
+
             <div className="bg-white/5 border border-white/10 rounded-lg p-5">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-[10px] font-mono tracking-widest text-white/40 uppercase">{t("taskDetail.timeline")}</h2>

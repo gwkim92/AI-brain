@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { getLinkedExternalWorkSummary } from '../external-work/service';
+import { createMissionExecutionGraph } from '../graph-runtime/graph';
 import { sendError, sendSuccess } from '../lib/http';
 import { classifyComplexity, buildSimplePlan } from '../orchestrator/complexity';
 import { executeMission } from '../orchestrator/mission-executor';
@@ -240,7 +242,30 @@ export async function missionRoutes(app: FastifyInstance, ctx: RouteContext) {
     const userId = resolveRequestUserId(request);
     const mission = await store.getMissionById({ missionId, userId });
     if (!mission) return sendError(reply, request, 404, 'NOT_FOUND', 'mission not found');
-    return sendSuccess(reply, request, 200, mission);
+    const linkedExternalWork = await getLinkedExternalWorkSummary(store, {
+      userId,
+      targetType: 'mission',
+      targetId: mission.id
+    });
+    return sendSuccess(reply, request, 200, {
+      ...mission,
+      graph: createMissionExecutionGraph(mission),
+      linked_external_work: linkedExternalWork
+    });
+  });
+
+  app.get('/api/v1/missions/:missionId/graph', async (request, reply) => {
+    const missionId = (request.params as { missionId: string }).missionId;
+    const userId = resolveRequestUserId(request);
+    const mission = await store.getMissionById({ missionId, userId });
+    if (!mission) return sendError(reply, request, 404, 'NOT_FOUND', 'mission not found');
+
+    const graph = createMissionExecutionGraph(mission);
+    return sendSuccess(reply, request, 200, {
+      mission_id: mission.id,
+      graph,
+      compat_steps: mission.steps
+    });
   });
 
   app.patch('/api/v1/missions/:missionId', async (request, reply) => {
