@@ -1085,6 +1085,7 @@ export function HyperAgentControlModule() {
                   <p className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">{resolvedLocale === "ko" ? "Operator Note" : "Operator Note"}</p>
                   <textarea
                     className="mt-3 min-h-[92px] w-full rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm text-neutral-900 outline-none transition focus:border-neutral-900"
+                    aria-label="Operator Note"
                     value={decisionNote}
                     onChange={(event) => setDecisionNote(event.target.value)}
                     placeholder={
