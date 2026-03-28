@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Loader2, Zap } from "lucide-react";
 import { useQuickCommand } from "@/hooks/useQuickCommand";
+import { subscribeSessionRerun } from "@/lib/hud/session-rerun";
 import {
   isRuntimeDebugEnabled,
   JARVIS_RUNTIME_DEBUG_CHANGED_EVENT,
@@ -33,6 +34,17 @@ export function CommandBar() {
   const handleExecute = useCallback(() => {
     void execute();
   }, [execute]);
+
+  useEffect(() => {
+    return subscribeSessionRerun((payload) => {
+      const prompt = payload.prompt.trim();
+      if (prompt.length === 0) {
+        return;
+      }
+      setCommandInput(prompt);
+      void execute(prompt);
+    });
+  }, [execute, setCommandInput]);
 
   const toggleRuntimeDebug = useCallback(() => {
     setRuntimeDebugEnabled(!runtimeDebugEnabled);

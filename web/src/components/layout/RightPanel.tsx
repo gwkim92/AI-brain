@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { AlertCircle, Clock3, PlayCircle, Sparkles, Layers, X } from "lucide-react";
+import { AlertCircle, Check, Clock3, Copy, PlayCircle, RotateCcw, Sparkles, Layers, X } from "lucide-react";
 import { useHUD } from "@/components/providers/HUDProvider";
 import { ApiRequestError } from "@/lib/api/client";
 import { getDashboardOverview, streamDashboardOverviewEvents } from "@/lib/api/endpoints";
@@ -23,6 +23,7 @@ import {
     JARVIS_RUNTIME_EVENT_STREAM,
     type JarvisRuntimeEventDetail,
 } from "@/lib/runtime-events";
+import { dispatchSessionRerun } from "@/lib/hud/session-rerun";
 const MAX_APPROVALS = 3;
 const MAX_RUNNING_TASKS = 4;
 const DASHBOARD_OVERVIEW_QUERY = {
@@ -112,6 +113,7 @@ export function RightPanel() {
     const [runtimeRecovered, setRuntimeRecovered] = useState(false);
     const [runtimeDebugEnabled, setRuntimeDebugEnabled] = useState(false);
     const [runtimeEvents, setRuntimeEvents] = useState<Array<JarvisRuntimeEventDetail>>([]);
+    const [copiedSessionId, setCopiedSessionId] = useState<string | null>(null);
     const optimisticRunningTaskEnabled = isFeatureEnabled("assistant.optimistic_running_task", true);
     const mountedRef = useRef(true);
 
@@ -228,6 +230,45 @@ export function RightPanel() {
             nextSearchParams.set("activation", "focus_only");
             router.push(`/?${nextSearchParams.toString()}`);
         }
+    };
+
+    const copySessionIdentifiers = useCallback(async (session: (typeof sessions)[number]) => {
+        if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+            return;
+        }
+        const payload = [
+            `session_id=${session.id}`,
+            session.taskId ? `task_id=${session.taskId}` : null,
+            session.missionId ? `mission_id=${session.missionId}` : null,
+        ]
+            .filter((line): line is string => Boolean(line))
+            .join("\n");
+        if (!payload) {
+            return;
+        }
+        try {
+            await navigator.clipboard.writeText(payload);
+            setCopiedSessionId(session.id);
+            window.setTimeout(() => {
+                setCopiedSessionId((current) => (current === session.id ? null : current));
+            }, 1200);
+        } catch {
+            // ignore clipboard failures
+        }
+    }, []);
+
+    const rerunSession = (session: (typeof sessions)[number]) => {
+        const prompt = session.prompt.trim();
+        if (prompt.length === 0) {
+            return;
+        }
+        dispatchSessionRerun({
+            sessionId: session.id,
+            prompt,
+            taskId: session.taskId,
+            missionId: session.missionId,
+        });
+        activateSession(session.id, "full");
     };
 
     const overlayLabel =
@@ -530,7 +571,7 @@ export function RightPanel() {
                             >
                                 <button
                                     type="button"
-                                    onClick={() => activateSession(session.id, "focus_only")}
+                                    onClick={() => activateSession(session.id, "full")}
                                     className="w-full text-left"
                                 >
                                     <div className="flex items-start justify-between gap-2">
@@ -568,6 +609,19 @@ export function RightPanel() {
                                                 <span className="rounded border border-white/15 px-1.5 py-0.5 text-white/45">
                                                     restore:{session.restoreMode}
                                                 </span>
+                                                <span className="rounded border border-white/15 px-1.5 py-0.5 text-white/45">
+                                                    sid:{session.id.slice(0, 8)}
+                                                </span>
+                                                {session.stale && (
+                                                    <span className="rounded border border-amber-500/45 bg-amber-500/10 px-1.5 py-0.5 text-amber-200">
+                                                        STALE
+                                                    </span>
+                                                )}
+                                                {session.taskId && (
+                                                    <span className="rounded border border-cyan-500/25 px-1.5 py-0.5 text-cyan-200/85">
+                                                        task:{session.taskId.slice(0, 8)}
+                                                    </span>
+                                                )}
                                             </div>
                                         </div>
                                     </div>
@@ -596,6 +650,36 @@ export function RightPanel() {
                                         data-testid={`session-restore-focus-${session.id}`}
                                     >
                                         focus only
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            void copySessionIdentifiers(session);
+                                        }}
+                                        className="rounded border border-white/20 bg-white/5 px-2 py-1 text-[9px] font-mono text-white/70 hover:bg-white/10 inline-flex items-center gap-1"
+                                        aria-label={`Copy identifiers for session ${session.id}`}
+                                    >
+                                        {copiedSessionId === session.id ? <Check size={10} /> : <Copy size={10} />}
+                                        {copiedSessionId === session.id ? "copied" : "copy ids"}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            rerunSession(session);
+                                        }}
+                                        className={`rounded border px-2 py-1 text-[9px] font-mono inline-flex items-center gap-1 ${
+                                            session.stale
+                                                ? "border-amber-500/40 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20"
+                                                : "border-cyan-500/30 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20"
+                                        }`}
+                                        aria-label={`Re-run session ${session.id}`}
+                                    >
+                                        <RotateCcw size={10} />
+                                        re-run
                                     </button>
                                     <button
                                         type="button"

@@ -260,6 +260,10 @@ interface HUDContextType {
     archiveSession: (sessionId: string) => void;
     linkSessionTask: (sessionId: string, taskId?: string, missionId?: string) => void;
     markSessionContextDelivered: (sessionId: string, contextId: string, revision: number) => void;
+    updateSessionStaleState: (
+        sessionId: string,
+        payload: { stale: boolean; reason?: string | null; detectedAt?: string | null }
+    ) => void;
     setActiveWorkspacePreset: (preset: HudWorkspacePreset | null) => void;
     visualCoreScene: Jarvis3DScene | null;
     setVisualCoreScene: (scene: Jarvis3DScene) => void;
@@ -588,7 +592,7 @@ export function HUDProvider({ children }: { children: ReactNode }) {
                 derivedWidgets = ["assistant", "tasks"];
             }
 
-            const resolvedTargetMountedWidgets = Array.from(
+            let resolvedTargetMountedWidgets = Array.from(
                 new Set(
                     (targetMountedWidgets.length > 0 && !hasOnlyInboxMounted
                         ? targetMountedWidgets
@@ -604,6 +608,11 @@ export function HUDProvider({ children }: { children: ReactNode }) {
             const restoreMode =
                 options?.restoreMode ??
                 (deterministicRestoreEnabled ? "focus_only" : target.restoreMode ?? "full");
+            if (restoreMode === "full" && (target.taskId || target.missionId)) {
+                resolvedTargetMountedWidgets = Array.from(
+                    new Set([...resolvedTargetMountedWidgets, "assistant", "tasks", "approvals"])
+                );
+            }
             const candidateFocused = resolvePreferredSessionFocus(
                 resolvedTargetMountedWidgets,
                 targetActiveWidgets,
@@ -735,6 +744,43 @@ export function HUDProvider({ children }: { children: ReactNode }) {
         });
     }, []);
 
+    const updateSessionStaleState = useCallback((
+        sessionId: string,
+        payload: { stale: boolean; reason?: string | null; detectedAt?: string | null }
+    ) => {
+        if (!sessionId) {
+            return;
+        }
+        setSessions((prev) => {
+            const target = prev.find((session) => session.id === sessionId);
+            if (!target) {
+                return prev;
+            }
+
+            const nextStale = payload.stale === true;
+            const nextReason =
+                typeof payload.reason === "string" && payload.reason.trim().length > 0 ? payload.reason.trim() : undefined;
+            const nextDetectedAt = nextStale
+                ? (typeof payload.detectedAt === "string" && payload.detectedAt.trim().length > 0
+                    ? payload.detectedAt
+                    : target.staleDetectedAt ?? new Date().toISOString())
+                : undefined;
+            const currentReason = typeof target.staleReason === "string" && target.staleReason.trim().length > 0
+                ? target.staleReason.trim()
+                : undefined;
+
+            if (target.stale === nextStale && currentReason === nextReason && target.staleDetectedAt === nextDetectedAt) {
+                return prev;
+            }
+
+            return patchSession(prev, sessionId, {
+                stale: nextStale,
+                staleReason: nextReason,
+                staleDetectedAt: nextDetectedAt,
+            });
+        });
+    }, []);
+
     useEffect(() => {
         if (!activeSessionId) return;
         setSessions((prev) =>
@@ -785,6 +831,7 @@ export function HUDProvider({ children }: { children: ReactNode }) {
             archiveSession,
             linkSessionTask,
             markSessionContextDelivered,
+            updateSessionStaleState,
             setActiveWorkspacePreset,
             visualCoreScene,
             setVisualCoreScene

@@ -2,8 +2,9 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ListTodo, RefreshCw, Search } from "lucide-react";
+import { AlertTriangle, ListTodo, RefreshCw, Search } from "lucide-react";
 
+import { useHUD } from "@/components/providers/HUDProvider";
 import { ApiRequestError } from "@/lib/api/client";
 import { listTasks, streamDashboardOverviewEvents } from "@/lib/api/endpoints";
 import type { TaskRecord, TaskStatus } from "@/lib/api/types";
@@ -24,6 +25,7 @@ function formatRelativeTime(isoDate: string): string {
 const PAGE_SIZE = 20;
 
 export function TasksModule() {
+  const { sessions } = useHUD();
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -97,11 +99,30 @@ export function TasksModule() {
     });
   }, [tasks, searchTerm]);
 
+  const staleTaskIds = useMemo(() => {
+    return new Set(
+      sessions
+        .filter((session) => session.stale && typeof session.taskId === "string" && session.taskId.trim().length > 0)
+        .map((session) => session.taskId as string)
+    );
+  }, [sessions]);
+
+  const staleSessionCount = useMemo(
+    () => sessions.filter((session) => session.stale).length,
+    [sessions]
+  );
+
   return (
     <main className="w-full h-full bg-transparent text-white p-4 flex flex-col">
       <header className="mb-4 border-l-2 border-cyan-500 pl-3">
         <h2 className="text-sm font-mono font-bold tracking-widest text-cyan-400 flex items-center gap-2">
           <ListTodo size={14} /> TASK MANAGER
+          {staleSessionCount > 0 && (
+            <span className="inline-flex items-center gap-1 rounded border border-amber-500/45 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-200">
+              <AlertTriangle size={10} />
+              stale:{staleSessionCount}
+            </span>
+          )}
         </h2>
       </header>
 
@@ -171,7 +192,12 @@ export function TasksModule() {
                 <div className="col-span-2 font-mono text-[10px] text-white/40">{task.id.slice(0, 8)}</div>
                 <div className="col-span-5 text-xs text-white/85 truncate">{task.title}</div>
                 <div className="col-span-2 font-mono text-[10px] text-white/40 uppercase">{task.mode}</div>
-                <div className="col-span-3 flex justify-end">
+                <div className="col-span-3 flex justify-end items-center gap-1.5">
+                  {staleTaskIds.has(task.id) && (
+                    <span className="rounded border border-amber-500/45 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-mono text-amber-200">
+                      STALE
+                    </span>
+                  )}
                   <TaskStatusBadge status={task.status} />
                 </div>
                 <div className="col-span-12 text-right font-mono text-[10px] text-white/35">

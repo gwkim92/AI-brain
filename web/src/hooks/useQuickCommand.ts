@@ -195,17 +195,44 @@ export function useQuickCommand() {
           complexity_hint: complexity,
         });
 
-        setTimeout(() => {
-          dispatchMissionIntake(intake);
-        }, 0);
-
         if (result.mission) {
-          dispatchMissionIntakeTaskLink({
-            id: intake.id,
-            taskId: result.mission.id,
-          });
           linkSessionTask(sessionId, undefined, result.mission.id);
           linkedTaskId = result.mission.id;
+        }
+
+        try {
+          const context = await createAssistantContext({
+            client_context_id: intake.id,
+            source: "inbox_quick_command",
+            intent: intake.intent,
+            prompt: trimmed,
+            widget_plan: intake.widgetPlan,
+          });
+          const runResult = await runAssistantContextWithMeta(context.id, {
+            task_type: intake.taskMode,
+            client_run_nonce: requestNonce,
+          });
+          emitRuntimeEvent("assistant_stage_updated", {
+            contextId: context.id,
+            stage: runResult.meta.stage?.current ?? "accepted",
+            stageSeq: runResult.meta.stage?.seq ?? null,
+            accepted: runResult.meta.run?.accepted ?? runResult.meta.accepted ?? true,
+            replayed: runResult.meta.run?.replayed ?? false,
+            nonce: runResult.meta.run?.nonce ?? requestNonce,
+          });
+          linkedContextId = context.id;
+
+          setTimeout(() => {
+            dispatchMissionIntake({
+              ...intake,
+              prestarted: true,
+              prestartedContextId: context.id,
+            });
+          }, 0);
+        } catch {
+          setTimeout(() => {
+            dispatchMissionIntake(intake);
+          }, 0);
         }
       } else {
         const task = await createTask({

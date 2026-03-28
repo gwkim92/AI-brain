@@ -19,6 +19,9 @@ export type HudSession = {
   restoreMode: HudSessionRestoreMode;
   lastWorkspacePreset: string | null;
   lastDeliveredContextRevision?: Record<string, number>;
+  stale?: boolean;
+  staleReason?: string;
+  staleDetectedAt?: string;
   status: HudSessionStatus;
 };
 
@@ -93,6 +96,9 @@ export function createSession(
     restoreMode: options?.restoreMode ?? "full",
     lastWorkspacePreset: workspacePreset,
     lastDeliveredContextRevision: {},
+    stale: false,
+    staleReason: undefined,
+    staleDetectedAt: undefined,
     status: "active",
   };
 }
@@ -114,6 +120,9 @@ export function updateSession(
       | "restoreMode"
       | "lastWorkspacePreset"
       | "lastDeliveredContextRevision"
+      | "stale"
+      | "staleReason"
+      | "staleDetectedAt"
     >
   >,
 ): HudSession[] {
@@ -240,6 +249,13 @@ function normalizeSession(value: unknown): HudSession | null {
           )
         )
       : {};
+  const stale = row.stale === true;
+  const staleReason =
+    typeof row.staleReason === "string" && row.staleReason.trim().length > 0 ? row.staleReason.trim() : undefined;
+  const staleDetectedAt =
+    typeof row.staleDetectedAt === "string" && row.staleDetectedAt.trim().length > 0
+      ? row.staleDetectedAt
+      : undefined;
 
   const resolvedActive = activeWidgets.length > 0 ? activeWidgets : focusedWidget ? [focusedWidget] : ["inbox"];
   if (mountedWidgets.length === 0) {
@@ -269,6 +285,9 @@ function normalizeSession(value: unknown): HudSession | null {
     restoreMode: normalizedRestoreMode,
     lastWorkspacePreset,
     lastDeliveredContextRevision,
+    stale,
+    staleReason,
+    staleDetectedAt,
     status: normalizedStatus,
   };
 }
