@@ -102,7 +102,7 @@ test("runs the live HyperAgent operator flow against the real backend", async ({
   const operatorNote = page.getByRole("textbox", { name: "Operator Note" });
   await operatorNote.fill("live integration e2e against the real backend");
 
-  await page.getByRole("button", { name: "Accept" }).click();
+  await page.getByRole("button", { name: "Accept", exact: true }).click();
 
   const applyButton = page.getByRole("button", { name: "Apply" });
   await expect(applyButton).toBeEnabled();
