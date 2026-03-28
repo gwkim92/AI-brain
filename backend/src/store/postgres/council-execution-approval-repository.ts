@@ -4,8 +4,11 @@ import type { CouncilExecutionApprovalRepositoryContract } from '../repository-c
 import type { CouncilRunRow, ExecutionRunRow } from './types';
 import type {
   ApprovalRecord,
+  CouncilPhaseStatusRecord,
   CouncilParticipantRecord,
   CouncilRunRecord,
+  CouncilStructuredResult,
+  CouncilTranscriptEntry,
   ExecutionRunRecord,
   ProviderAttemptRecord
 } from '../types';
@@ -22,7 +25,9 @@ export function createCouncilExecutionApprovalRepository({
       `
           SELECT
             id, question, status, consensus_status, summary, participants, attempts,
-            provider, model, used_fallback, task_id, user_id, idempotency_key, trace_id, created_at, updated_at
+            provider, model, used_fallback, task_id, workflow_version, phase_status, exploration_summary,
+            exploration_transcript, synthesis_error, structured_result,
+            user_id, idempotency_key, trace_id, created_at, updated_at
           FROM council_runs
           WHERE id = $1::uuid
           LIMIT 1
@@ -66,12 +71,20 @@ export function createCouncilExecutionApprovalRepository({
             provider,
             model,
             used_fallback,
-            task_id
+            task_id,
+            workflow_version,
+            phase_status,
+            exploration_summary,
+            exploration_transcript,
+            synthesis_error,
+            structured_result
           )
-          VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13::uuid)
+          VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13::uuid, $14, $15::jsonb, $16, $17::jsonb, $18, $19::jsonb)
           RETURNING
             id, question, status, consensus_status, summary, participants, attempts,
-            provider, model, used_fallback, task_id, user_id, idempotency_key, trace_id, created_at, updated_at
+            provider, model, used_fallback, task_id, workflow_version, phase_status, exploration_summary,
+            exploration_transcript, synthesis_error, structured_result,
+            user_id, idempotency_key, trace_id, created_at, updated_at
         `,
         [
           input.user_id,
@@ -86,7 +99,13 @@ export function createCouncilExecutionApprovalRepository({
           input.provider,
           input.model,
           input.used_fallback,
-          input.task_id
+          input.task_id,
+          input.workflow_version ?? null,
+          input.phase_status ? JSON.stringify(input.phase_status) : null,
+          input.exploration_summary ?? null,
+          input.exploration_transcript ? JSON.stringify(input.exploration_transcript) : null,
+          input.synthesis_error ?? null,
+          input.structured_result ? JSON.stringify(input.structured_result) : null
         ]
       );
 
@@ -113,6 +132,16 @@ export function createCouncilExecutionApprovalRepository({
       if (input.model !== undefined) push('model', input.model);
       if (input.used_fallback !== undefined) push('used_fallback', input.used_fallback);
       if (input.task_id !== undefined) push('task_id', input.task_id);
+      if (input.workflow_version !== undefined) push('workflow_version', input.workflow_version);
+      if (input.phase_status !== undefined) push('phase_status', input.phase_status ? JSON.stringify(input.phase_status) : null);
+      if (input.exploration_summary !== undefined) push('exploration_summary', input.exploration_summary);
+      if (input.exploration_transcript !== undefined) {
+        push('exploration_transcript', input.exploration_transcript ? JSON.stringify(input.exploration_transcript) : null);
+      }
+      if (input.synthesis_error !== undefined) push('synthesis_error', input.synthesis_error);
+      if (input.structured_result !== undefined) {
+        push('structured_result', input.structured_result ? JSON.stringify(input.structured_result) : null);
+      }
 
       if (updates.length === 0) {
         return getCouncilRunByIdInternal(input.runId);
@@ -128,7 +157,9 @@ export function createCouncilExecutionApprovalRepository({
           WHERE id = $${whereIdx}::uuid
           RETURNING
             id, question, status, consensus_status, summary, participants, attempts,
-            provider, model, used_fallback, task_id, user_id, idempotency_key, trace_id, created_at, updated_at
+            provider, model, used_fallback, task_id, workflow_version, phase_status, exploration_summary,
+            exploration_transcript, synthesis_error, structured_result,
+            user_id, idempotency_key, trace_id, created_at, updated_at
         `,
         params
       );
@@ -141,7 +172,9 @@ export function createCouncilExecutionApprovalRepository({
         `
           SELECT
             id, question, status, consensus_status, summary, participants, attempts,
-            provider, model, used_fallback, task_id, user_id, idempotency_key, trace_id, created_at, updated_at
+            provider, model, used_fallback, task_id, workflow_version, phase_status, exploration_summary,
+            exploration_transcript, synthesis_error, structured_result,
+            user_id, idempotency_key, trace_id, created_at, updated_at
           FROM council_runs
           WHERE user_id = $1::uuid
             AND idempotency_key = $2
@@ -158,7 +191,9 @@ export function createCouncilExecutionApprovalRepository({
         `
           SELECT
             id, question, status, consensus_status, summary, participants, attempts,
-            provider, model, used_fallback, task_id, user_id, idempotency_key, trace_id, created_at, updated_at
+            provider, model, used_fallback, task_id, workflow_version, phase_status, exploration_summary,
+            exploration_transcript, synthesis_error, structured_result,
+            user_id, idempotency_key, trace_id, created_at, updated_at
           FROM council_runs
           ORDER BY created_at DESC
           LIMIT $1
@@ -355,6 +390,23 @@ function parseJsonArray<T>(value: unknown): T[] {
   return [];
 }
 
+function parseJsonObject<T extends Record<string, unknown>>(value: unknown): T | null {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as T;
+  }
+
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as T) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
 function mapCouncilRunRow(row: CouncilRunRow): CouncilRunRecord {
   return {
     id: row.id,
@@ -368,6 +420,12 @@ function mapCouncilRunRow(row: CouncilRunRow): CouncilRunRecord {
     model: row.model,
     used_fallback: row.used_fallback,
     task_id: row.task_id,
+    workflow_version: row.workflow_version ?? 'structured_v1',
+    phase_status: parseJsonObject<CouncilPhaseStatusRecord & Record<string, unknown>>(row.phase_status) ?? undefined,
+    exploration_summary: row.exploration_summary ?? undefined,
+    exploration_transcript: parseJsonArray<CouncilTranscriptEntry>(row.exploration_transcript),
+    synthesis_error: row.synthesis_error ?? null,
+    structured_result: parseJsonObject<CouncilStructuredResult & Record<string, unknown>>(row.structured_result) ?? undefined,
     created_at: row.created_at.toISOString(),
     updated_at: row.updated_at.toISOString()
   };

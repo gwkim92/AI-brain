@@ -7,6 +7,12 @@ import type {
   V2CapabilityModuleRegistrationRecord,
   V2CapabilityModuleVersionRecord,
   V2ExecutionContractRecord,
+  V2HyperAgentArtifactSnapshotRecord,
+  V2HyperAgentEvalRunRecord,
+  V2HyperAgentRecommendationRecord,
+  V2HyperAgentVariantRecord,
+  V2LineageEdgeRecord,
+  V2LineageNodeRecord,
   V2RetrievalEvidenceItemRecord,
   V2RetrievalQueryRecord,
   V2RetrievalScoreRecord,
@@ -19,6 +25,15 @@ type V2RetrievalEvidenceInsert = Omit<V2RetrievalEvidenceItemRecord, 'id' | 'cre
 type V2RetrievalScoreInsert = Omit<V2RetrievalScoreRecord, 'id' | 'createdAt'>;
 type V2CapabilityModuleRegistrationInsert = V2CapabilityModuleRegistrationInput;
 type V2TaskViewSchemaInsert = Omit<V2TaskViewSchemaRecord, 'id' | 'createdAt'>;
+type V2HyperAgentArtifactSnapshotInsert = Omit<V2HyperAgentArtifactSnapshotRecord, 'id' | 'createdAt'>;
+type V2HyperAgentVariantInsert = Omit<V2HyperAgentVariantRecord, 'id' | 'createdAt'>;
+type V2HyperAgentEvalRunInsert = Omit<V2HyperAgentEvalRunRecord, 'id' | 'createdAt' | 'updatedAt'>;
+type V2HyperAgentRecommendationInsert = Omit<
+  V2HyperAgentRecommendationRecord,
+  'id' | 'decidedBy' | 'decidedAt' | 'appliedAt' | 'createdAt' | 'updatedAt'
+>;
+type V2LineageNodeInsert = Omit<V2LineageNodeRecord, 'id' | 'createdAt'>;
+type V2LineageEdgeInsert = Omit<V2LineageEdgeRecord, 'id' | 'createdAt'>;
 
 export function createPostgresV2Repository(pool: Pool): V2StoreRepositoryContract {
   return {
@@ -378,6 +393,508 @@ export function createPostgresV2Repository(pool: Pool): V2StoreRepositoryContrac
         ...input,
         id,
         createdAt: row.created_at.toISOString()
+      };
+    },
+
+    async createHyperAgentArtifactSnapshot(input: V2HyperAgentArtifactSnapshotInsert) {
+      const id = randomUUID();
+      const result = await pool.query(
+        `
+          INSERT INTO hyperagent_artifact_snapshots (
+            id, artifact_key, artifact_version, scope, payload_json, created_by
+          )
+          VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6)
+          RETURNING created_at
+        `,
+        [id, input.artifactKey, input.artifactVersion, input.scope, JSON.stringify(input.payload ?? {}), input.createdBy]
+      );
+      const row = result.rows[0] as { created_at: Date };
+      return {
+        ...input,
+        id,
+        createdAt: row.created_at.toISOString()
+      };
+    },
+
+    async getHyperAgentArtifactSnapshotById(input: { artifactSnapshotId: string }) {
+      const result = await pool.query(
+        `
+          SELECT id, artifact_key, artifact_version, scope, payload_json, created_by, created_at
+          FROM hyperagent_artifact_snapshots
+          WHERE id = $1::uuid
+          LIMIT 1
+        `,
+        [input.artifactSnapshotId]
+      );
+      const row = result.rows[0];
+      if (!row) {
+        return null;
+      }
+      return {
+        id: String(row.id),
+        artifactKey: String(row.artifact_key),
+        artifactVersion: String(row.artifact_version),
+        scope: row.scope as V2HyperAgentArtifactSnapshotRecord['scope'],
+        payload: (row.payload_json as Record<string, unknown> | null) ?? {},
+        createdBy: String(row.created_by),
+        createdAt: new Date(row.created_at as string | Date).toISOString()
+      };
+    },
+
+    async listHyperAgentArtifactSnapshots(input: {
+      scope?: V2HyperAgentArtifactSnapshotRecord['scope'];
+      artifactKey?: string;
+      limit: number;
+    }) {
+      const values: unknown[] = [];
+      const filters: string[] = [];
+      if (input.scope) {
+        values.push(input.scope);
+        filters.push(`scope = $${values.length}`);
+      }
+      if (input.artifactKey) {
+        values.push(input.artifactKey);
+        filters.push(`artifact_key = $${values.length}`);
+      }
+      values.push(input.limit);
+      const where = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+      const result = await pool.query(
+        `
+          SELECT id, artifact_key, artifact_version, scope, payload_json, created_by, created_at
+          FROM hyperagent_artifact_snapshots
+          ${where}
+          ORDER BY created_at DESC
+          LIMIT $${values.length}
+        `,
+        values
+      );
+      return result.rows.map((row) => ({
+        id: String(row.id),
+        artifactKey: String(row.artifact_key),
+        artifactVersion: String(row.artifact_version),
+        scope: row.scope as V2HyperAgentArtifactSnapshotRecord['scope'],
+        payload: (row.payload_json as Record<string, unknown> | null) ?? {},
+        createdBy: String(row.created_by),
+        createdAt: new Date(row.created_at as string | Date).toISOString()
+      }));
+    },
+
+    async createHyperAgentVariant(input: V2HyperAgentVariantInsert) {
+      const id = randomUUID();
+      const result = await pool.query(
+        `
+          INSERT INTO hyperagent_variants (
+            id, artifact_snapshot_id, strategy, payload_json, parent_variant_id, lineage_run_id
+          )
+          VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, $5::uuid, $6)
+          RETURNING created_at
+        `,
+        [
+          id,
+          input.artifactSnapshotId,
+          input.strategy,
+          JSON.stringify(input.payload ?? {}),
+          input.parentVariantId,
+          input.lineageRunId
+        ]
+      );
+      const row = result.rows[0] as { created_at: Date };
+      return {
+        ...input,
+        id,
+        createdAt: row.created_at.toISOString()
+      };
+    },
+
+    async getHyperAgentVariantById(input: { variantId: string }) {
+      const result = await pool.query(
+        `
+          SELECT id, artifact_snapshot_id, strategy, payload_json, parent_variant_id, lineage_run_id, created_at
+          FROM hyperagent_variants
+          WHERE id = $1::uuid
+          LIMIT 1
+        `,
+        [input.variantId]
+      );
+      const row = result.rows[0];
+      if (!row) {
+        return null;
+      }
+      return {
+        id: String(row.id),
+        artifactSnapshotId: String(row.artifact_snapshot_id),
+        strategy: row.strategy as V2HyperAgentVariantRecord['strategy'],
+        payload: (row.payload_json as Record<string, unknown> | null) ?? {},
+        parentVariantId: row.parent_variant_id ? String(row.parent_variant_id) : null,
+        lineageRunId: String(row.lineage_run_id),
+        createdAt: new Date(row.created_at as string | Date).toISOString()
+      };
+    },
+
+    async listHyperAgentVariants(input: {
+      artifactSnapshotId?: string;
+      lineageRunId?: string;
+      limit: number;
+    }) {
+      const values: unknown[] = [];
+      const filters: string[] = [];
+      if (input.artifactSnapshotId) {
+        values.push(input.artifactSnapshotId);
+        filters.push(`artifact_snapshot_id = $${values.length}::uuid`);
+      }
+      if (input.lineageRunId) {
+        values.push(input.lineageRunId);
+        filters.push(`lineage_run_id = $${values.length}`);
+      }
+      values.push(input.limit);
+      const where = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+      const result = await pool.query(
+        `
+          SELECT id, artifact_snapshot_id, strategy, payload_json, parent_variant_id, lineage_run_id, created_at
+          FROM hyperagent_variants
+          ${where}
+          ORDER BY created_at DESC
+          LIMIT $${values.length}
+        `,
+        values
+      );
+      return result.rows.map((row) => ({
+        id: String(row.id),
+        artifactSnapshotId: String(row.artifact_snapshot_id),
+        strategy: row.strategy as V2HyperAgentVariantRecord['strategy'],
+        payload: (row.payload_json as Record<string, unknown> | null) ?? {},
+        parentVariantId: row.parent_variant_id ? String(row.parent_variant_id) : null,
+        lineageRunId: String(row.lineage_run_id),
+        createdAt: new Date(row.created_at as string | Date).toISOString()
+      }));
+    },
+
+    async createHyperAgentEvalRun(input: V2HyperAgentEvalRunInsert) {
+      const id = randomUUID();
+      const result = await pool.query(
+        `
+          INSERT INTO hyperagent_eval_runs (
+            id, variant_id, evaluator_key, status, summary_json
+          )
+          VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb)
+          RETURNING created_at, updated_at
+        `,
+        [id, input.variantId, input.evaluatorKey, input.status, JSON.stringify(input.summary ?? {})]
+      );
+      const row = result.rows[0] as { created_at: Date; updated_at: Date };
+      return {
+        ...input,
+        id,
+        createdAt: row.created_at.toISOString(),
+        updatedAt: row.updated_at.toISOString()
+      };
+    },
+
+    async updateHyperAgentEvalRun(input: {
+      evalRunId: string;
+      status?: V2HyperAgentEvalRunRecord['status'];
+      summary?: Record<string, unknown>;
+    }) {
+      const updates: string[] = [];
+      const values: unknown[] = [input.evalRunId];
+      if (typeof input.status !== 'undefined') {
+        values.push(input.status);
+        updates.push(`status = $${values.length}`);
+      }
+      if (typeof input.summary !== 'undefined') {
+        values.push(JSON.stringify(input.summary ?? {}));
+        updates.push(`summary_json = $${values.length}::jsonb`);
+      }
+      if (updates.length === 0) {
+        const existing = await pool.query(
+          `
+            SELECT id, variant_id, evaluator_key, status, summary_json, created_at, updated_at
+            FROM hyperagent_eval_runs
+            WHERE id = $1::uuid
+            LIMIT 1
+          `,
+          [input.evalRunId]
+        );
+        const row = existing.rows[0];
+        if (!row) {
+          return null;
+        }
+        return {
+          id: String(row.id),
+          variantId: String(row.variant_id),
+          evaluatorKey: String(row.evaluator_key),
+          status: row.status as V2HyperAgentEvalRunRecord['status'],
+          summary: (row.summary_json as Record<string, unknown> | null) ?? {},
+          createdAt: new Date(row.created_at as string | Date).toISOString(),
+          updatedAt: new Date(row.updated_at as string | Date).toISOString()
+        };
+      }
+      const result = await pool.query(
+        `
+          UPDATE hyperagent_eval_runs
+          SET ${updates.join(', ')}, updated_at = now()
+          WHERE id = $1::uuid
+          RETURNING id, variant_id, evaluator_key, status, summary_json, created_at, updated_at
+        `,
+        values
+      );
+      const row = result.rows[0];
+      if (!row) {
+        return null;
+      }
+      return {
+        id: String(row.id),
+        variantId: String(row.variant_id),
+        evaluatorKey: String(row.evaluator_key),
+        status: row.status as V2HyperAgentEvalRunRecord['status'],
+        summary: (row.summary_json as Record<string, unknown> | null) ?? {},
+        createdAt: new Date(row.created_at as string | Date).toISOString(),
+        updatedAt: new Date(row.updated_at as string | Date).toISOString()
+      };
+    },
+
+    async getHyperAgentEvalRunById(input: { evalRunId: string }) {
+      const result = await pool.query(
+        `
+          SELECT id, variant_id, evaluator_key, status, summary_json, created_at, updated_at
+          FROM hyperagent_eval_runs
+          WHERE id = $1::uuid
+          LIMIT 1
+        `,
+        [input.evalRunId]
+      );
+      const row = result.rows[0];
+      if (!row) {
+        return null;
+      }
+      return {
+        id: String(row.id),
+        variantId: String(row.variant_id),
+        evaluatorKey: String(row.evaluator_key),
+        status: row.status as V2HyperAgentEvalRunRecord['status'],
+        summary: (row.summary_json as Record<string, unknown> | null) ?? {},
+        createdAt: new Date(row.created_at as string | Date).toISOString(),
+        updatedAt: new Date(row.updated_at as string | Date).toISOString()
+      };
+    },
+
+    async createHyperAgentRecommendation(input: V2HyperAgentRecommendationInsert) {
+      const id = randomUUID();
+      const result = await pool.query(
+        `
+          INSERT INTO hyperagent_recommendations (
+            id, eval_run_id, variant_id, status, summary_json
+          )
+          VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5::jsonb)
+          RETURNING decided_by, decided_at, applied_at, created_at, updated_at
+        `,
+        [id, input.evalRunId, input.variantId, input.status, JSON.stringify(input.summary ?? {})]
+      );
+      const row = result.rows[0] as {
+        decided_by: string | null;
+        decided_at: Date | null;
+        applied_at: Date | null;
+        created_at: Date;
+        updated_at: Date;
+      };
+      return {
+        ...input,
+        id,
+        decidedBy: row.decided_by,
+        decidedAt: row.decided_at?.toISOString() ?? null,
+        appliedAt: row.applied_at?.toISOString() ?? null,
+        createdAt: row.created_at.toISOString(),
+        updatedAt: row.updated_at.toISOString()
+      };
+    },
+
+    async getHyperAgentRecommendationById(input: { recommendationId: string }) {
+      const result = await pool.query(
+        `
+          SELECT id, eval_run_id, variant_id, status, summary_json, decided_by, decided_at, applied_at, created_at, updated_at
+          FROM hyperagent_recommendations
+          WHERE id = $1::uuid
+          LIMIT 1
+        `,
+        [input.recommendationId]
+      );
+      const row = result.rows[0];
+      if (!row) {
+        return null;
+      }
+      return {
+        id: String(row.id),
+        evalRunId: String(row.eval_run_id),
+        variantId: String(row.variant_id),
+        status: row.status as V2HyperAgentRecommendationRecord['status'],
+        summary: (row.summary_json as Record<string, unknown> | null) ?? {},
+        decidedBy: row.decided_by ? String(row.decided_by) : null,
+        decidedAt: row.decided_at ? new Date(row.decided_at as string | Date).toISOString() : null,
+        appliedAt: row.applied_at ? new Date(row.applied_at as string | Date).toISOString() : null,
+        createdAt: new Date(row.created_at as string | Date).toISOString(),
+        updatedAt: new Date(row.updated_at as string | Date).toISOString()
+      };
+    },
+
+    async listHyperAgentRecommendations(input: {
+      status?: V2HyperAgentRecommendationRecord['status'];
+      limit: number;
+    }) {
+      const values: unknown[] = [];
+      const filters: string[] = [];
+      if (input.status) {
+        values.push(input.status);
+        filters.push(`status = $${values.length}`);
+      }
+      values.push(input.limit);
+      const where = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+      const result = await pool.query(
+        `
+          SELECT id, eval_run_id, variant_id, status, summary_json, decided_by, decided_at, applied_at, created_at, updated_at
+          FROM hyperagent_recommendations
+          ${where}
+          ORDER BY updated_at DESC
+          LIMIT $${values.length}
+        `,
+        values
+      );
+      return result.rows.map((row) => ({
+        id: String(row.id),
+        evalRunId: String(row.eval_run_id),
+        variantId: String(row.variant_id),
+        status: row.status as V2HyperAgentRecommendationRecord['status'],
+        summary: (row.summary_json as Record<string, unknown> | null) ?? {},
+        decidedBy: row.decided_by ? String(row.decided_by) : null,
+        decidedAt: row.decided_at ? new Date(row.decided_at as string | Date).toISOString() : null,
+        appliedAt: row.applied_at ? new Date(row.applied_at as string | Date).toISOString() : null,
+        createdAt: new Date(row.created_at as string | Date).toISOString(),
+        updatedAt: new Date(row.updated_at as string | Date).toISOString()
+      }));
+    },
+
+    async decideHyperAgentRecommendation(input: {
+      recommendationId: string;
+      status: V2HyperAgentRecommendationRecord['status'];
+      decidedBy?: string | null;
+      summary?: Record<string, unknown>;
+      appliedAt?: string | null;
+    }) {
+      const values: unknown[] = [
+        input.recommendationId,
+        input.status,
+        typeof input.decidedBy === 'undefined' ? null : input.decidedBy,
+        input.status === 'proposed' ? null : new Date().toISOString(),
+        typeof input.summary === 'undefined' ? null : JSON.stringify(input.summary ?? {}),
+        typeof input.appliedAt === 'undefined' ? null : input.appliedAt
+      ];
+      const result = await pool.query(
+        `
+          UPDATE hyperagent_recommendations
+          SET
+            status = $2,
+            decided_by = COALESCE($3, decided_by),
+            decided_at = COALESCE($4::timestamptz, decided_at),
+            summary_json = COALESCE($5::jsonb, summary_json),
+            applied_at = COALESCE($6::timestamptz, applied_at),
+            updated_at = now()
+          WHERE id = $1::uuid
+          RETURNING id, eval_run_id, variant_id, status, summary_json, decided_by, decided_at, applied_at, created_at, updated_at
+        `,
+        values
+      );
+      const row = result.rows[0];
+      if (!row) {
+        return null;
+      }
+      return {
+        id: String(row.id),
+        evalRunId: String(row.eval_run_id),
+        variantId: String(row.variant_id),
+        status: row.status as V2HyperAgentRecommendationRecord['status'],
+        summary: (row.summary_json as Record<string, unknown> | null) ?? {},
+        decidedBy: row.decided_by ? String(row.decided_by) : null,
+        decidedAt: row.decided_at ? new Date(row.decided_at as string | Date).toISOString() : null,
+        appliedAt: row.applied_at ? new Date(row.applied_at as string | Date).toISOString() : null,
+        createdAt: new Date(row.created_at as string | Date).toISOString(),
+        updatedAt: new Date(row.updated_at as string | Date).toISOString()
+      };
+    },
+
+    async createLineageNode(input: V2LineageNodeInsert) {
+      const id = randomUUID();
+      const result = await pool.query(
+        `
+          INSERT INTO lineage_nodes (id, run_id, node_type, reference_id, metadata)
+          VALUES ($1::uuid, $2, $3, $4, $5::jsonb)
+          RETURNING created_at
+        `,
+        [id, input.runId, input.nodeType, input.referenceId, JSON.stringify(input.metadata ?? {})]
+      );
+      const row = result.rows[0] as { created_at: Date };
+      return {
+        ...input,
+        id,
+        createdAt: row.created_at.toISOString()
+      };
+    },
+
+    async createLineageEdge(input: V2LineageEdgeInsert) {
+      const id = randomUUID();
+      const result = await pool.query(
+        `
+          INSERT INTO lineage_edges (id, run_id, source_node_id, target_node_id, edge_type, metadata)
+          VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5, $6::jsonb)
+          RETURNING created_at
+        `,
+        [id, input.runId, input.sourceNodeId, input.targetNodeId, input.edgeType, JSON.stringify(input.metadata ?? {})]
+      );
+      const row = result.rows[0] as { created_at: Date };
+      return {
+        ...input,
+        id,
+        createdAt: row.created_at.toISOString()
+      };
+    },
+
+    async listLineageByRun(input: { runId: string }) {
+      const [nodesResult, edgesResult] = await Promise.all([
+        pool.query(
+          `
+            SELECT id, run_id, node_type, reference_id, metadata, created_at
+            FROM lineage_nodes
+            WHERE run_id = $1
+            ORDER BY created_at ASC
+          `,
+          [input.runId]
+        ),
+        pool.query(
+          `
+            SELECT id, run_id, source_node_id, target_node_id, edge_type, metadata, created_at
+            FROM lineage_edges
+            WHERE run_id = $1
+            ORDER BY created_at ASC
+          `,
+          [input.runId]
+        ),
+      ]);
+      return {
+        nodes: nodesResult.rows.map((row) => ({
+          id: String(row.id),
+          runId: String(row.run_id),
+          nodeType: String(row.node_type),
+          referenceId: String(row.reference_id),
+          metadata: (row.metadata as Record<string, unknown> | null) ?? {},
+          createdAt: new Date(row.created_at as string | Date).toISOString(),
+        })),
+        edges: edgesResult.rows.map((row) => ({
+          id: String(row.id),
+          runId: String(row.run_id),
+          sourceNodeId: String(row.source_node_id),
+          targetNodeId: String(row.target_node_id),
+          edgeType: String(row.edge_type),
+          metadata: (row.metadata as Record<string, unknown> | null) ?? {},
+          createdAt: new Date(row.created_at as string | Date).toISOString(),
+        })),
       };
     }
   };

@@ -299,7 +299,23 @@ export const V2_REPOSITORY_METHOD_KEYS = [
   'registerCapabilityModule',
   'listCapabilityModules',
   'listCapabilityModuleVersions',
-  'saveTaskViewSchema'
+  'saveTaskViewSchema',
+  'createHyperAgentArtifactSnapshot',
+  'getHyperAgentArtifactSnapshotById',
+  'listHyperAgentArtifactSnapshots',
+  'createHyperAgentVariant',
+  'getHyperAgentVariantById',
+  'listHyperAgentVariants',
+  'createHyperAgentEvalRun',
+  'updateHyperAgentEvalRun',
+  'getHyperAgentEvalRunById',
+  'createHyperAgentRecommendation',
+  'getHyperAgentRecommendationById',
+  'listHyperAgentRecommendations',
+  'decideHyperAgentRecommendation',
+  'createLineageNode',
+  'createLineageEdge',
+  'listLineageByRun'
 ] as const satisfies readonly (keyof V2RepositoryContract)[];
 
 export type StoreMethodKeyGroupName = keyof typeof STORE_METHOD_KEY_GROUPS;

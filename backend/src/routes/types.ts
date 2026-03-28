@@ -113,13 +113,17 @@ export function createSpanId(): string {
   return randomUUID().replaceAll('-', '').slice(0, 16);
 }
 
-export function parseRoundProgress(summary: string): { round: number; maxRounds: number } | null {
-  const match = summary.match(/^Round\s+(\d+)\/(\d+)\s+complete:/u);
+export function parseRoundProgress(summary: string): { round: number; maxRounds: number; state: 'in_progress' | 'complete' } | null {
+  const match = summary.match(/^Round\s+(\d+)\/(\d+)\s+(in progress|complete):/u);
   if (!match) return null;
   const round = Number.parseInt(match[1] ?? '', 10);
   const maxRounds = Number.parseInt(match[2] ?? '', 10);
   if (!Number.isFinite(round) || !Number.isFinite(maxRounds) || round <= 0 || maxRounds <= 0) return null;
-  return { round, maxRounds };
+  return {
+    round,
+    maxRounds,
+    state: match[3] === 'complete' ? 'complete' : 'in_progress'
+  };
 }
 
 export function parseRoundLogCount(summary: string): number | null {

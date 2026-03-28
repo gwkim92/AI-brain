@@ -53,12 +53,12 @@ export function CommandBar() {
 
   return (
     <div className="w-full px-2.5 py-1 pointer-events-auto">
-      <div className="max-w-xl mx-auto flex items-center gap-2 rounded-lg border border-cyan-500/25 bg-black/50 backdrop-blur-xl px-2.5 py-1.5 shadow-[0_0_20px_rgba(0,255,255,0.06)]">
-        <Zap size={14} className="text-cyan-500/60 shrink-0" />
+      <div className="mx-auto flex max-w-xl items-center gap-2 rounded-lg border border-cyan-400/35 bg-black/65 px-2.5 py-1.5 shadow-[0_0_24px_rgba(6,182,212,0.12)] backdrop-blur-xl">
+        <Zap size={14} className="shrink-0 text-cyan-300" />
         <input
           type="text"
           placeholder={t("commandBar.placeholder")}
-          className="flex-1 bg-transparent text-[13px] text-cyan-50 focus:outline-none font-mono placeholder:text-white/25"
+          className="flex-1 bg-transparent font-mono text-[13px] text-cyan-50 focus:outline-none placeholder:text-white/45"
           value={commandInput}
           onChange={(e) => setCommandInput(e.target.value)}
           onKeyDown={(e) => {
@@ -74,7 +74,7 @@ export function CommandBar() {
             className={`text-[9px] font-mono font-bold tracking-widest border px-2 py-1 rounded transition-colors ${
               runtimeDebugEnabled
                 ? "text-amber-200 border-amber-400/50 bg-amber-500/15 hover:bg-amber-500/25"
-                : "text-white/55 border-white/20 bg-white/5 hover:bg-white/10"
+                : "border-white/25 bg-white/10 text-white/80 hover:bg-white/15"
             }`}
             onClick={toggleRuntimeDebug}
             aria-label={t("commandBar.toggleDebug")}

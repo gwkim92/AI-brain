@@ -22,10 +22,10 @@ export default function SignupPage() {
 
   const resolveNextPath = (): string => {
     if (typeof window === "undefined") {
-      return "/?widget=inbox";
+      return "/";
     }
     const nextPath = new URLSearchParams(window.location.search).get("next");
-    return nextPath && nextPath.startsWith("/") ? nextPath : "/?widget=inbox";
+    return nextPath && nextPath.startsWith("/") ? nextPath : "/";
   };
 
   const submitSignup = async () => {

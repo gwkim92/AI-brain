@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "db:init": "tsx scripts/init-db.ts",
-    "jarvis:smoke": "node scripts/jarvis-regression-smoke.mjs"
+    "jarvis:smoke": "node scripts/jarvis-regression-smoke.mjs",
+    "hyperagent:smoke": "node scripts/hyperagent-smoke.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

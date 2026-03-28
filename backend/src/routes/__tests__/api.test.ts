@@ -4,8 +4,11 @@ import { createHmac, randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
+import { clearAppliedHyperAgentArtifactOverrides } from '../../hyperagent/runtime';
 import { createTelegramApprovalCallbackData, validateTelegramApprovalCallbackData } from '../../integrations/telegram/commands';
+import { resetSharedLineageRecorder } from '../../lineage/recorder';
 import { buildServer } from '../../server';
+import { resetSharedMemoryV2Repository } from '../../store/memory/v2-repositories';
 
 const ENV_SNAPSHOT = { ...process.env };
 const dockerAvailable = (() => {
@@ -44,7 +47,64 @@ describe('API routes', () => {
     }
   };
 
+  const buildOpenAiResponse = (outputText: string) =>
+    new Response(
+      JSON.stringify({
+        output_text: outputText,
+        usage: {
+          input_tokens: 12,
+          output_tokens: 24
+        }
+      }),
+      {
+        status: 200,
+        headers: {
+          'content-type': 'application/json'
+        }
+      }
+    );
+
+  const buildHybridExplorationOutput = (role: string) =>
+    [
+      `Current claim: ${role} sees a viable path forward.`,
+      `Strongest counterargument: ${role} expects execution debt if evidence is weak.`,
+      'Signals to confirm: customer impact, operational load, fallback readiness.',
+      'Decision flips if: the strongest counter-signal becomes dominant.'
+    ].join('\n');
+
+  const buildHybridSynthesisOutput = (overrides: Partial<{
+    summary: string;
+    consensusStatus: 'consensus_reached' | 'contradiction_detected' | 'escalated_to_human';
+    primaryHypothesis: string;
+    counterHypothesis: string;
+    weakestLink: string;
+    requiredNextSignals: string[];
+    executionStance: 'proceed' | 'hold' | 'reject';
+  }> = {}) =>
+    JSON.stringify({
+      summary: 'Hybrid council summary',
+      consensusStatus: 'consensus_reached',
+      primaryHypothesis: 'The primary hypothesis remains viable.',
+      counterHypothesis: 'A concentrated counter-case could still invalidate it.',
+      weakestLink: 'Weak evidence density around operational impact.',
+      requiredNextSignals: ['Operational load', 'Customer usage'],
+      executionStance: 'proceed',
+      ...overrides
+    });
+
+  const createHybridCouncilFetchMock = (outputs: string[]) => {
+    let index = 0;
+    return vi.fn().mockImplementation(async () => {
+      const output = outputs[Math.min(index, outputs.length - 1)] ?? outputs[outputs.length - 1] ?? '';
+      index += 1;
+      return buildOpenAiResponse(output);
+    });
+  };
+
   beforeEach(() => {
+    resetSharedMemoryV2Repository();
+    clearAppliedHyperAgentArtifactOverrides();
+    resetSharedLineageRecorder();
     process.env.STORE_BACKEND = 'memory';
     process.env.ALLOWED_ORIGINS = 'http://localhost:3000';
     process.env.PORT = '4001';
@@ -67,6 +127,9 @@ describe('API routes', () => {
   });
 
   afterEach(() => {
+    resetSharedMemoryV2Repository();
+    clearAppliedHyperAgentArtifactOverrides();
+    resetSharedLineageRecorder();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     process.env = { ...ENV_SNAPSHOT };
@@ -2515,6 +2578,7 @@ describe('API routes', () => {
   it('supports user-scoped provider credentials with user->workspace->env resolution', async () => {
     process.env.OPENAI_API_KEY = 'env-openai-key';
     process.env.LOCAL_LLM_ENABLED = 'false';
+    process.env.PROVIDER_OAUTH_OPENAI_ENABLED = 'false';
 
     const { app } = await buildServer();
     const userA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -2532,10 +2596,14 @@ describe('API routes', () => {
       data: {
         source: string;
         selected_credential_mode: string | null;
+        oauth_supported: boolean;
+        oauth_enabled: boolean;
       };
     };
     expect(beforeBody.data.source).toBe('env');
     expect(beforeBody.data.selected_credential_mode).toBe('api_key');
+    expect(beforeBody.data.oauth_supported).toBe(true);
+    expect(beforeBody.data.oauth_enabled).toBe(false);
 
     const upsert = await app.inject({
       method: 'PUT',
@@ -2659,12 +2727,14 @@ describe('API routes', () => {
         source: string;
         selected_credential_mode: string | null;
         has_user_oauth_token: boolean;
+        oauth_enabled: boolean;
       };
     };
     expect(completeBody.data.provider).toBe('gemini');
     expect(completeBody.data.source).toBe('user');
     expect(completeBody.data.selected_credential_mode).toBe('oauth_official');
     expect(completeBody.data.has_user_oauth_token).toBe(true);
+    expect(completeBody.data.oauth_enabled).toBe(true);
 
     const replay = await app.inject({
       method: 'POST',
@@ -2743,6 +2813,18 @@ describe('API routes', () => {
       }
     });
     expect(complete.statusCode).toBe(200);
+    const completeBody = complete.json() as {
+      data: {
+        provider: string;
+        selected_credential_mode: string | null;
+        has_user_oauth_token: boolean;
+        oauth_enabled: boolean;
+      };
+    };
+    expect(completeBody.data.provider).toBe('openai');
+    expect(completeBody.data.selected_credential_mode).toBe('oauth_official');
+    expect(completeBody.data.has_user_oauth_token).toBe(true);
+    expect(completeBody.data.oauth_enabled).toBe(true);
 
     const catalog = await app.inject({
       method: 'GET',
@@ -2768,6 +2850,7 @@ describe('API routes', () => {
   });
 
   it('creates council run with dedicated endpoint', async () => {
+    process.env.COUNCIL_WORKFLOW_MODE = 'structured';
     process.env.OPENAI_API_KEY = 'test-openai-key';
     const fetchMock = vi.fn().mockImplementation(async () => {
       return new Response(
@@ -2905,6 +2988,7 @@ describe('API routes', () => {
   });
 
   it('links manual council runs into jarvis sessions when client_session_id is provided', async () => {
+    process.env.COUNCIL_WORKFLOW_MODE = 'structured';
     process.env.OPENAI_API_KEY = 'test-openai-key';
     const fetchMock = vi.fn().mockImplementation(async () => {
       return new Response(
@@ -2996,6 +3080,7 @@ describe('API routes', () => {
   });
 
   it('supports council rerun with excluded providers', async () => {
+    process.env.COUNCIL_WORKFLOW_MODE = 'structured';
     process.env.OPENAI_API_KEY = 'test-openai-key';
     process.env.GEMINI_API_KEY = 'test-gemini-key';
 
@@ -3090,6 +3175,402 @@ describe('API routes', () => {
     expect(settledBody.data.summary).toContain('Gemini council synthesis output');
     const openaiAttempts = settledBody.data.attempts.filter((attempt) => attempt.provider === 'openai');
     expect(openaiAttempts.every((attempt) => attempt.status === 'skipped')).toBe(true);
+
+    await app.close();
+  });
+
+  it('persists hybrid exploration transcript and structured synthesis for council runs', async () => {
+    process.env.COUNCIL_WORKFLOW_MODE = 'hybrid';
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    const fetchMock = createHybridCouncilFetchMock([
+      buildHybridExplorationOutput('planner'),
+      buildHybridExplorationOutput('researcher'),
+      buildHybridExplorationOutput('critic'),
+      buildHybridExplorationOutput('risk'),
+      buildHybridSynthesisOutput({
+        summary: 'Hybrid synthesis reached a clear go-forward recommendation.',
+        consensusStatus: 'consensus_reached',
+      })
+    ]);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app } = await buildServer();
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/councils/runs',
+      headers: {
+        'idempotency-key': 'idem-council-hybrid-001',
+        'x-trace-id': 'trace-council-hybrid-001'
+      },
+      payload: {
+        question: 'Should we adopt the hybrid council workflow?',
+        max_rounds: 1
+      }
+    });
+
+    expect(create.statusCode).toBe(202);
+    const runId = (create.json() as { data: { id: string } }).data.id;
+
+    const settled = await waitFor(
+      async () =>
+        app.inject({
+          method: 'GET',
+          url: `/api/v1/councils/runs/${runId}`
+        }),
+      {
+        until: (response) => {
+          if (response.statusCode !== 200) return false;
+          const body = response.json() as { data: { status: string } };
+          return body.data.status === 'completed';
+        }
+      }
+    );
+
+    expect(settled.statusCode).toBe(200);
+    const settledBody = settled.json() as {
+      data: {
+        workflow_version?: string;
+        phase_status?: { exploration: string; synthesis: string };
+        exploration_summary?: string;
+        exploration_transcript?: Array<{ round: number; participant: string; content: string }>;
+        structured_result?: { summary: string; consensusStatus: string };
+        summary: string;
+      };
+    };
+    expect(settledBody.data.workflow_version).toBe('hybrid_v1');
+    expect(settledBody.data.phase_status).toEqual({ exploration: 'completed', synthesis: 'completed' });
+    expect(settledBody.data.exploration_summary).toContain('planner=');
+    expect(settledBody.data.exploration_transcript).toHaveLength(4);
+    expect(settledBody.data.structured_result?.consensusStatus).toBe('consensus_reached');
+    expect(settledBody.data.summary).toContain('Hybrid synthesis reached a clear go-forward recommendation.');
+
+    const list = await app.inject({
+      method: 'GET',
+      url: '/api/v1/councils/runs?limit=10'
+    });
+    expect(list.statusCode).toBe(200);
+    const listBody = list.json() as { data: { runs: Array<{ id: string; exploration_transcript?: unknown[] }> } };
+    expect(listBody.data.runs.find((row) => row.id === runId)?.exploration_transcript).toBeUndefined();
+
+    const councilStream = await app.inject({
+      method: 'GET',
+      url: `/api/v1/councils/runs/${runId}/events`
+    });
+    expect(councilStream.statusCode).toBe(200);
+    expect(councilStream.body).toContain('event: council.phase.started');
+    expect(councilStream.body).toContain('event: council.phase.completed');
+    expect(councilStream.body).toContain('event: council.run.completed');
+
+    await app.close();
+  });
+
+  it('escalates hybrid council runs to human review when structured synthesis fails', async () => {
+    process.env.COUNCIL_WORKFLOW_MODE = 'hybrid';
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    const fetchMock = createHybridCouncilFetchMock([
+      buildHybridExplorationOutput('planner'),
+      buildHybridExplorationOutput('researcher'),
+      buildHybridExplorationOutput('critic'),
+      buildHybridExplorationOutput('risk'),
+      'not valid json',
+      'still not valid json',
+      'definitely not valid json',
+    ]);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app } = await buildServer();
+
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/councils/runs',
+      headers: {
+        'idempotency-key': 'idem-council-hybrid-002',
+        'x-trace-id': 'trace-council-hybrid-002'
+      },
+      payload: {
+        question: 'What happens when structured synthesis fails?',
+        max_rounds: 1
+      }
+    });
+
+    expect(create.statusCode).toBe(202);
+    const runId = (create.json() as { data: { id: string } }).data.id;
+
+    const settled = await waitFor(
+      async () =>
+        app.inject({
+          method: 'GET',
+          url: `/api/v1/councils/runs/${runId}`
+        }),
+      {
+        until: (response) => {
+          if (response.statusCode !== 200) return false;
+          const body = response.json() as { data: { status: string } };
+          return body.data.status === 'completed';
+        }
+      }
+    );
+
+    const settledBody = settled.json() as {
+      data: {
+        status: string;
+        consensus_status: string | null;
+        phase_status?: { exploration: string; synthesis: string };
+        synthesis_error?: string | null;
+        summary: string;
+        exploration_transcript?: Array<unknown>;
+      };
+    };
+    expect(settledBody.data.status).toBe('completed');
+    expect(settledBody.data.consensus_status).toBe('escalated_to_human');
+    expect(settledBody.data.phase_status).toEqual({ exploration: 'completed', synthesis: 'failed' });
+    expect(settledBody.data.summary).toContain('[Exploration only]');
+    expect(settledBody.data.synthesis_error).toContain('Structured synthesis validation failed');
+    expect(settledBody.data.exploration_transcript).toHaveLength(4);
+
+    await app.close();
+  });
+
+  it('stores hybrid intelligence deliberations with exploration transcript on success', async () => {
+    process.env.COUNCIL_WORKFLOW_MODE = 'hybrid';
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    const fetchMock = createHybridCouncilFetchMock([
+      buildHybridExplorationOutput('planner'),
+      buildHybridExplorationOutput('researcher'),
+      buildHybridExplorationOutput('critic'),
+      buildHybridExplorationOutput('risk'),
+      buildHybridSynthesisOutput({
+        summary: 'Intelligence bridge produced a structured deliberation.',
+        primaryHypothesis: 'The event is likely to continue.',
+        counterHypothesis: 'The signal may fade if corroboration stalls.',
+        weakestLink: 'Non-social corroboration is still thin.',
+        requiredNextSignals: ['Secondary source confirmation'],
+        executionStance: 'hold',
+      })
+    ]);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app, store } = await buildServer();
+    const userId = '77777777-7777-4777-8777-777777777777';
+    const workspace = await store.createIntelligenceWorkspace({ userId, name: 'Hybrid Workspace' });
+    const eventId = '88888888-8888-4888-8888-888888888888';
+
+    await store.upsertIntelligenceEvent({
+      id: eventId,
+      workspaceId: workspace.id,
+      title: 'Hybrid intelligence event',
+      summary: 'A meaningful cluster of corroborated signals.',
+      eventFamily: 'policy_change',
+      lifecycleState: 'canonical',
+      validationReasons: [],
+      signalIds: ['sig-1'],
+      documentIds: ['doc-1'],
+      entities: ['Policy'],
+      linkedClaimCount: 1,
+      contradictionCount: 0,
+      nonSocialCorroborationCount: 1,
+      linkedClaimHealthScore: 0.7,
+      timeCoherenceScore: 0.8,
+      graphSupportScore: 0.4,
+      graphContradictionScore: 0.1,
+      graphHotspotCount: 0,
+      semanticClaims: [{
+        claimId: 'claim-1',
+        subjectEntity: 'Policy',
+        predicate: 'changes',
+        object: 'Regulation',
+        evidenceSpan: 'Policy filings show a pending regulatory shift.',
+        timeScope: null,
+        uncertainty: 'medium',
+        stance: 'supporting',
+        claimType: 'signal',
+      }],
+      metricShocks: [],
+      sourceMix: { rss: 1 },
+      corroborationScore: 0.6,
+      noveltyScore: 0.4,
+      structuralityScore: 0.5,
+      actionabilityScore: 0.55,
+      riskBand: 'medium',
+      topDomainId: 'policy_regulation_platform_ai',
+      timeWindowStart: '2026-03-24T00:00:00.000Z',
+      timeWindowEnd: '2026-03-24T00:00:00.000Z',
+      domainPosteriors: [],
+      worldStates: [],
+      primaryHypotheses: [{
+        id: 'hyp-1',
+        title: 'Primary',
+        summary: 'The policy shift will persist.',
+        confidence: 0.62,
+        rationale: 'Signal density is rising.',
+      }],
+      counterHypotheses: [{
+        id: 'counter-1',
+        title: 'Counter',
+        summary: 'The cluster could be transient.',
+        confidence: 0.38,
+        rationale: 'Evidence still depends on few sources.',
+      }],
+      invalidationConditions: [{
+        id: 'inv-1',
+        title: 'Invalidation',
+        description: 'No follow-up confirmation arrives.',
+        matcherJson: {},
+        status: 'pending',
+      }],
+      expectedSignals: [{
+        id: 'exp-1',
+        signalKey: 'follow_up',
+        description: 'A secondary confirmation appears.',
+        dueAt: null,
+        status: 'pending',
+      }],
+      deliberationStatus: 'idle',
+      reviewState: 'watch',
+      reviewReason: null,
+      reviewOwner: null,
+      reviewUpdatedAt: null,
+      reviewUpdatedBy: null,
+      reviewResolvedAt: null,
+      deliberations: [],
+      executionCandidates: [{
+        id: 'exec-1',
+        title: 'Prepare response',
+        summary: 'Queue a cautious response plan.',
+        riskBand: 'medium',
+        executionMode: 'proposal',
+        payload: {},
+        policyJson: {},
+        status: 'pending',
+        resultJson: {},
+        createdAt: '2026-03-24T00:00:00.000Z',
+        updatedAt: '2026-03-24T00:00:00.000Z',
+        executedAt: null,
+      }],
+      outcomes: [],
+      operatorNoteCount: 0,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/v1/intelligence/events/${eventId}/deliberate`,
+      headers: {
+        'x-user-id': userId,
+      },
+      payload: {
+        workspace_id: workspace.id,
+      }
+    });
+
+    expect(response.statusCode).toBe(202);
+    const body = response.json() as {
+      data: {
+        deliberation: {
+          status: string;
+          phaseStatus?: { exploration: string; synthesis: string };
+          explorationTranscript?: Array<unknown>;
+        } | null;
+      };
+    };
+    expect(body.data.deliberation?.status).toBe('completed');
+    expect(body.data.deliberation?.phaseStatus).toEqual({ exploration: 'completed', synthesis: 'completed' });
+    expect(body.data.deliberation?.explorationTranscript).toHaveLength(8);
+
+    const updatedEvent = await store.getIntelligenceEventById({ workspaceId: workspace.id, eventId });
+    expect(updatedEvent?.deliberationStatus).toBe('completed');
+    expect(updatedEvent?.deliberations.at(-1)?.explorationTranscript).toHaveLength(8);
+    expect(updatedEvent?.deliberations.at(-1)?.executionStance).toBe('hold');
+
+    await app.close();
+  });
+
+  it('escalates intelligence deliberations when hybrid synthesis fails after exploration', async () => {
+    process.env.COUNCIL_WORKFLOW_MODE = 'hybrid';
+    process.env.OPENAI_API_KEY = 'test-openai-key';
+    const fetchMock = createHybridCouncilFetchMock([
+      buildHybridExplorationOutput('planner'),
+      buildHybridExplorationOutput('researcher'),
+      buildHybridExplorationOutput('critic'),
+      buildHybridExplorationOutput('risk'),
+      'not valid json',
+      'still not valid json',
+      'definitely not valid json',
+    ]);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { app, store } = await buildServer();
+    const userId = '99999999-9999-4999-8999-999999999999';
+    const workspace = await store.createIntelligenceWorkspace({ userId, name: 'Escalation Workspace' });
+    const eventId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+    await store.upsertIntelligenceEvent({
+      id: eventId,
+      workspaceId: workspace.id,
+      title: 'Escalation event',
+      summary: 'An event that will require human review.',
+      eventFamily: 'commodity_move',
+      lifecycleState: 'canonical',
+      validationReasons: [],
+      signalIds: ['sig-2'],
+      documentIds: ['doc-2'],
+      entities: ['Market'],
+      linkedClaimCount: 1,
+      contradictionCount: 0,
+      nonSocialCorroborationCount: 1,
+      linkedClaimHealthScore: 0.6,
+      timeCoherenceScore: 0.7,
+      graphSupportScore: 0.35,
+      graphContradictionScore: 0.05,
+      graphHotspotCount: 0,
+      semanticClaims: [],
+      metricShocks: [],
+      sourceMix: {},
+      corroborationScore: 0.5,
+      noveltyScore: 0.5,
+      structuralityScore: 0.45,
+      actionabilityScore: 0.4,
+      riskBand: 'high',
+      topDomainId: 'commodities_raw_materials',
+      timeWindowStart: '2026-03-24T00:00:00.000Z',
+      timeWindowEnd: '2026-03-24T00:00:00.000Z',
+      domainPosteriors: [],
+      worldStates: [],
+      primaryHypotheses: [],
+      counterHypotheses: [],
+      invalidationConditions: [],
+      expectedSignals: [],
+      deliberationStatus: 'idle',
+      reviewState: 'watch',
+      reviewReason: null,
+      reviewOwner: null,
+      reviewUpdatedAt: null,
+      reviewUpdatedBy: null,
+      reviewResolvedAt: null,
+      deliberations: [],
+      executionCandidates: [],
+      outcomes: [],
+      operatorNoteCount: 0,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/v1/intelligence/events/${eventId}/deliberate`,
+      headers: {
+        'x-user-id': userId,
+      },
+      payload: {
+        workspace_id: workspace.id,
+      }
+    });
+
+    expect(response.statusCode).toBe(202);
+    const updatedEvent = await store.getIntelligenceEventById({ workspaceId: workspace.id, eventId });
+    expect(updatedEvent?.deliberationStatus).toBe('failed');
+    expect(updatedEvent?.deliberations.at(-1)?.status).toBe('failed');
+    expect(updatedEvent?.deliberations.at(-1)?.escalatedToHuman).toBe(true);
+    expect(updatedEvent?.deliberations.at(-1)?.explorationTranscript).toHaveLength(8);
+    expect(updatedEvent?.deliberations.at(-1)?.phaseStatus).toEqual({ exploration: 'completed', synthesis: 'failed' });
 
     await app.close();
   });
@@ -3627,6 +4108,7 @@ describe('API routes', () => {
       'x-user-role': 'operator',
       'x-user-id': '44444444-4444-4444-8444-444444444444',
     };
+    const recentIso = new Date().toISOString();
 
     const ingest = await app.inject({
       method: 'POST',
@@ -3640,8 +4122,8 @@ describe('API routes', () => {
             summary:
               'Government filing confirms Hormuz route risk, insurance spike, freight jump and long-term LNG contract urgency.',
             source_url: 'https://energy.gov/example/hormuz-lng-update',
-            published_at: '2026-03-11T00:00:00.000Z',
-            observed_at: '2026-03-11T00:00:00.000Z',
+            published_at: recentIso,
+            observed_at: recentIso,
             confidence_score: 0.97,
             source_type: 'policy',
             source_tier: 'tier_0',
@@ -5925,6 +6407,7 @@ describe('API routes', () => {
   });
 
   it('applies remembered provider and model preferences to direct council runs', async () => {
+    process.env.COUNCIL_WORKFLOW_MODE = 'structured';
     process.env.OPENAI_API_KEY = 'test-openai-key';
     const fetchMock = vi.fn().mockImplementation(async () => {
       return new Response(
@@ -6016,6 +6499,7 @@ describe('API routes', () => {
   });
 
   it('routes explicit council jarvis requests into council runs', async () => {
+    process.env.COUNCIL_WORKFLOW_MODE = 'structured';
     process.env.OPENAI_API_KEY = 'test-openai-key';
     const fetchMock = vi.fn().mockImplementation(async () => {
       return new Response(

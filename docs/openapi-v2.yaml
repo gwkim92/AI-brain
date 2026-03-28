@@ -163,6 +163,350 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+  /api/v2/hyperagents/artifacts:
+    get:
+      summary: List HyperAgent editable artifact surfaces and currently applied overrides
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HyperAgentArtifactsData" }
+  /api/v2/hyperagents/runtime:
+    get:
+      summary: List HyperAgent runtime overrides currently applied in memory
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HyperAgentRuntimeData" }
+  /api/v2/hyperagents/overview:
+    get:
+      summary: List HyperAgent recommendations with snapshot, variant, eval, diff, gate, and lineage summary
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/HyperAgentRecommendationStatus" }
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HyperAgentOverviewData" }
+  /api/v2/hyperagents/world-model/fixtures:
+    get:
+      summary: List deterministic world-model fixture sets available to the HyperAgent evaluator
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HyperAgentWorldModelFixturesData" }
+  /api/v2/hyperagents/lineage/{runId}:
+    get:
+      summary: Get HyperAgent lineage nodes and edges for a run
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HyperAgentLineageData" }
+  /api/v2/hyperagents/world-model/snapshots:
+    post:
+      summary: Snapshot an allowlisted world-model HyperAgent artifact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HyperAgentSnapshotCreateRequest" }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [snapshot]
+                        properties:
+                          snapshot: { $ref: "#/components/schemas/HyperAgentArtifactSnapshotRecord" }
+    get:
+      summary: List HyperAgent artifact snapshots
+      parameters:
+        - name: artifact_key
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/HyperAgentArtifactKey" }
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HyperAgentSnapshotsData" }
+  /api/v2/hyperagents/world-model/variants:
+    post:
+      summary: Create a bounded HyperAgent variant from a prior snapshot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HyperAgentVariantCreateRequest" }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HyperAgentVariantCreateData" }
+    get:
+      summary: List HyperAgent variants
+      parameters:
+        - name: artifact_snapshot_id
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: lineage_run_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HyperAgentVariantsData" }
+  /api/v2/hyperagents/evals:
+    post:
+      summary: Evaluate a world-model HyperAgent variant against deterministic fixtures
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HyperAgentEvalCreateRequest" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HyperAgentEvalCreateData" }
+  /api/v2/hyperagents/evals/{id}:
+    get:
+      summary: Get HyperAgent eval run detail
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [eval_run]
+                        properties:
+                          eval_run: { $ref: "#/components/schemas/HyperAgentEvalRunRecord" }
+  /api/v2/hyperagents/recommendations:
+    post:
+      summary: Create a HyperAgent recommendation from a completed eval run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HyperAgentRecommendationCreateRequest" }
+      responses:
+        "201":
+          description: created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [recommendation]
+                        properties:
+                          recommendation: { $ref: "#/components/schemas/HyperAgentRecommendationRecord" }
+    get:
+      summary: List HyperAgent recommendations
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/HyperAgentRecommendationStatus" }
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HyperAgentRecommendationsData" }
+  /api/v2/hyperagents/recommendations/{recommendationId}:
+    get:
+      summary: Get HyperAgent recommendation detail
+      parameters:
+        - name: recommendationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/HyperAgentRecommendationDetailData" }
+  /api/v2/hyperagents/recommendations/{recommendationId}/decision:
+    post:
+      summary: Accept or reject a HyperAgent recommendation
+      parameters:
+        - name: recommendationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HyperAgentRecommendationDecisionRequest" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [recommendation]
+                        properties:
+                          recommendation: { $ref: "#/components/schemas/HyperAgentRecommendationRecord" }
+  /api/v2/hyperagents/recommendations/{recommendationId}/apply:
+    post:
+      summary: Apply an accepted HyperAgent recommendation to runtime
+      parameters:
+        - name: recommendationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/ApiSuccessEnvelope" }
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [recommendation, applied_artifact]
+                        properties:
+                          recommendation: { $ref: "#/components/schemas/HyperAgentRecommendationRecord" }
+                          applied_artifact: { $ref: "#/components/schemas/AppliedHyperAgentArtifactRecord" }
   /api/v2/policies/rules:
     get:
       summary: List policy rules
@@ -293,6 +637,439 @@ paths:
               schema: { $ref: "#/components/schemas/ApiSuccessEnvelope" }
 components:
   schemas:
+    HyperAgentArtifactKey:
+      type: string
+      enum: [radar_domain_pack, world_model_dossier_config]
+    HyperAgentArtifactScope:
+      type: string
+      enum: [world_model]
+    HyperAgentRecommendationStatus:
+      type: string
+      enum: [proposed, accepted, rejected, applied]
+    HyperAgentEditableArtifact:
+      type: object
+      required: [artifactKey, scope, description, mutableFields]
+      properties:
+        artifactKey: { $ref: "#/components/schemas/HyperAgentArtifactKey" }
+        scope: { $ref: "#/components/schemas/HyperAgentArtifactScope" }
+        description: { type: string }
+        mutableFields:
+          type: array
+          items: { type: string }
+    AppliedHyperAgentArtifactRecord:
+      type: object
+      required: [artifactKey, payload, recommendationId, variantId, artifactSnapshotId, appliedAt]
+      properties:
+        artifactKey: { $ref: "#/components/schemas/HyperAgentArtifactKey" }
+        payload:
+          type: object
+          additionalProperties: true
+        recommendationId: { type: string, format: uuid }
+        variantId: { type: string, format: uuid }
+        artifactSnapshotId: { type: string, format: uuid }
+        appliedAt: { type: string, format: date-time }
+    HyperAgentEditableArtifactWithAppliedOverride:
+      allOf:
+        - { $ref: "#/components/schemas/HyperAgentEditableArtifact" }
+        - type: object
+          required: [applied_override]
+          properties:
+            applied_override:
+              anyOf:
+                - { $ref: "#/components/schemas/AppliedHyperAgentArtifactRecord" }
+                - { type: "null" }
+    HyperAgentArtifactSnapshotRecord:
+      type: object
+      required: [id, artifactKey, artifactVersion, scope, payload, createdBy, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        artifactKey: { $ref: "#/components/schemas/HyperAgentArtifactKey" }
+        artifactVersion: { type: string }
+        scope: { $ref: "#/components/schemas/HyperAgentArtifactScope" }
+        payload:
+          type: object
+          additionalProperties: true
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
+    HyperAgentVariantRecord:
+      type: object
+      required: [id, artifactSnapshotId, strategy, payload, parentVariantId, lineageRunId, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        artifactSnapshotId: { type: string, format: uuid }
+        strategy: { type: string }
+        payload:
+          type: object
+          additionalProperties: true
+        parentVariantId:
+          anyOf:
+            - { type: string, format: uuid }
+            - { type: "null" }
+        lineageRunId: { type: string }
+        createdAt: { type: string, format: date-time }
+    HyperAgentEvalRunRecord:
+      type: object
+      required: [id, variantId, evaluatorKey, status, summary, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        variantId: { type: string, format: uuid }
+        evaluatorKey: { type: string }
+        status: { type: string }
+        summary:
+          type: object
+          additionalProperties: true
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HyperAgentRecommendationRecord:
+      type: object
+      required: [id, evalRunId, variantId, status, summary, decidedBy, decidedAt, appliedAt, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        evalRunId: { type: string, format: uuid }
+        variantId: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/HyperAgentRecommendationStatus" }
+        summary:
+          type: object
+          additionalProperties: true
+        decidedBy:
+          anyOf:
+            - { type: string }
+            - { type: "null" }
+        decidedAt:
+          anyOf:
+            - { type: string, format: date-time }
+            - { type: "null" }
+        appliedAt:
+          anyOf:
+            - { type: string, format: date-time }
+            - { type: "null" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HyperAgentArtifactDiffEntry:
+      type: object
+      required: [path, changeType, before, after]
+      properties:
+        path: { type: string }
+        changeType:
+          type: string
+          enum: [added, removed, changed]
+        before: {}
+        after: {}
+    HyperAgentArtifactDiff:
+      type: object
+      required: [changeCount, entries]
+      properties:
+        changeCount: { type: integer }
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/HyperAgentArtifactDiffEntry" }
+    HyperAgentEvalGate:
+      type: object
+      required: [passed, reasons]
+      properties:
+        passed: { type: boolean }
+        reasons:
+          type: array
+          items: { type: string }
+    HyperAgentLineageNode:
+      type: object
+      required: [id, runId, nodeType, referenceId, metadata, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        runId: { type: string }
+        nodeType: { type: string }
+        referenceId: { type: string }
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt: { type: string, format: date-time }
+    HyperAgentLineageEdge:
+      type: object
+      required: [id, runId, sourceNodeId, targetNodeId, edgeType, metadata, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        runId: { type: string }
+        sourceNodeId: { type: string, format: uuid }
+        targetNodeId: { type: string, format: uuid }
+        edgeType: { type: string }
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt: { type: string, format: date-time }
+    HyperAgentFixtureSetSummary:
+      type: object
+      required: [key, title, description, fixtureCount]
+      properties:
+        key:
+          type: string
+          enum: [world_model_smoke_v1]
+        title: { type: string }
+        description: { type: string }
+        fixtureCount: { type: integer }
+    HyperAgentOverviewRun:
+      type: object
+      required:
+        [artifact, snapshot, variant, eval_run, recommendation, lineage_run_id, lineage, diff, gate, applied_override, runtime_applied]
+      properties:
+        artifact:
+          anyOf:
+            - { $ref: "#/components/schemas/HyperAgentEditableArtifact" }
+            - { type: "null" }
+        snapshot:
+          anyOf:
+            - { $ref: "#/components/schemas/HyperAgentArtifactSnapshotRecord" }
+            - { type: "null" }
+        variant:
+          anyOf:
+            - { $ref: "#/components/schemas/HyperAgentVariantRecord" }
+            - { type: "null" }
+        eval_run:
+          anyOf:
+            - { $ref: "#/components/schemas/HyperAgentEvalRunRecord" }
+            - { type: "null" }
+        recommendation: { $ref: "#/components/schemas/HyperAgentRecommendationRecord" }
+        lineage_run_id:
+          anyOf:
+            - { type: string }
+            - { type: "null" }
+        lineage:
+          anyOf:
+            - type: object
+              required: [nodeCount, edgeCount]
+              properties:
+                nodeCount: { type: integer }
+                edgeCount: { type: integer }
+            - { type: "null" }
+        diff:
+          anyOf:
+            - { $ref: "#/components/schemas/HyperAgentArtifactDiff" }
+            - { type: "null" }
+        gate: { $ref: "#/components/schemas/HyperAgentEvalGate" }
+        applied_override:
+          anyOf:
+            - { $ref: "#/components/schemas/AppliedHyperAgentArtifactRecord" }
+            - { type: "null" }
+        runtime_applied: { type: boolean }
+    HyperAgentOverviewData:
+      type: object
+      required: [summary, runs]
+      properties:
+        summary:
+          type: object
+          required: [total, applied_count, statuses]
+          properties:
+            total: { type: integer }
+            applied_count: { type: integer }
+            statuses:
+              type: object
+              additionalProperties:
+                type: integer
+        runs:
+          type: array
+          items: { $ref: "#/components/schemas/HyperAgentOverviewRun" }
+    HyperAgentArtifactsData:
+      type: object
+      required: [artifacts]
+      properties:
+        artifacts:
+          type: array
+          items: { $ref: "#/components/schemas/HyperAgentEditableArtifactWithAppliedOverride" }
+    HyperAgentRuntimeData:
+      type: object
+      required: [applied_overrides]
+      properties:
+        applied_overrides:
+          type: array
+          items: { $ref: "#/components/schemas/AppliedHyperAgentArtifactRecord" }
+    HyperAgentSnapshotsData:
+      type: object
+      required: [snapshots]
+      properties:
+        snapshots:
+          type: array
+          items: { $ref: "#/components/schemas/HyperAgentArtifactSnapshotRecord" }
+    HyperAgentVariantsData:
+      type: object
+      required: [variants]
+      properties:
+        variants:
+          type: array
+          items: { $ref: "#/components/schemas/HyperAgentVariantRecord" }
+    HyperAgentVariantCreateData:
+      type: object
+      required: [variant, archive, changed_keys]
+      properties:
+        variant: { $ref: "#/components/schemas/HyperAgentVariantRecord" }
+        archive:
+          type: object
+          additionalProperties: true
+        changed_keys:
+          type: array
+          items: { type: string }
+    HyperAgentEvalResult:
+      type: object
+      required: [evaluatedAt, metrics, caseResults]
+      properties:
+        evaluatedAt: { type: string, format: date-time }
+        metrics:
+          type: object
+          additionalProperties: true
+        caseResults:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    HyperAgentEvalCreateData:
+      type: object
+      required: [eval_run, result]
+      properties:
+        eval_run: { $ref: "#/components/schemas/HyperAgentEvalRunRecord" }
+        result: { $ref: "#/components/schemas/HyperAgentEvalResult" }
+    HyperAgentWorldModelFixturesData:
+      type: object
+      required: [default_fixture_set, fixture_sets]
+      properties:
+        default_fixture_set:
+          type: string
+          enum: [world_model_smoke_v1]
+        fixture_sets:
+          type: array
+          items: { $ref: "#/components/schemas/HyperAgentFixtureSetSummary" }
+    HyperAgentLineageData:
+      type: object
+      required: [run_id, lineage]
+      properties:
+        run_id: { type: string }
+        lineage:
+          type: object
+          required: [nodes, edges]
+          properties:
+            nodes:
+              type: array
+              items: { $ref: "#/components/schemas/HyperAgentLineageNode" }
+            edges:
+              type: array
+              items: { $ref: "#/components/schemas/HyperAgentLineageEdge" }
+    HyperAgentRecommendationsData:
+      type: object
+      required: [recommendations]
+      properties:
+        recommendations:
+          type: array
+          items: { $ref: "#/components/schemas/HyperAgentRecommendationRecord" }
+    HyperAgentRecommendationDetailData:
+      type: object
+      required: [artifact, snapshot, variant, eval_run, recommendation, lineage_run_id, diff]
+      properties:
+        artifact:
+          anyOf:
+            - { $ref: "#/components/schemas/HyperAgentEditableArtifact" }
+            - { type: "null" }
+        snapshot: { $ref: "#/components/schemas/HyperAgentArtifactSnapshotRecord" }
+        variant: { $ref: "#/components/schemas/HyperAgentVariantRecord" }
+        eval_run:
+          anyOf:
+            - { $ref: "#/components/schemas/HyperAgentEvalRunRecord" }
+            - { type: "null" }
+        recommendation: { $ref: "#/components/schemas/HyperAgentRecommendationRecord" }
+        lineage_run_id: { type: string }
+        diff: { $ref: "#/components/schemas/HyperAgentArtifactDiff" }
+    HyperAgentSnapshotCreateRequest:
+      type: object
+      required: [artifact_key]
+      properties:
+        artifact_key: { $ref: "#/components/schemas/HyperAgentArtifactKey" }
+        artifact_version: { type: string }
+    HyperAgentVariantCreateRequest:
+      type: object
+      required: [artifact_snapshot_id]
+      properties:
+        artifact_snapshot_id: { type: string, format: uuid }
+        mutation_budget:
+          type: integer
+          minimum: 1
+          maximum: 6
+        parent_variant_id:
+          anyOf:
+            - { type: string, format: uuid }
+            - { type: "null" }
+        lineage_run_id: { type: string }
+    HyperAgentEvalSource:
+      type: object
+      required: [url, title, domain]
+      properties:
+        url: { type: string, format: uri }
+        title: { type: string }
+        domain: { type: string }
+        snippet: { type: string }
+        publishedAt: { type: string, format: date-time }
+    HyperAgentEvalClaim:
+      type: object
+      required: [claimText, sourceUrls]
+      properties:
+        claimText: { type: string }
+        sourceUrls:
+          type: array
+          items: { type: string, format: uri }
+    HyperAgentEvalExtractionInput:
+      type: object
+      required: [query, researchProfile, sources, claims]
+      properties:
+        query: { type: string }
+        researchProfile:
+          type: string
+          enum:
+            [broad_news, topic_news, entity_brief, comparison_research, repo_research, market_research, policy_regulation]
+        generatedAt: { type: string, format: date-time }
+        sources:
+          type: array
+          items: { $ref: "#/components/schemas/HyperAgentEvalSource" }
+        claims:
+          type: array
+          items: { $ref: "#/components/schemas/HyperAgentEvalClaim" }
+    HyperAgentEvaluationFixture:
+      type: object
+      required: [fixtureId, extractionInput]
+      properties:
+        fixtureId: { type: string }
+        extractionInput: { $ref: "#/components/schemas/HyperAgentEvalExtractionInput" }
+        expectedPrimaryThesisPresent: { type: boolean }
+        expectedCounterHypothesisPresent: { type: boolean }
+        minInvalidationConditions: { type: integer }
+        minBottlenecks: { type: integer }
+        maxNextWatchSignals: { type: integer }
+    HyperAgentEvalCreateRequest:
+      type: object
+      required: [variant_id]
+      properties:
+        variant_id: { type: string, format: uuid }
+        evaluator_key:
+          type: string
+          enum: [world_model_backtest_v1]
+        fixture_set:
+          type: string
+          enum: [world_model_smoke_v1]
+        fixtures:
+          type: array
+          items: { $ref: "#/components/schemas/HyperAgentEvaluationFixture" }
+    HyperAgentRecommendationCreateRequest:
+      type: object
+      required: [eval_run_id]
+      properties:
+        eval_run_id: { type: string, format: uuid }
+        summary:
+          type: object
+          additionalProperties: true
+    HyperAgentRecommendationDecisionRequest:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [accept, reject]
+        summary:
+          type: object
+          additionalProperties: true
     ApiSuccessEnvelope:
       type: object
       required: [request_id, data, meta]

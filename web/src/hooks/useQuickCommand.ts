@@ -160,8 +160,8 @@ export function useQuickCommand() {
         tileWidgetLayouts(allowed, viewport.width, viewport.height, 24);
       }
 
-      if (pathname !== "/") {
-        router.push("/");
+      if (pathname !== "/studio") {
+        router.push("/studio");
       }
 
       openWidgets(allowed, {

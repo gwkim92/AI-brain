@@ -2,12 +2,12 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { ArrowLeft, RefreshCw, Activity } from "lucide-react";
 
-import { getTask, streamTaskEvents } from "@/lib/api/endpoints";
+import { getJarvisSession, getTask, streamTaskEvents } from "@/lib/api/endpoints";
 import { ApiRequestError } from "@/lib/api/client";
-import type { TaskRecord } from "@/lib/api/types";
+import type { BriefingRecord, DossierRecord, JarvisNextAction, JarvisSessionDetail, TaskRecord } from "@/lib/api/types";
 import { useLocale } from "@/components/providers/LocaleProvider";
 import { TaskStatusBadge } from "@/components/ui/TaskStatusBadge";
 
@@ -52,12 +52,123 @@ function parseTimelineEvent(payload: unknown, eventType: string): TimelineEvent 
   };
 }
 
+function describeNextAction(action: JarvisNextAction | null | undefined, locale: ReturnType<typeof useLocale>): string {
+  if (!action) {
+    return locale.locale === "ko" ? "세션 다음 행동 정보가 아직 없다. 타임라인과 입력 payload를 먼저 확인해라." : "There is no explicit next step yet. Review the timeline and input payload first.";
+  }
+  if (action.kind === "open_action_center") {
+    return locale.locale === "ko" ? "대기 중인 액션과 승인 항목을 먼저 검토해라." : "Review the pending actions and approval items first.";
+  }
+  if (action.kind === "open_workbench") {
+    return locale.locale === "ko" ? "워크벤치를 열어 이 세션의 진행 상태와 산출물을 확인해라." : "Open the workbench and inspect the session progress and outputs.";
+  }
+  if (action.kind === "open_brief") {
+    return locale.locale === "ko" ? "브리핑 산출물을 먼저 확인해라." : "Review the generated briefing first.";
+  }
+  if (action.kind === "create_monitor") {
+    return locale.locale === "ko" ? "이 세션에서 모니터를 만들어 후속 변화를 추적해라." : "Create a monitor from this session to track follow-up changes.";
+  }
+  return locale.locale === "ko" ? "세션 상태를 다시 점검해라." : "Review the session state before continuing.";
+}
+
+function previewArtifactText(...values: string[]): string {
+  const lines = values.flatMap((value) =>
+    value
+      .split("\n")
+      .map((line) =>
+        line
+          .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+          .replace(/\*\*/g, "")
+          .replace(/^#+\s*/, "")
+          .replace(/^[-*]\s*/, "")
+          .replace(/^\d+\.\s*/, "")
+          .trim()
+      )
+  );
+
+  const meaningful = lines.filter((line) => {
+    if (line.length < 18) return false;
+    if (/^(정책 브리프|policy brief|briefing|dossier)$/i.test(line)) return false;
+    if (/^(sources?|출처)[:\s]?/i.test(line)) return false;
+    return true;
+  });
+
+  return meaningful.slice(0, 3).join(" ");
+}
+
+function ArtifactPreview({
+  title,
+  summary,
+  body,
+  status,
+  locale,
+}: {
+  title: string;
+  summary: string;
+  body: string;
+  status: string;
+  locale: ReturnType<typeof useLocale>;
+}) {
+  const preview = previewArtifactText(summary, body) || (locale.locale === "ko" ? "미리 볼 수 있는 요약이 아직 없다." : "No preview is available yet.");
+  return (
+    <div className="rounded-2xl border border-black/10 bg-white px-4 py-4">
+      <p className="text-sm font-semibold text-neutral-950">{title}</p>
+      <p className="mt-1 text-xs text-neutral-500">{status}</p>
+      <p className="mt-3 text-sm leading-6 text-neutral-700">{preview}</p>
+    </div>
+  );
+}
+
+function ResultArtifacts({
+  briefing,
+  dossier,
+  locale,
+}: {
+  briefing: BriefingRecord | null;
+  dossier: DossierRecord | null;
+  locale: ReturnType<typeof useLocale>;
+}) {
+  if (!briefing && !dossier) {
+    return null;
+  }
+
+  return (
+    <div className="mt-4 space-y-3">
+      <p className="text-[10px] font-mono uppercase tracking-[0.24em] text-cyan-700">
+        {locale.locale === "ko" ? "생성된 결과" : "Generated results"}
+      </p>
+      {briefing ? (
+        <ArtifactPreview
+          title={locale.locale === "ko" ? "브리핑" : "Briefing"}
+          summary={briefing.summary}
+          body={briefing.answerMarkdown}
+          status={briefing.status}
+          locale={locale}
+        />
+      ) : null}
+      {dossier ? (
+        <ArtifactPreview
+          title={locale.locale === "ko" ? "Dossier" : "Dossier"}
+          summary={dossier.summary}
+          body={dossier.answerMarkdown}
+          status={dossier.status}
+          locale={locale}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 export default function TaskDetailPage() {
   const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
   const taskId = Array.isArray(params?.id) ? params.id[0] : params?.id;
-  const { t, formatDateTime } = useLocale();
+  const focusedSessionId = searchParams.get("session");
+  const locale = useLocale();
+  const { t, formatDateTime } = locale;
 
   const [task, setTask] = useState<TaskRecord | null>(null);
+  const [focusedSessionDetail, setFocusedSessionDetail] = useState<JarvisSessionDetail | null>(null);
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -88,6 +199,28 @@ export default function TaskDetailPage() {
   useEffect(() => {
     void loadTask();
   }, [loadTask]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!focusedSessionId) {
+      setFocusedSessionDetail(null);
+      return;
+    }
+    void getJarvisSession(focusedSessionId)
+      .then((detail) => {
+        if (!cancelled) {
+          setFocusedSessionDetail(detail);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setFocusedSessionDetail(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [focusedSessionId]);
 
   useEffect(() => {
     if (!taskId) return;
@@ -183,85 +316,115 @@ export default function TaskDetailPage() {
 
   if (!taskId) {
     return (
-      <main className="w-full h-full bg-black text-white p-8">
+      <main className="rounded-[32px] border border-black/10 bg-[#fffdf8] p-8 text-neutral-950 shadow-sm">
         <p className="text-red-400 font-mono text-sm">{t("taskDetail.invalidId")}</p>
       </main>
     );
   }
 
   return (
-    <main className="w-full h-full bg-black text-white p-8 flex flex-col overflow-y-auto">
-      <header className="mb-6 border-l-2 border-cyan-500 pl-4 flex items-center justify-between">
+    <main className="rounded-[32px] border border-black/10 bg-[#fffdf8] p-8 text-neutral-950 shadow-sm flex flex-col overflow-y-auto">
+      <header className="mb-6 border-l-2 border-neutral-950 pl-4 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-mono font-bold tracking-widest text-white">{t("taskDetail.title")}</h1>
-          <p className="text-sm font-mono text-white/50 tracking-wide mt-1">{taskId}</p>
+          <h1 className="text-2xl font-mono font-bold tracking-widest text-neutral-950">{t("taskDetail.title")}</h1>
+          <p className="text-sm font-mono text-neutral-500 tracking-wide mt-1">{taskId}</p>
         </div>
         <div className="flex items-center gap-3">
           <Link
-            href="/?widget=tasks"
-            className="px-3 py-2 text-xs font-mono rounded border border-white/20 text-white/70 hover:text-white hover:border-white/40 flex items-center gap-2"
+            href="/tasks"
+            className="px-3 py-2 text-xs font-mono rounded border border-black/10 text-neutral-700 hover:text-neutral-950 hover:border-black/30 flex items-center gap-2"
           >
             <ArrowLeft size={14} /> {t("common.back")}
           </Link>
           <button
             onClick={() => void loadTask()}
-            className="px-3 py-2 text-xs font-mono rounded border border-cyan-500/40 text-cyan-300 hover:text-cyan-100 flex items-center gap-2"
+            className="px-3 py-2 text-xs font-mono rounded border border-black/10 text-neutral-700 hover:text-neutral-950 flex items-center gap-2"
           >
             <RefreshCw size={14} /> {t("common.refresh")}
           </button>
         </div>
       </header>
 
-      {loading && <div className="text-sm font-mono text-white/40">{t("taskDetail.loading")}</div>}
+      {loading && <div className="text-sm font-mono text-neutral-500">{t("taskDetail.loading")}</div>}
 
       {!loading && error && <div className="text-sm font-mono text-red-400">{error}</div>}
 
       {!loading && !error && task && (
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-          <section className="xl:col-span-1 bg-white/5 border border-white/10 rounded-lg p-5">
-            <h2 className="text-[10px] font-mono tracking-widest text-white/40 uppercase mb-4">{t("taskDetail.metadata")}</h2>
+          <section className="xl:col-span-1 bg-white border border-black/10 rounded-3xl p-5">
+            <h2 className="text-[10px] font-mono tracking-widest text-neutral-500 uppercase mb-4">{t("taskDetail.metadata")}</h2>
 
             <div className="space-y-3 text-sm">
               <div>
-                <p className="text-white/40 text-xs font-mono">{t("tasks.table.title")}</p>
-                <p className="text-white/90">{task.title}</p>
+                <p className="text-neutral-500 text-xs font-mono">{t("tasks.table.title")}</p>
+                <p className="text-neutral-950">{task.title}</p>
               </div>
               <div>
-                <p className="text-white/40 text-xs font-mono">{t("tasks.table.mode")}</p>
-                <p className="text-white/90 uppercase tracking-wide">{task.mode}</p>
+                <p className="text-neutral-500 text-xs font-mono">{t("tasks.table.mode")}</p>
+                <p className="text-neutral-950 uppercase tracking-wide">{task.mode}</p>
               </div>
               <div>
-                <p className="text-white/40 text-xs font-mono">{t("common.status")}</p>
+                <p className="text-neutral-500 text-xs font-mono">{t("common.status")}</p>
                 <TaskStatusBadge status={task.status} />
               </div>
               <div>
-                <p className="text-white/40 text-xs font-mono">{t("taskDetail.created")}</p>
-                <p className="text-white/90">{formatDateTime(task.createdAt)}</p>
+                <p className="text-neutral-500 text-xs font-mono">{t("taskDetail.created")}</p>
+                <p className="text-neutral-950">{formatDateTime(task.createdAt)}</p>
               </div>
               <div>
-                <p className="text-white/40 text-xs font-mono">{t("taskDetail.updated")}</p>
-                <p className="text-white/90">{formatDateTime(task.updatedAt)}</p>
+                <p className="text-neutral-500 text-xs font-mono">{t("taskDetail.updated")}</p>
+                <p className="text-neutral-950">{formatDateTime(task.updatedAt)}</p>
               </div>
               <div>
-                <p className="text-white/40 text-xs font-mono">{t("taskDetail.trace")}</p>
-                <p className="text-white/90 font-mono text-xs">{task.traceId ?? "-"}</p>
+                <p className="text-neutral-500 text-xs font-mono">{t("taskDetail.trace")}</p>
+                <p className="text-neutral-950 font-mono text-xs">{task.traceId ?? "-"}</p>
               </div>
             </div>
 
             <div className="mt-6">
-              <p className="text-white/40 text-xs font-mono mb-2">{t("taskDetail.inputPayload")}</p>
-              <pre className="text-[11px] leading-5 bg-black/50 border border-white/10 rounded p-3 overflow-auto text-cyan-200">
+              <p className="text-neutral-500 text-xs font-mono mb-2">{t("taskDetail.inputPayload")}</p>
+              <pre className="text-[11px] leading-5 bg-neutral-950 border border-black/10 rounded p-3 overflow-auto text-amber-100">
                 {JSON.stringify(task.input, null, 2)}
               </pre>
             </div>
+
+            {focusedSessionDetail ? (
+              <div className="mt-6 rounded-2xl border border-cyan-200 bg-cyan-50 p-4">
+                <p className="text-[10px] font-mono uppercase tracking-[0.24em] text-cyan-700">
+                  {t("common.status")} · {focusedSessionDetail.session.status}
+                </p>
+                <h3 className="mt-2 text-sm font-semibold text-neutral-950">
+                  {focusedSessionDetail.session.title}
+                </h3>
+                <p className="mt-2 text-xs leading-5 text-neutral-700">
+                  {describeNextAction(focusedSessionDetail.next_action, locale)}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-neutral-700">
+                  <span className="rounded-full border border-cyan-200 bg-white px-2 py-1">
+                    {focusedSessionDetail.session.primaryTarget}
+                  </span>
+                  <span className="rounded-full border border-cyan-200 bg-white px-2 py-1">
+                    {locale.locale === "ko" ? "활성 능력" : "Active capabilities"} {focusedSessionDetail.active_capabilities.length}
+                  </span>
+                  <span className="rounded-full border border-cyan-200 bg-white px-2 py-1">
+                    {locale.locale === "ko" ? "대기 액션" : "Pending actions"} {focusedSessionDetail.actions.length}
+                  </span>
+                </div>
+                <ResultArtifacts
+                  briefing={focusedSessionDetail.briefing}
+                  dossier={focusedSessionDetail.dossier}
+                  locale={locale}
+                />
+              </div>
+            ) : null}
           </section>
 
           <section className="xl:col-span-2 flex flex-col gap-6">
-            <div className="bg-white/5 border border-white/10 rounded-lg p-5">
+            <div className="bg-white border border-black/10 rounded-3xl p-5">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-[10px] font-mono tracking-widest text-white/40 uppercase">{t("taskDetail.timeline")}</h2>
-                <span className="text-xs font-mono text-white/50 flex items-center gap-2">
-                  <Activity size={14} className={streamState === "streaming" ? "text-cyan-400 animate-pulse" : "text-white/40"} />
+                <h2 className="text-[10px] font-mono tracking-widest text-neutral-500 uppercase">{t("taskDetail.timeline")}</h2>
+                <span className="text-xs font-mono text-neutral-500 flex items-center gap-2">
+                  <Activity size={14} className={streamState === "streaming" ? "text-neutral-950 animate-pulse" : "text-neutral-400"} />
                   {t(`taskDetail.stream.${streamState}` as const)}
                 </span>
               </div>
@@ -271,8 +434,8 @@ export default function TaskDetailPage() {
                   type="button"
                   className={`rounded border px-2 py-1 text-[10px] font-mono transition-colors ${
                     selectedTraceId === null
-                      ? "border-cyan-400/60 bg-cyan-500/20 text-cyan-200"
-                      : "border-white/15 bg-black/40 text-white/60 hover:text-white/80"
+                      ? "border-neutral-950 bg-neutral-950 text-white"
+                      : "border-black/10 bg-white text-neutral-600 hover:text-neutral-950"
                   }`}
                   onClick={() => setSelectedTraceId(null)}
                 >
@@ -284,8 +447,8 @@ export default function TaskDetailPage() {
                     type="button"
                     className={`rounded border px-2 py-1 text-[10px] font-mono transition-colors ${
                       selectedTraceId === traceId
-                        ? "border-cyan-400/60 bg-cyan-500/20 text-cyan-200"
-                        : "border-white/15 bg-black/40 text-white/60 hover:text-white/80"
+                        ? "border-neutral-950 bg-neutral-950 text-white"
+                        : "border-black/10 bg-white text-neutral-600 hover:text-neutral-950"
                     }`}
                     onClick={() => setSelectedTraceId(traceId)}
                   >
@@ -295,17 +458,17 @@ export default function TaskDetailPage() {
               </div>
 
               {filteredEvents.length === 0 && (
-                <div className="text-sm font-mono text-white/40">{t("taskDetail.noEvents")}</div>
+                <div className="text-sm font-mono text-neutral-500">{t("taskDetail.noEvents")}</div>
               )}
 
               <div className="space-y-3 max-h-[320px] overflow-y-auto pr-1">
                 {filteredEvents.map((event) => (
-                  <div key={event.id} className="border border-white/10 rounded-md p-3 bg-black/40">
+                  <div key={event.id} className="border border-black/10 rounded-2xl p-3 bg-white">
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-xs font-mono text-cyan-300">{event.type}</span>
-                      <span className="text-xs font-mono text-white/40">{formatDateTime(event.timestamp)}</span>
+                      <span className="text-xs font-mono text-neutral-950">{event.type}</span>
+                      <span className="text-xs font-mono text-neutral-500">{formatDateTime(event.timestamp)}</span>
                     </div>
-                    <div className="mb-2 flex flex-wrap items-center gap-3 text-[10px] font-mono text-white/45">
+                    <div className="mb-2 flex flex-wrap items-center gap-3 text-[10px] font-mono text-neutral-500">
                       <button
                         type="button"
                         onClick={() => {
@@ -313,26 +476,26 @@ export default function TaskDetailPage() {
                           if (!traceId) return;
                           setSelectedTraceId((current) => (current === traceId ? null : traceId));
                         }}
-                        className="rounded border border-cyan-500/30 px-2 py-1 text-cyan-200 hover:bg-cyan-500/15"
+                        className="rounded border border-black/10 px-2 py-1 text-neutral-700 hover:bg-neutral-100"
                       >
                         {t("taskDetail.traceLabel")}={formatShortId(event.traceId ?? task.traceId)}
                       </button>
                       <span>{t("taskDetail.spanLabel")}={formatShortId(event.spanId)}</span>
                     </div>
-                    <pre className="text-[11px] leading-5 text-white/80 overflow-auto">{JSON.stringify(event.data, null, 2)}</pre>
+                    <pre className="text-[11px] leading-5 text-neutral-800 overflow-auto">{JSON.stringify(event.data, null, 2)}</pre>
                   </div>
                 ))}
               </div>
             </div>
 
-            <div className="bg-white/5 border border-white/10 rounded-lg p-5">
+            <div className="bg-white border border-black/10 rounded-3xl p-5">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-[10px] font-mono tracking-widest text-white/40 uppercase">{t("taskDetail.traceTimeline")}</h2>
-                <span className="text-xs font-mono text-white/45">{t("taskDetail.traceCount", { value: traceTimeline.length })}</span>
+                <h2 className="text-[10px] font-mono tracking-widest text-neutral-500 uppercase">{t("taskDetail.traceTimeline")}</h2>
+                <span className="text-xs font-mono text-neutral-500">{t("taskDetail.traceCount", { value: traceTimeline.length })}</span>
               </div>
 
               {traceTimeline.length === 0 && (
-                <div className="text-sm font-mono text-white/40">{t("taskDetail.noTraceMetadata")}</div>
+                <div className="text-sm font-mono text-neutral-500">{t("taskDetail.noTraceMetadata")}</div>
               )}
 
               <div className="space-y-3 max-h-[230px] overflow-y-auto pr-1">
@@ -343,13 +506,13 @@ export default function TaskDetailPage() {
                     onClick={() => setSelectedTraceId((current) => (current === trace.traceId ? null : trace.traceId))}
                     className={`w-full rounded-md border p-3 text-left transition-colors ${
                       selectedTraceId === trace.traceId
-                        ? "border-cyan-300/60 bg-cyan-500/15"
-                        : "border-cyan-500/20 bg-cyan-500/5 hover:bg-cyan-500/10"
+                        ? "border-neutral-950 bg-neutral-950/5"
+                        : "border-black/10 bg-white hover:bg-neutral-50"
                     }`}
                   >
                     <div className="flex items-center justify-between gap-3">
-                      <span className="text-xs font-mono text-cyan-300">{t("taskDetail.tracePrefix")} {formatShortId(trace.traceId, 12)}</span>
-                      <span className="text-[10px] font-mono text-white/45">
+                      <span className="text-xs font-mono text-neutral-950">{t("taskDetail.tracePrefix")} {formatShortId(trace.traceId, 12)}</span>
+                      <span className="text-[10px] font-mono text-neutral-500">
                         {t("taskDetail.traceSummary", {
                           spans: trace.spanIds.length,
                           events: trace.events.length,
@@ -360,11 +523,11 @@ export default function TaskDetailPage() {
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       {trace.events.map((event, index) => (
                         <React.Fragment key={event.id}>
-                          <div className="rounded border border-white/10 bg-black/50 px-2 py-1 min-w-[120px]">
-                            <p className="text-[10px] font-mono text-white/70">{event.type}</p>
-                            <p className="text-[10px] font-mono text-cyan-300">{t("taskDetail.spanLabel")} {formatShortId(event.spanId, 10)}</p>
+                          <div className="rounded border border-black/10 bg-white px-2 py-1 min-w-[120px]">
+                            <p className="text-[10px] font-mono text-neutral-700">{event.type}</p>
+                            <p className="text-[10px] font-mono text-neutral-950">{t("taskDetail.spanLabel")} {formatShortId(event.spanId, 10)}</p>
                           </div>
-                          {index < trace.events.length - 1 && <span className="text-cyan-400/50 text-xs">→</span>}
+                          {index < trace.events.length - 1 && <span className="text-neutral-400 text-xs">→</span>}
                         </React.Fragment>
                       ))}
                     </div>

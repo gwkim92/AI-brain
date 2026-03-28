@@ -1,7 +1,5 @@
 import { redirect } from "next/navigation";
 
-import { buildHudWorkspaceHref } from "@/lib/hud/widget-presets";
-
 type MissionPageProps = {
   searchParams: Promise<{
     mission?: string | string[];
@@ -20,11 +18,14 @@ export default async function MissionPage({ searchParams }: MissionPageProps) {
   const resolvedSearchParams = await searchParams;
   const mission = pickFirst(resolvedSearchParams.mission);
   const step = pickFirst(resolvedSearchParams.step);
+  const params = new URLSearchParams();
 
-  redirect(
-    buildHudWorkspaceHref("mission", {
-      mission,
-      step,
-    }, "full")
-  );
+  if (mission) {
+    params.set("mission", mission);
+  }
+  if (step) {
+    params.set("step", step);
+  }
+
+  redirect(params.toString().length > 0 ? `/tasks?${params.toString()}` : "/tasks");
 }

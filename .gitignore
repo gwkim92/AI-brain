@@ -23,6 +23,7 @@ core-only-lab/.env.*
 .playwright-cli/
 .worktrees/
 output/
+dogfood-output/
 web/.tmp/
 web/e2e/tmp-*.spec.ts
 web/tmp_*.js

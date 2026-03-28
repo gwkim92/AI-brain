@@ -77,3 +77,7 @@ export function getSharedLineageRecorder(): LineageRecorder {
   }
   return sharedLineageRecorder;
 }
+
+export function resetSharedLineageRecorder(): void {
+  sharedLineageRecorder = null;
+}

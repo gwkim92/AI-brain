@@ -32,6 +32,12 @@ export function createMemoryCouncilExecutionApprovalRepository({
         model: input.model,
         used_fallback: input.used_fallback,
         task_id: input.task_id,
+        workflow_version: input.workflow_version,
+        phase_status: input.phase_status,
+        exploration_summary: input.exploration_summary,
+        exploration_transcript: input.exploration_transcript,
+        synthesis_error: input.synthesis_error,
+        structured_result: input.structured_result,
         created_at: now,
         updated_at: now
       };
@@ -48,15 +54,22 @@ export function createMemoryCouncilExecutionApprovalRepository({
 
       const next = {
         ...current,
-        status: input.status ?? current.status,
-        consensus_status: input.consensus_status ?? current.consensus_status,
-        summary: input.summary ?? current.summary,
-        participants: input.participants ?? current.participants,
-        attempts: input.attempts ?? current.attempts,
+        status: input.status === undefined ? current.status : input.status,
+        consensus_status: input.consensus_status === undefined ? current.consensus_status : input.consensus_status,
+        summary: input.summary === undefined ? current.summary : input.summary,
+        participants: input.participants === undefined ? current.participants : input.participants,
+        attempts: input.attempts === undefined ? current.attempts : input.attempts,
         provider: input.provider === undefined ? current.provider : input.provider,
-        model: input.model ?? current.model,
-        used_fallback: input.used_fallback ?? current.used_fallback,
+        model: input.model === undefined ? current.model : input.model,
+        used_fallback: input.used_fallback === undefined ? current.used_fallback : input.used_fallback,
         task_id: input.task_id === undefined ? current.task_id : input.task_id,
+        workflow_version: input.workflow_version === undefined ? current.workflow_version : input.workflow_version,
+        phase_status: input.phase_status === undefined ? current.phase_status : input.phase_status,
+        exploration_summary: input.exploration_summary === undefined ? current.exploration_summary : input.exploration_summary,
+        exploration_transcript:
+          input.exploration_transcript === undefined ? current.exploration_transcript : input.exploration_transcript,
+        synthesis_error: input.synthesis_error === undefined ? current.synthesis_error : input.synthesis_error,
+        structured_result: input.structured_result === undefined ? current.structured_result : input.structured_result,
         updated_at: nowIso()
       };
 

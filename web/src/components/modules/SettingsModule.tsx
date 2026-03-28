@@ -96,10 +96,10 @@ function formatCredentialSourceLabel(
 }
 
 function credentialSourceClass(source: UserProviderCredentialRecord["source"]): string {
-  if (source === "user") return "text-cyan-200 border-cyan-400/40 bg-cyan-500/10";
-  if (source === "workspace") return "text-fuchsia-200 border-fuchsia-400/40 bg-fuchsia-500/10";
-  if (source === "env") return "text-amber-200 border-amber-400/40 bg-amber-500/10";
-  return "text-white/45 border-white/20 bg-white/5";
+  if (source === "user") return "border-cyan-200 bg-cyan-50 text-cyan-800";
+  if (source === "workspace") return "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-800";
+  if (source === "env") return "border-amber-200 bg-amber-50 text-amber-800";
+  return "border-black/10 bg-white text-neutral-500";
 }
 
 function formatEventTypes(eventTypes: string[], t: ReturnType<typeof useLocale>["t"]): string {
@@ -300,6 +300,8 @@ export function SettingsModule() {
           has_user_api_key: false,
           has_user_oauth_official: false,
           has_user_oauth_token: false,
+          oauth_supported: false,
+          oauth_enabled: false,
           user_updated_at: null,
         }
     );
@@ -900,12 +902,12 @@ export function SettingsModule() {
   ] as const;
 
   return (
-    <main className="w-full min-h-full bg-transparent text-white p-4 flex flex-col">
-      <header className="mb-4 border-l-2 border-white/50 pl-3">
-        <h2 className="text-sm font-mono font-bold tracking-widest text-white flex items-center gap-2">
+    <main className="flex min-h-full w-full flex-col bg-transparent p-4 text-neutral-950">
+      <header className="mb-4 border-l-2 border-black/20 pl-3">
+        <h2 className="flex items-center gap-2 text-sm font-mono font-bold tracking-widest text-neutral-950">
           <Settings2 size={14} /> {t("settings.title").toUpperCase()}
         </h2>
-        <p className="mt-1 text-xs text-white/60">
+        <p className="mt-1 text-xs text-neutral-600">
           {t("settings.subtitle")}
         </p>
       </header>
@@ -920,21 +922,21 @@ export function SettingsModule() {
       />
 
       <section className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-xl border border-white/12 bg-black/30 p-3">
-          <p className="text-[10px] font-mono uppercase tracking-[0.28em] text-white/45">{t("settings.summary.language")}</p>
-          <p className="mt-2 text-sm font-semibold text-white">{activeLocaleLabel}</p>
+        <div className="rounded-xl border border-black/10 bg-[#fffdf8] p-3 shadow-sm">
+          <p className="text-[10px] font-mono uppercase tracking-[0.28em] text-neutral-500">{t("settings.summary.language")}</p>
+          <p className="mt-2 text-sm font-semibold text-neutral-950">{activeLocaleLabel}</p>
         </div>
-        <div className="rounded-xl border border-white/12 bg-black/30 p-3">
-          <p className="text-[10px] font-mono uppercase tracking-[0.28em] text-white/45">{t("settings.summary.personalConnections")}</p>
-          <p className="mt-2 text-sm font-semibold text-white">{t("settings.summary.personalConnectionsValue", { value: connectedProvidersCount })}</p>
+        <div className="rounded-xl border border-black/10 bg-[#fffdf8] p-3 shadow-sm">
+          <p className="text-[10px] font-mono uppercase tracking-[0.28em] text-neutral-500">{t("settings.summary.personalConnections")}</p>
+          <p className="mt-2 text-sm font-semibold text-neutral-950">{t("settings.summary.personalConnectionsValue", { value: connectedProvidersCount })}</p>
         </div>
-        <div className="rounded-xl border border-white/12 bg-black/30 p-3">
-          <p className="text-[10px] font-mono uppercase tracking-[0.28em] text-white/45">{t("settings.summary.workspaceKeys")}</p>
-          <p className="mt-2 text-sm font-semibold text-white">{t("settings.summary.workspaceKeysValue", { value: workspaceKeyCount })}</p>
+        <div className="rounded-xl border border-black/10 bg-[#fffdf8] p-3 shadow-sm">
+          <p className="text-[10px] font-mono uppercase tracking-[0.28em] text-neutral-500">{t("settings.summary.workspaceKeys")}</p>
+          <p className="mt-2 text-sm font-semibold text-neutral-950">{t("settings.summary.workspaceKeysValue", { value: workspaceKeyCount })}</p>
         </div>
-        <div className="rounded-xl border border-white/12 bg-black/30 p-3">
-          <p className="text-[10px] font-mono uppercase tracking-[0.28em] text-white/45">{t("settings.summary.runtimeHealth")}</p>
-          <p className="mt-2 text-sm font-semibold text-white">{runtimeSummaryLabel}</p>
+        <div className="rounded-xl border border-black/10 bg-[#fffdf8] p-3 shadow-sm">
+          <p className="text-[10px] font-mono uppercase tracking-[0.28em] text-neutral-500">{t("settings.summary.runtimeHealth")}</p>
+          <p className="mt-2 text-sm font-semibold text-neutral-950">{runtimeSummaryLabel}</p>
         </div>
       </section>
 
@@ -946,8 +948,8 @@ export function SettingsModule() {
             onClick={() => setActiveTab(tab.id)}
             className={`rounded-full border px-3 py-1.5 text-[11px] font-mono uppercase tracking-[0.22em] transition-colors ${
               activeTab === tab.id
-                ? "border-cyan-400/50 bg-cyan-500/12 text-cyan-100"
-                : "border-white/15 bg-black/30 text-white/55 hover:border-white/30 hover:text-white/85"
+                ? "border-cyan-300 bg-cyan-50 text-cyan-900"
+                : "border-black/10 bg-white text-neutral-600 hover:border-black/20 hover:text-neutral-950"
             }`}
           >
             {tab.label}
@@ -956,39 +958,39 @@ export function SettingsModule() {
       </div>
 
       {activeTab === "interface" && (
-      <section className="mb-4 rounded-xl border border-cyan-400/20 bg-gradient-to-br from-cyan-950/20 via-black/40 to-black/30 p-4">
+      <section className="mb-4 rounded-xl border border-cyan-200 bg-gradient-to-br from-cyan-50 via-white to-[#fffdf8] p-4 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h3 className="text-xs font-semibold tracking-wide text-cyan-100">{t("settings.language.title")}</h3>
-            <p className="mt-1 text-xs text-white/65">{t("settings.language.subtitle")}</p>
+            <h3 className="text-xs font-semibold tracking-wide text-cyan-900">{t("settings.language.title")}</h3>
+            <p className="mt-1 text-xs text-neutral-600">{t("settings.language.subtitle")}</p>
           </div>
-          <div className="text-right text-[11px] text-white/55">
+          <div className="text-right text-[11px] text-neutral-500">
             <p>{t("settings.language.activeLocale")}</p>
-            <p className="mt-1 text-cyan-200">{activeLocaleLabel}</p>
+            <p className="mt-1 text-cyan-700">{activeLocaleLabel}</p>
           </div>
         </div>
         <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-[220px_minmax(0,1fr)] md:items-center">
-          <label className="text-[11px] font-mono uppercase tracking-[0.24em] text-white/55">
+          <label className="text-[11px] font-mono uppercase tracking-[0.24em] text-neutral-500">
             {t("settings.language.preference")}
           </label>
           <select
             value={preference}
             onChange={(event) => onLanguagePreferenceChange(event.target.value as "auto" | "ko" | "en")}
-            className="h-10 rounded border border-white/15 bg-black/50 px-3 text-sm text-white/90"
+            className="h-10 rounded border border-black/10 bg-white px-3 text-sm text-neutral-900"
           >
             <option value="auto">{t("common.auto")}</option>
             <option value="ko">{t("common.korean")}</option>
             <option value="en">{t("common.english")}</option>
           </select>
         </div>
-        <p className="mt-2 text-[11px] text-white/45">{t("settings.language.autoHint")}</p>
-        {languageNotice ? <p className="mt-2 text-xs text-emerald-300">{languageNotice}</p> : null}
+        <p className="mt-2 text-[11px] text-neutral-500">{t("settings.language.autoHint")}</p>
+        {languageNotice ? <p className="mt-2 text-xs text-emerald-700">{languageNotice}</p> : null}
       </section>
       )}
 
       {activeTab === "policies" && (
       <section className="mb-4">
-        <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase mb-2 flex items-center gap-2">
+        <h3 className="mb-2 flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest text-neutral-600">
           <RadioTower size={12} /> {t("settings.connectors")}
         </h3>
         <div className="grid grid-cols-1 gap-3 pr-1">
@@ -1003,27 +1005,27 @@ export function SettingsModule() {
             />
           ))}
           {!loading && !error && cards.length === 0 && (
-            <div className="text-sm font-mono text-white/40 border border-white/10 rounded p-4">{t("settings.noConnectorData")}</div>
+            <div className="rounded-xl border border-dashed border-black/10 bg-white px-4 py-4 text-sm font-mono text-neutral-500">{t("settings.noConnectorData")}</div>
           )}
         </div>
       </section>
       )}
 
       {activeTab === "personal" && (
-      <section className="mb-4 rounded-xl border border-cyan-400/20 bg-gradient-to-br from-cyan-950/20 via-black/40 to-black/30 p-4">
+      <section className="mb-4 rounded-xl border border-cyan-200 bg-gradient-to-br from-cyan-50 via-white to-[#fffdf8] p-4 shadow-sm">
         <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h3 className="text-xs font-semibold tracking-wide text-cyan-100 flex items-center gap-2">
+            <h3 className="flex items-center gap-2 text-xs font-semibold tracking-wide text-cyan-900">
               <KeyRound size={14} /> {t("settings.myCredentials")}
             </h3>
-            <p className="mt-1 text-xs text-white/65">
+            <p className="mt-1 text-xs text-neutral-600">
               {t("settings.myCredentialsSubtitle")}
             </p>
           </div>
           <button
             type="button"
             onClick={() => void refresh()}
-            className="inline-flex items-center gap-1 h-8 px-3 rounded border border-white/20 text-xs text-white/80 hover:text-white hover:border-white/40"
+            className="inline-flex h-8 items-center gap-1 rounded border border-black/10 bg-white px-3 text-xs text-neutral-700 hover:border-black/20 hover:bg-neutral-50 hover:text-neutral-950"
           >
             <RefreshCw size={12} /> {t("common.refresh")}
           </button>
@@ -1035,24 +1037,25 @@ export function SettingsModule() {
             const priorityDraft = userCredentialPriorityDrafts[row.provider] ?? row.credential_priority;
             const priorityDirty = priorityDraft !== row.credential_priority;
             const effectiveMode = formatCredentialModeLabel(row.selected_credential_mode, t);
-            const canUseOauth = row.provider === "openai" || row.provider === "gemini";
+            const canUseOauth = row.oauth_enabled || row.has_user_oauth_official || row.has_user_oauth_token;
+            const canConnectOauth = row.oauth_enabled;
             return (
-              <div key={`user-${row.provider}`} className="rounded-lg border border-white/12 bg-black/35 p-3">
+              <div key={`user-${row.provider}`} className="rounded-2xl border border-black/10 bg-white p-3 shadow-sm">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
-                    <p className="text-sm font-semibold tracking-wide text-white">{row.provider.toUpperCase()}</p>
+                    <p className="text-sm font-semibold tracking-wide text-neutral-950">{row.provider.toUpperCase()}</p>
                     <span className={`rounded-full border px-2 py-0.5 text-[11px] ${credentialSourceClass(row.source)}`}>
                       {formatCredentialSourceLabel(row.source, t)}
                     </span>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <span className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-0.5 text-[11px] text-cyan-100">
+                    <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[11px] text-cyan-800">
                       {t("settings.active")}: {effectiveMode}
                     </span>
-                    <span className="rounded-full border border-white/20 bg-white/5 px-2 py-0.5 text-[11px] text-white/70">
+                    <span className="rounded-full border border-black/10 bg-[#fffdf8] px-2 py-0.5 text-[11px] text-neutral-600">
                       {t("settings.mode")}: {formatSelectedUserCredentialModeLabel(row.selected_user_credential_mode, t)}
                     </span>
-                    <span className="rounded-full border border-white/20 bg-white/5 px-2 py-0.5 text-[11px] text-white/70">
+                    <span className="rounded-full border border-black/10 bg-[#fffdf8] px-2 py-0.5 text-[11px] text-neutral-600">
                       {t("settings.priority")}: {formatCredentialPriorityLabel(row.credential_priority, t)}
                     </span>
                   </div>
@@ -1069,22 +1072,22 @@ export function SettingsModule() {
                         [row.provider]: event.target.value,
                       }))
                     }
-                    className="h-9 rounded border border-white/15 bg-black/50 px-3 text-sm"
+                    className="h-9 rounded border border-black/10 bg-[#fffdf8] px-3 text-sm text-neutral-900"
                   />
                   <button
                     type="button"
                     onClick={() => void onSaveUserProviderKey(row.provider)}
                     disabled={(userCredentialDrafts[row.provider]?.trim().length ?? 0) < 8 || activeUserSaveProvider === row.provider}
-                    className="h-9 px-3 rounded border border-cyan-400/40 bg-cyan-500/15 text-cyan-200 text-xs font-semibold disabled:opacity-40"
+                    className="h-9 rounded border border-cyan-300 bg-cyan-100 px-3 text-xs font-semibold text-cyan-800 disabled:opacity-40"
                   >
                     {activeUserSaveProvider === row.provider ? t("settings.saving") : t("settings.saveApiKey")}
                   </button>
-                  {(row.provider === "openai" || row.provider === "gemini") && (
+                  {canConnectOauth && (
                     <button
                       type="button"
                       onClick={() => void onConnectUserProviderOauth(row.provider as Extract<ProviderName, "openai" | "gemini">)}
                       disabled={activeOauthProvider === (row.provider as Extract<ProviderName, "openai" | "gemini">)}
-                      className="h-9 px-3 rounded border border-fuchsia-400/35 bg-fuchsia-500/10 text-fuchsia-200 text-xs font-semibold disabled:opacity-40"
+                      className="h-9 rounded border border-fuchsia-300 bg-fuchsia-100 px-3 text-xs font-semibold text-fuchsia-800 disabled:opacity-40"
                     >
                       {activeOauthProvider === row.provider ? t("settings.connectingOauth") : t("settings.connectOauth")}
                     </button>
@@ -1100,7 +1103,7 @@ export function SettingsModule() {
                         [row.provider]: event.target.value as ProviderCredentialSelectionMode,
                       }))
                     }
-                    className="h-9 rounded border border-white/15 bg-black/50 px-2 text-sm text-white/85"
+                    className="h-9 rounded border border-black/10 bg-[#fffdf8] px-2 text-sm text-neutral-900"
                   >
                     <option value="auto">{t("common.auto")}</option>
                     <option value="api_key">{t("settings.credential.apiKey")}</option>
@@ -1110,7 +1113,7 @@ export function SettingsModule() {
                     type="button"
                     onClick={() => void onSaveUserCredentialMode(row.provider)}
                     disabled={!modeDirty || activeUserModeProvider === row.provider}
-                    className="h-9 px-3 rounded border border-white/25 bg-white/10 text-xs font-semibold text-white/85 disabled:opacity-40"
+                    className="h-9 rounded border border-black/10 bg-white px-3 text-xs font-semibold text-neutral-800 disabled:opacity-40"
                   >
                     {activeUserModeProvider === row.provider ? t("settings.applying") : t("settings.applyMode")}
                   </button>
@@ -1122,7 +1125,7 @@ export function SettingsModule() {
                         [row.provider]: event.target.value as ProviderCredentialPriority,
                       }))
                     }
-                    className="h-9 rounded border border-white/15 bg-black/50 px-2 text-sm text-white/85"
+                    className="h-9 rounded border border-black/10 bg-[#fffdf8] px-2 text-sm text-neutral-900"
                   >
                     <option value="auth_first">{t("settings.priority.oauthFirst")}</option>
                     <option value="api_key_first">{t("settings.priority.apiKeyFirst")}</option>
@@ -1131,7 +1134,7 @@ export function SettingsModule() {
                     type="button"
                     onClick={() => void onSaveUserCredentialPriority(row.provider)}
                     disabled={!priorityDirty || activeUserPriorityProvider === row.provider}
-                    className="h-9 px-3 rounded border border-white/25 bg-white/10 text-xs font-semibold text-white/85 disabled:opacity-40"
+                    className="h-9 rounded border border-black/10 bg-white px-3 text-xs font-semibold text-neutral-800 disabled:opacity-40"
                   >
                     {activeUserPriorityProvider === row.provider ? t("settings.applying") : t("settings.applyPriority")}
                   </button>
@@ -1139,7 +1142,7 @@ export function SettingsModule() {
                     type="button"
                     onClick={() => void onTestUserProviderConnection(row.provider)}
                     disabled={activeUserTestProvider === row.provider}
-                    className="h-9 px-3 rounded border border-emerald-400/35 bg-emerald-500/10 text-emerald-200 text-xs font-semibold disabled:opacity-40"
+                    className="h-9 rounded border border-emerald-300 bg-emerald-100 px-3 text-xs font-semibold text-emerald-800 disabled:opacity-40"
                   >
                     {activeUserTestProvider === row.provider ? t("settings.testing") : t("settings.test")}
                   </button>
@@ -1147,13 +1150,13 @@ export function SettingsModule() {
                     type="button"
                     onClick={() => void onDeleteUserProviderCredential(row.provider)}
                     disabled={!row.has_user_credential || activeUserDeleteProvider === row.provider}
-                    className="h-9 px-3 rounded border border-white/25 bg-white/10 text-xs font-semibold text-white/80 disabled:opacity-40"
+                    className="h-9 rounded border border-black/10 bg-white px-3 text-xs font-semibold text-neutral-800 disabled:opacity-40"
                   >
                     {activeUserDeleteProvider === row.provider ? t("settings.removing") : t("settings.remove")}
                   </button>
                 </div>
 
-                <div className="mt-2 text-xs text-white/60 space-y-1">
+                <div className="mt-2 space-y-1 text-xs text-neutral-600">
                   <p>
                     {t("settings.flag.credential")}={row.has_user_credential ? t("modelControl.yes") : t("modelControl.no")} · {t("settings.flag.apiKey")}={row.has_user_api_key ? t("modelControl.yes") : t("modelControl.no")} · {t("settings.flag.oauth")}={row.has_user_oauth_token ? t("modelControl.yes") : t("modelControl.no")}
                     {row.user_updated_at ? ` · ${t("settings.updatedAt", { value: formatDateTime(row.user_updated_at) })}` : ""}
@@ -1175,25 +1178,25 @@ export function SettingsModule() {
             );
           })}
           {(userCredentialLoading || activeUserSaveProvider || activeUserDeleteProvider || activeUserTestProvider || activeOauthProvider || activeUserModeProvider || activeUserPriorityProvider) && (
-            <p className="text-xs text-white/60">{t("settings.syncingPersonalCredentials")}</p>
+            <p className="text-xs text-neutral-600">{t("settings.syncingPersonalCredentials")}</p>
           )}
-          {userCredentialError && <p className="text-xs text-rose-300">{userCredentialError}</p>}
-          {userCredentialNotice && <p className="text-xs text-emerald-300">{userCredentialNotice}</p>}
+          {userCredentialError && <p className="text-xs text-rose-700">{userCredentialError}</p>}
+          {userCredentialNotice && <p className="text-xs text-emerald-700">{userCredentialNotice}</p>}
         </div>
       </section>
       )}
 
       {activeTab === "workspace" && isAdmin && (
-      <section className="mb-4 border border-white/10 rounded p-3 bg-black/30">
+      <section className="mb-4 rounded-2xl border border-black/10 bg-[#fffdf8] p-3 shadow-sm">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase flex items-center gap-2">
+          <h3 className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest text-neutral-600">
             <KeyRound size={12} /> {t("settings.providerApiKeysTitle")}
           </h3>
           {isAdmin && (
             <button
               type="button"
               onClick={() => void refresh()}
-              className="inline-flex items-center gap-1 h-7 px-2 rounded border border-white/15 text-[10px] font-mono text-white/70 hover:text-white hover:border-white/30"
+              className="inline-flex h-7 items-center gap-1 rounded border border-black/10 bg-white px-2 text-[10px] font-mono text-neutral-700 hover:border-black/20 hover:text-neutral-950"
             >
               <RefreshCw size={11} /> {t("common.refresh")}
             </button>
@@ -1203,16 +1206,16 @@ export function SettingsModule() {
         {isAdmin ? (
           <div className="space-y-2">
             {providerCredentialRows.map((row) => (
-              <div key={row.provider} className="border border-white/10 rounded p-2 bg-black/35">
-                <div className="flex items-center justify-between text-xs font-mono mb-2">
+              <div key={row.provider} className="rounded-xl border border-black/10 bg-white p-2">
+                <div className="mb-2 flex items-center justify-between text-xs font-mono text-neutral-800">
                   <span>{row.provider.toUpperCase()}</span>
                   <span
                     className={
                       row.source === "stored"
-                        ? "text-cyan-300"
+                        ? "text-cyan-700"
                         : row.source === "env"
-                          ? "text-amber-300"
-                          : "text-white/40"
+                          ? "text-amber-700"
+                          : "text-neutral-500"
                     }
                   >
                     {row.source === "stored" ? t("settings.source.stored") : row.source === "env" ? t("settings.source.env") : t("settings.source.none")}
@@ -1229,14 +1232,14 @@ export function SettingsModule() {
                         [row.provider]: event.target.value,
                       }))
                     }
-                    className="h-8 flex-1 rounded border border-white/15 bg-black/50 px-2 text-xs font-mono"
+                    className="h-8 flex-1 rounded border border-black/10 bg-[#fffdf8] px-2 text-xs font-mono text-neutral-900"
                   />
                   <div className="flex gap-2">
                     <button
                       type="button"
                     onClick={() => void onSaveProviderKey(row.provider)}
                     disabled={(credentialDrafts[row.provider]?.trim().length ?? 0) < 8 || activeSaveProvider === row.provider}
-                    className="h-8 px-3 rounded border border-cyan-400/40 bg-cyan-500/15 text-cyan-200 text-[10px] font-mono tracking-widest disabled:opacity-40"
+                    className="h-8 rounded border border-cyan-300 bg-cyan-100 px-3 text-[10px] font-mono tracking-widest text-cyan-800 disabled:opacity-40"
                   >
                       {activeSaveProvider === row.provider ? t("settings.saving").toUpperCase() : t("common.save").toUpperCase()}
                     </button>
@@ -1244,7 +1247,7 @@ export function SettingsModule() {
                       type="button"
                       onClick={() => void onTestProviderConnection(row.provider)}
                       disabled={activeTestProvider === row.provider}
-                      className="h-8 px-3 rounded border border-emerald-400/30 bg-emerald-500/10 text-emerald-200 text-[10px] font-mono tracking-widest disabled:opacity-40"
+                      className="h-8 rounded border border-emerald-300 bg-emerald-100 px-3 text-[10px] font-mono tracking-widest text-emerald-800 disabled:opacity-40"
                     >
                       {activeTestProvider === row.provider ? t("settings.testing").toUpperCase() : t("settings.test").toUpperCase()}
                     </button>
@@ -1252,20 +1255,20 @@ export function SettingsModule() {
                       type="button"
                       onClick={() => void onDeleteStoredProviderKey(row.provider)}
                       disabled={row.source !== "stored" || activeDeleteProvider === row.provider}
-                      className="h-8 px-3 rounded border border-white/20 bg-white/10 text-white/80 text-[10px] font-mono tracking-widest disabled:opacity-40"
+                      className="h-8 rounded border border-black/10 bg-white px-3 text-[10px] font-mono tracking-widest text-neutral-800 disabled:opacity-40"
                     >
                       {activeDeleteProvider === row.provider ? t("settings.removing").toUpperCase() : t("settings.removeStored").toUpperCase()}
                     </button>
                   </div>
                 </div>
-                <p className="mt-2 text-[10px] font-mono text-white/45">
+                <p className="mt-2 text-[10px] font-mono text-neutral-500">
                   {row.has_key ? t("settings.keyAvailable") : t("settings.noKey")} ·{" "}
                   {row.updated_at ? t("settings.updatedAt", { value: formatDateTime(row.updated_at) }) : t("settings.noStoredTimestamp")}
                 </p>
                 {connectionTests[row.provider] && (
                   <p
                     className={`mt-1 text-[10px] font-mono ${
-                      connectionTests[row.provider]?.ok ? "text-emerald-300" : "text-amber-300"
+                      connectionTests[row.provider]?.ok ? "text-emerald-700" : "text-amber-700"
                     }`}
                   >
                     {t("settings.adminTestResult", {
@@ -1283,13 +1286,13 @@ export function SettingsModule() {
               </div>
             ))}
             {(credentialLoading || activeSaveProvider || activeDeleteProvider || activeTestProvider) && (
-              <p className="text-[10px] font-mono text-white/50">{t("settings.syncingProviderCredentials")}</p>
+              <p className="text-[10px] font-mono text-neutral-500">{t("settings.syncingProviderCredentials")}</p>
             )}
-            {credentialError && <p className="text-[10px] font-mono text-rose-300">{credentialError}</p>}
-            {credentialNotice && <p className="text-[10px] font-mono text-emerald-300">{credentialNotice}</p>}
+            {credentialError && <p className="text-[10px] font-mono text-rose-700">{credentialError}</p>}
+            {credentialNotice && <p className="text-[10px] font-mono text-emerald-700">{credentialNotice}</p>}
           </div>
         ) : (
-          <p className="text-xs font-mono text-white/50">
+          <p className="text-xs font-mono text-neutral-500">
             {t("settings.providerApiKeysAdminOnly")}
           </p>
         )}
@@ -1297,42 +1300,42 @@ export function SettingsModule() {
       )}
 
       {activeTab === "interface" && (
-      <section className="border border-white/10 rounded p-3 bg-black/30">
-        <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase mb-2 flex items-center gap-2">
+      <section className="rounded-2xl border border-black/10 bg-[#fffdf8] p-3 shadow-sm">
+        <h3 className="mb-2 flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest text-neutral-600">
           <Clock3 size={12} /> {t("settings.hudRuntime")}
         </h3>
-        <div className="space-y-2 text-xs text-white/70 mb-4">
+        <div className="mb-4 space-y-2 text-xs text-neutral-700">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-white/50">{t("settings.hud.visualCore")}</span>
+            <span className="text-neutral-600">{t("settings.hud.visualCore")}</span>
             <button
               type="button"
               onClick={onToggleVisualCore}
               className={`h-7 px-2 rounded border text-[10px] font-mono tracking-widest ${
                 visualCoreEnabled
-                  ? "border-fuchsia-500/40 bg-fuchsia-500/15 text-fuchsia-200"
-                  : "border-white/20 bg-white/10 text-white/80"
+                  ? "border-fuchsia-300 bg-fuchsia-100 text-fuchsia-800"
+                  : "border-black/10 bg-white text-neutral-800"
               }`}
             >
               {visualCoreEnabled ? t("common.on") : t("common.off")}
             </button>
-            <span className="text-[10px] text-white/40">{t("settings.hud.visualCoreHint")}</span>
+            <span className="text-[10px] text-neutral-500">{t("settings.hud.visualCoreHint")}</span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-white/50">{t("settings.hud.autoFocusDefault")}</span>
+            <span className="text-neutral-600">{t("settings.hud.autoFocusDefault")}</span>
             <button
               type="button"
               onClick={onToggleHudAutoFocusDefault}
               className={`h-7 px-2 rounded border text-[10px] font-mono tracking-widest ${
                 hudAutoFocusDefault
-                  ? "border-cyan-500/40 bg-cyan-500/15 text-cyan-200"
-                  : "border-white/20 bg-white/10 text-white/80"
+                  ? "border-cyan-300 bg-cyan-100 text-cyan-800"
+                  : "border-black/10 bg-white text-neutral-800"
               }`}
             >
               {hudAutoFocusDefault ? t("common.on") : t("common.off")}
             </button>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-white/50">{t("settings.hud.manualHoldSeconds")}</span>
+            <span className="text-neutral-600">{t("settings.hud.manualHoldSeconds")}</span>
             <input
               type="number"
               min={15}
@@ -1340,41 +1343,41 @@ export function SettingsModule() {
               step={1}
               value={hudHoldSecondsDraft}
               onChange={(event) => setHudHoldSecondsDraft(event.target.value)}
-              className="h-7 w-24 rounded border border-white/15 bg-black/50 px-2 text-[11px] font-mono"
+              className="h-7 w-24 rounded border border-black/10 bg-white px-2 text-[11px] font-mono text-neutral-900"
             />
             <button
               type="button"
               onClick={onSaveHudHoldSeconds}
-              className="h-7 px-2 rounded border border-cyan-400/40 bg-cyan-500/15 text-cyan-200 text-[10px] font-mono tracking-widest"
+              className="h-7 rounded border border-cyan-300 bg-cyan-100 px-2 text-[10px] font-mono tracking-widest text-cyan-800"
             >
               {t("common.save").toUpperCase()}
             </button>
-            <span className="text-white/40">{t("settings.hud.manualHoldRange")}</span>
+            <span className="text-neutral-500">{t("settings.hud.manualHoldRange")}</span>
           </div>
-          {hudRuntimeNotice && <p className="text-[10px] font-mono text-emerald-300">{hudRuntimeNotice}</p>}
+          {hudRuntimeNotice && <p className="text-[10px] font-mono text-emerald-700">{hudRuntimeNotice}</p>}
         </div>
       </section>
       )}
 
       {activeTab === "policies" && (
-      <section className="mt-4 border border-white/10 rounded p-3 bg-black/30">
-        <h3 className="text-[10px] font-mono text-white/50 tracking-widest uppercase mb-2 flex items-center gap-2">
+      <section className="mt-4 rounded-2xl border border-black/10 bg-[#fffdf8] p-3 shadow-sm">
+        <h3 className="mb-2 flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest text-neutral-600">
           <RadioTower size={12} /> {t("settings.notificationChannels")}
         </h3>
         <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
           {notificationChannels.map((channel) => (
-            <div key={channel.key} className="rounded border border-white/10 bg-black/25 p-3">
+            <div key={channel.key} className="rounded-xl border border-black/10 bg-white p-3">
               <div className="flex items-center justify-between gap-3">
-                <p className="text-sm text-white/90">{channel.label}</p>
+                <p className="text-sm text-neutral-950">{channel.label}</p>
                 <span
                   className={`rounded-full border px-2 py-0.5 text-[10px] font-mono ${
-                    channel.policy?.enabled ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200" : "border-white/10 text-white/45"
+                    channel.policy?.enabled ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-black/10 bg-[#fffdf8] text-neutral-500"
                   }`}
                 >
                   {channel.policy?.enabled ? t("common.enabled") : t("common.disabled")}
                 </span>
               </div>
-              <div className="mt-3 space-y-1 text-[11px] text-white/65">
+              <div className="mt-3 space-y-1 text-[11px] text-neutral-600">
                 <p>{t("settings.notification.minSeverity")}: {channel.policy?.min_severity ?? "-"}</p>
                 <p>{t("settings.notification.events")}: {channel.policy ? formatEventTypes(channel.policy.event_types, t) : "-"}</p>
                 {channel.runtime ? (

@@ -522,6 +522,620 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v2/hyperagents/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List HyperAgent editable artifact surfaces and currently applied overrides */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiSuccessEnvelope"] & {
+                            data?: components["schemas"]["HyperAgentArtifactsData"];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/hyperagents/runtime": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List HyperAgent runtime overrides currently applied in memory */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiSuccessEnvelope"] & {
+                            data?: components["schemas"]["HyperAgentRuntimeData"];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/hyperagents/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List HyperAgent recommendations with snapshot, variant, eval, diff, gate, and lineage summary */
+        get: {
+            parameters: {
+                query?: {
+                    status?: components["schemas"]["HyperAgentRecommendationStatus"];
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiSuccessEnvelope"] & {
+                            data?: components["schemas"]["HyperAgentOverviewData"];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/hyperagents/world-model/fixtures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List deterministic world-model fixture sets available to the HyperAgent evaluator */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiSuccessEnvelope"] & {
+                            data?: components["schemas"]["HyperAgentWorldModelFixturesData"];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/hyperagents/lineage/{runId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get HyperAgent lineage nodes and edges for a run */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    runId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiSuccessEnvelope"] & {
+                            data?: components["schemas"]["HyperAgentLineageData"];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/hyperagents/world-model/snapshots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List HyperAgent artifact snapshots */
+        get: {
+            parameters: {
+                query?: {
+                    artifact_key?: components["schemas"]["HyperAgentArtifactKey"];
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiSuccessEnvelope"] & {
+                            data?: components["schemas"]["HyperAgentSnapshotsData"];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Snapshot an allowlisted world-model HyperAgent artifact */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["HyperAgentSnapshotCreateRequest"];
+                };
+            };
+            responses: {
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiSuccessEnvelope"] & {
+                            data?: {
+                                snapshot: components["schemas"]["HyperAgentArtifactSnapshotRecord"];
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/hyperagents/world-model/variants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List HyperAgent variants */
+        get: {
+            parameters: {
+                query?: {
+                    artifact_snapshot_id?: string;
+                    lineage_run_id?: string;
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiSuccessEnvelope"] & {
+                            data?: components["schemas"]["HyperAgentVariantsData"];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Create a bounded HyperAgent variant from a prior snapshot */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["HyperAgentVariantCreateRequest"];
+                };
+            };
+            responses: {
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiSuccessEnvelope"] & {
+                            data?: components["schemas"]["HyperAgentVariantCreateData"];
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/hyperagents/evals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Evaluate a world-model HyperAgent variant against deterministic fixtures */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["HyperAgentEvalCreateRequest"];
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiSuccessEnvelope"] & {
+                            data?: components["schemas"]["HyperAgentEvalCreateData"];
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/hyperagents/evals/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get HyperAgent eval run detail */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiSuccessEnvelope"] & {
+                            data?: {
+                                eval_run: components["schemas"]["HyperAgentEvalRunRecord"];
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/hyperagents/recommendations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List HyperAgent recommendations */
+        get: {
+            parameters: {
+                query?: {
+                    status?: components["schemas"]["HyperAgentRecommendationStatus"];
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiSuccessEnvelope"] & {
+                            data?: components["schemas"]["HyperAgentRecommendationsData"];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Create a HyperAgent recommendation from a completed eval run */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["HyperAgentRecommendationCreateRequest"];
+                };
+            };
+            responses: {
+                /** @description created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiSuccessEnvelope"] & {
+                            data?: {
+                                recommendation: components["schemas"]["HyperAgentRecommendationRecord"];
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/hyperagents/recommendations/{recommendationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get HyperAgent recommendation detail */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    recommendationId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiSuccessEnvelope"] & {
+                            data?: components["schemas"]["HyperAgentRecommendationDetailData"];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/hyperagents/recommendations/{recommendationId}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Accept or reject a HyperAgent recommendation */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    recommendationId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["HyperAgentRecommendationDecisionRequest"];
+                };
+            };
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiSuccessEnvelope"] & {
+                            data?: {
+                                recommendation: components["schemas"]["HyperAgentRecommendationRecord"];
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v2/hyperagents/recommendations/{recommendationId}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply an accepted HyperAgent recommendation to runtime */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    recommendationId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description ok */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ApiSuccessEnvelope"] & {
+                            data?: {
+                                recommendation: components["schemas"]["HyperAgentRecommendationRecord"];
+                                applied_artifact: components["schemas"]["AppliedHyperAgentArtifactRecord"];
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v2/policies/rules": {
         parameters: {
             query?: never;
@@ -966,6 +1580,293 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @enum {string} */
+        HyperAgentArtifactKey: "radar_domain_pack" | "world_model_dossier_config";
+        /** @enum {string} */
+        HyperAgentArtifactScope: "world_model";
+        /** @enum {string} */
+        HyperAgentRecommendationStatus: "proposed" | "accepted" | "rejected" | "applied";
+        HyperAgentEditableArtifact: {
+            artifactKey: components["schemas"]["HyperAgentArtifactKey"];
+            scope: components["schemas"]["HyperAgentArtifactScope"];
+            description: string;
+            mutableFields: string[];
+        };
+        AppliedHyperAgentArtifactRecord: {
+            artifactKey: components["schemas"]["HyperAgentArtifactKey"];
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Format: uuid */
+            recommendationId: string;
+            /** Format: uuid */
+            variantId: string;
+            /** Format: uuid */
+            artifactSnapshotId: string;
+            /** Format: date-time */
+            appliedAt: string;
+        };
+        HyperAgentEditableArtifactWithAppliedOverride: components["schemas"]["HyperAgentEditableArtifact"] & {
+            applied_override: components["schemas"]["AppliedHyperAgentArtifactRecord"] | null;
+        };
+        HyperAgentArtifactSnapshotRecord: {
+            /** Format: uuid */
+            id: string;
+            artifactKey: components["schemas"]["HyperAgentArtifactKey"];
+            artifactVersion: string;
+            scope: components["schemas"]["HyperAgentArtifactScope"];
+            payload: {
+                [key: string]: unknown;
+            };
+            createdBy: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        HyperAgentVariantRecord: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            artifactSnapshotId: string;
+            strategy: string;
+            payload: {
+                [key: string]: unknown;
+            };
+            parentVariantId: string | null;
+            lineageRunId: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        HyperAgentEvalRunRecord: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            variantId: string;
+            evaluatorKey: string;
+            status: string;
+            summary: {
+                [key: string]: unknown;
+            };
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        HyperAgentRecommendationRecord: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            evalRunId: string;
+            /** Format: uuid */
+            variantId: string;
+            status: components["schemas"]["HyperAgentRecommendationStatus"];
+            summary: {
+                [key: string]: unknown;
+            };
+            decidedBy: string | null;
+            decidedAt: string | null;
+            appliedAt: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        HyperAgentArtifactDiffEntry: {
+            path: string;
+            /** @enum {string} */
+            changeType: "added" | "removed" | "changed";
+            before: unknown;
+            after: unknown;
+        };
+        HyperAgentArtifactDiff: {
+            changeCount: number;
+            entries: components["schemas"]["HyperAgentArtifactDiffEntry"][];
+        };
+        HyperAgentEvalGate: {
+            passed: boolean;
+            reasons: string[];
+        };
+        HyperAgentLineageNode: {
+            /** Format: uuid */
+            id: string;
+            runId: string;
+            nodeType: string;
+            referenceId: string;
+            metadata: {
+                [key: string]: unknown;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        HyperAgentLineageEdge: {
+            /** Format: uuid */
+            id: string;
+            runId: string;
+            /** Format: uuid */
+            sourceNodeId: string;
+            /** Format: uuid */
+            targetNodeId: string;
+            edgeType: string;
+            metadata: {
+                [key: string]: unknown;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        HyperAgentFixtureSetSummary: {
+            /** @enum {string} */
+            key: "world_model_smoke_v1";
+            title: string;
+            description: string;
+            fixtureCount: number;
+        };
+        HyperAgentOverviewRun: {
+            artifact: components["schemas"]["HyperAgentEditableArtifact"] | null;
+            snapshot: components["schemas"]["HyperAgentArtifactSnapshotRecord"] | null;
+            variant: components["schemas"]["HyperAgentVariantRecord"] | null;
+            eval_run: components["schemas"]["HyperAgentEvalRunRecord"] | null;
+            recommendation: components["schemas"]["HyperAgentRecommendationRecord"];
+            lineage_run_id: string | null;
+            lineage: {
+                nodeCount: number;
+                edgeCount: number;
+            } | null;
+            diff: components["schemas"]["HyperAgentArtifactDiff"] | null;
+            gate: components["schemas"]["HyperAgentEvalGate"];
+            applied_override: components["schemas"]["AppliedHyperAgentArtifactRecord"] | null;
+            runtime_applied: boolean;
+        };
+        HyperAgentOverviewData: {
+            summary: {
+                total: number;
+                applied_count: number;
+                statuses: {
+                    [key: string]: number;
+                };
+            };
+            runs: components["schemas"]["HyperAgentOverviewRun"][];
+        };
+        HyperAgentArtifactsData: {
+            artifacts: components["schemas"]["HyperAgentEditableArtifactWithAppliedOverride"][];
+        };
+        HyperAgentRuntimeData: {
+            applied_overrides: components["schemas"]["AppliedHyperAgentArtifactRecord"][];
+        };
+        HyperAgentSnapshotsData: {
+            snapshots: components["schemas"]["HyperAgentArtifactSnapshotRecord"][];
+        };
+        HyperAgentVariantsData: {
+            variants: components["schemas"]["HyperAgentVariantRecord"][];
+        };
+        HyperAgentVariantCreateData: {
+            variant: components["schemas"]["HyperAgentVariantRecord"];
+            archive: {
+                [key: string]: unknown;
+            };
+            changed_keys: string[];
+        };
+        HyperAgentEvalResult: {
+            /** Format: date-time */
+            evaluatedAt: string;
+            metrics: {
+                [key: string]: unknown;
+            };
+            caseResults: {
+                [key: string]: unknown;
+            }[];
+        };
+        HyperAgentEvalCreateData: {
+            eval_run: components["schemas"]["HyperAgentEvalRunRecord"];
+            result: components["schemas"]["HyperAgentEvalResult"];
+        };
+        HyperAgentWorldModelFixturesData: {
+            /** @enum {string} */
+            default_fixture_set: "world_model_smoke_v1";
+            fixture_sets: components["schemas"]["HyperAgentFixtureSetSummary"][];
+        };
+        HyperAgentLineageData: {
+            run_id: string;
+            lineage: {
+                nodes: components["schemas"]["HyperAgentLineageNode"][];
+                edges: components["schemas"]["HyperAgentLineageEdge"][];
+            };
+        };
+        HyperAgentRecommendationsData: {
+            recommendations: components["schemas"]["HyperAgentRecommendationRecord"][];
+        };
+        HyperAgentRecommendationDetailData: {
+            artifact: components["schemas"]["HyperAgentEditableArtifact"] | null;
+            snapshot: components["schemas"]["HyperAgentArtifactSnapshotRecord"];
+            variant: components["schemas"]["HyperAgentVariantRecord"];
+            eval_run: components["schemas"]["HyperAgentEvalRunRecord"] | null;
+            recommendation: components["schemas"]["HyperAgentRecommendationRecord"];
+            lineage_run_id: string;
+            diff: components["schemas"]["HyperAgentArtifactDiff"];
+        };
+        HyperAgentSnapshotCreateRequest: {
+            artifact_key: components["schemas"]["HyperAgentArtifactKey"];
+            artifact_version?: string;
+        };
+        HyperAgentVariantCreateRequest: {
+            /** Format: uuid */
+            artifact_snapshot_id: string;
+            mutation_budget?: number;
+            parent_variant_id?: string | null;
+            lineage_run_id?: string;
+        };
+        HyperAgentEvalSource: {
+            /** Format: uri */
+            url: string;
+            title: string;
+            domain: string;
+            snippet?: string;
+            /** Format: date-time */
+            publishedAt?: string;
+        };
+        HyperAgentEvalClaim: {
+            claimText: string;
+            sourceUrls: string[];
+        };
+        HyperAgentEvalExtractionInput: {
+            query: string;
+            /** @enum {string} */
+            researchProfile: "broad_news" | "topic_news" | "entity_brief" | "comparison_research" | "repo_research" | "market_research" | "policy_regulation";
+            /** Format: date-time */
+            generatedAt?: string;
+            sources: components["schemas"]["HyperAgentEvalSource"][];
+            claims: components["schemas"]["HyperAgentEvalClaim"][];
+        };
+        HyperAgentEvaluationFixture: {
+            fixtureId: string;
+            extractionInput: components["schemas"]["HyperAgentEvalExtractionInput"];
+            expectedPrimaryThesisPresent?: boolean;
+            expectedCounterHypothesisPresent?: boolean;
+            minInvalidationConditions?: number;
+            minBottlenecks?: number;
+            maxNextWatchSignals?: number;
+        };
+        HyperAgentEvalCreateRequest: {
+            /** Format: uuid */
+            variant_id: string;
+            /** @enum {string} */
+            evaluator_key?: "world_model_backtest_v1";
+            /** @enum {string} */
+            fixture_set?: "world_model_smoke_v1";
+            fixtures?: components["schemas"]["HyperAgentEvaluationFixture"][];
+        };
+        HyperAgentRecommendationCreateRequest: {
+            /** Format: uuid */
+            eval_run_id: string;
+            summary?: {
+                [key: string]: unknown;
+            };
+        };
+        HyperAgentRecommendationDecisionRequest: {
+            /** @enum {string} */
+            decision: "accept" | "reject";
+            summary?: {
+                [key: string]: unknown;
+            };
+        };
         ApiSuccessEnvelope: {
             request_id: string;
             data: {

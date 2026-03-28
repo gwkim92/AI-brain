@@ -1,5 +1,11 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const reuseOnly = process.env.PLAYWRIGHT_REUSE_ONLY === "1";
+const backendBaseUrl =
+  process.env.PLAYWRIGHT_BACKEND_BASE_URL ??
+  process.env.NEXT_PUBLIC_BACKEND_BASE_URL ??
+  "http://127.0.0.1:4000";
+
 export default defineConfig({
   testDir: "./e2e",
   timeout: 30_000,
@@ -23,14 +29,16 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  webServer: {
-    command: "npm run dev -- --hostname 127.0.0.1 --port 3000",
-    url: "http://127.0.0.1:3000",
-    reuseExistingServer: !process.env.CI,
-    stdout: "pipe",
-    stderr: "pipe",
-    env: {
-      NEXT_PUBLIC_BACKEND_BASE_URL: "http://127.0.0.1:4000",
-    },
-  },
+  webServer: reuseOnly
+    ? undefined
+    : {
+        command: "npm run dev -- --hostname 127.0.0.1 --port 3000",
+        url: "http://127.0.0.1:3000",
+        reuseExistingServer: !process.env.CI,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          NEXT_PUBLIC_BACKEND_BASE_URL: backendBaseUrl,
+        },
+      },
 });

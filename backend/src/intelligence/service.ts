@@ -5695,6 +5695,13 @@ export async function bulkRebuildIntelligenceEvents(input: {
 }
 
 function buildCouncilQuestion(event: IntelligenceEventClusterRecord): string {
+  const semanticEvidence = event.semanticClaims
+    .map((claim) => claim.evidenceSpan?.trim())
+    .filter((value): value is string => Boolean(value))
+    .slice(0, 4);
+  const executionCandidates = event.executionCandidates
+    .slice(0, 3)
+    .map((candidate) => `${candidate.title}: ${candidate.summary}`);
   return [
     `Review intelligence event: ${event.title}`,
     '',
@@ -5703,7 +5710,10 @@ function buildCouncilQuestion(event: IntelligenceEventClusterRecord): string {
     `Primary hypotheses: ${event.primaryHypotheses.map((row) => `${row.title} (${row.confidence})`).join('; ')}`,
     `Counter hypotheses: ${event.counterHypotheses.map((row) => `${row.title} (${row.confidence})`).join('; ')}`,
     `Expected signals: ${event.expectedSignals.map((row) => row.description).join('; ')}`,
-    'Return a concise analysis that stress-tests the primary hypothesis, the strongest counter-hypothesis, and whether execution should proceed.',
+    `Source snippets: ${semanticEvidence.length > 0 ? semanticEvidence.join('; ') : 'none attached'}`,
+    `Execution candidates: ${executionCandidates.length > 0 ? executionCandidates.join('; ') : 'none proposed'}`,
+    `Source mix: ${Object.entries(event.sourceMix ?? {}).map(([key, value]) => `${key}=${String(value)}`).join('; ') || 'unknown'}`,
+    'Run a free-form exploration first, then produce a structured synthesis that stress-tests the primary hypothesis, the strongest counter-hypothesis, and whether execution should proceed.',
   ].join('\n');
 }
 
@@ -5740,28 +5750,66 @@ export async function dispatchIntelligenceCouncilBridge(input: {
       createTask: false,
       taskSource: 'intelligence_bridge',
       routeLabel: '/api/v1/intelligence/bridges/council',
+      waitForCompletion: true,
       credentialsByProvider,
     });
+    if (result.run.status === 'failed') {
+      await input.ctx.store.upsertIntelligenceEvent({
+        ...input.event,
+        deliberationStatus: 'failed',
+        updatedAt: nowIso(),
+      });
+      const dispatch = await input.ctx.store.createIntelligenceBridgeDispatch({
+        workspaceId: input.workspaceId,
+        eventId: input.event.id,
+        kind: 'council',
+        status: 'failed',
+        targetId: result.run.id,
+        requestJson: {
+          question: buildCouncilQuestion(input.event),
+        },
+        responseJson: {
+          council_run_id: result.run.id,
+          summary: result.run.summary,
+          phase_status: result.run.phase_status ?? null,
+          synthesis_error: result.run.synthesis_error ?? null,
+        },
+      });
+      return { dispatch, deliberation: null };
+    }
+
+    const structured = result.run.structured_result;
+    const legacyStructuredSuccess = !structured && result.run.workflow_version !== 'hybrid_v1' && result.run.status === 'completed';
+    const escalatedToHuman = result.run.phase_status?.exploration === 'completed' && result.run.phase_status?.synthesis === 'failed';
     const deliberation: DeliberationResult = {
       id: randomUUID(),
       source: 'bridge_council' as const,
-      status: 'completed' as const,
-      proposedPrimary: input.event.primaryHypotheses[0]?.summary ?? result.run.summary,
-      proposedCounter: input.event.counterHypotheses[0]?.summary ?? 'No counter-hypothesis returned.',
-      weakestLink: input.event.invalidationConditions[0]?.description ?? 'No weakest link identified.',
-      requiredNextSignals: input.event.expectedSignals.map((row) => row.description),
-      executionStance: (input.event.riskBand === 'high' || input.event.riskBand === 'critical' ? 'hold' : 'proceed') as 'hold' | 'proceed',
+      status: structured || legacyStructuredSuccess ? 'completed' : 'failed',
+      proposedPrimary: structured?.primaryHypothesis ?? input.event.primaryHypotheses[0]?.summary ?? result.run.exploration_summary ?? result.run.summary,
+      proposedCounter: structured?.counterHypothesis ?? input.event.counterHypotheses[0]?.summary ?? 'No counter-hypothesis returned.',
+      weakestLink: structured?.weakestLink ?? input.event.invalidationConditions[0]?.description ?? 'No weakest link identified.',
+      requiredNextSignals: structured?.requiredNextSignals ?? input.event.expectedSignals.map((row) => row.description),
+      executionStance:
+        structured?.executionStance
+        ?? ((input.event.riskBand === 'high' || input.event.riskBand === 'critical' ? 'hold' : 'proceed') as 'hold' | 'proceed'),
       rawJson: {
         council_run_id: result.run.id,
         summary: result.run.summary,
         consensus_status: result.run.consensus_status,
+        structured_result: structured ?? null,
       },
+      workflowVersion: result.run.workflow_version,
+      phaseStatus: result.run.phase_status,
+      explorationSummary: result.run.exploration_summary,
+      explorationTranscript: result.run.exploration_transcript,
+      synthesisError: result.run.synthesis_error ?? null,
+      escalatedToHuman,
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
     const nextEvent = await input.ctx.store.upsertIntelligenceEvent({
       ...input.event,
-      deliberationStatus: 'completed',
+      deliberationStatus: structured || legacyStructuredSuccess ? 'completed' : 'failed',
       deliberations: [...input.event.deliberations, deliberation],
       updatedAt: nowIso(),
     });
@@ -5769,7 +5817,7 @@ export async function dispatchIntelligenceCouncilBridge(input: {
       workspaceId: input.workspaceId,
       eventId: input.event.id,
       kind: 'council',
-      status: 'dispatched',
+      status: structured || legacyStructuredSuccess ? 'dispatched' : 'failed',
       targetId: result.run.id,
       requestJson: {
         question: buildCouncilQuestion(input.event),
@@ -5777,6 +5825,9 @@ export async function dispatchIntelligenceCouncilBridge(input: {
       responseJson: {
         council_run_id: result.run.id,
         consensus_status: result.run.consensus_status,
+        phase_status: result.run.phase_status ?? null,
+        exploration_summary: result.run.exploration_summary ?? null,
+        synthesis_error: result.run.synthesis_error ?? null,
       },
     });
     return {

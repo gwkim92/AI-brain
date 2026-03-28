@@ -8,6 +8,7 @@ export type V2FeatureFlags = {
   codeLoopEnabled: boolean;
   financeEnabled: boolean;
   schemaUiEnabled: boolean;
+  hyperAgentEnabled: boolean;
 };
 
 export type V2RouteContext = RouteContext & {
@@ -22,6 +23,7 @@ export function resolveV2FeatureFlags(ctx: RouteContext): V2FeatureFlags {
     teamEnabled: ctx.env.V2_TEAM_ENABLED,
     codeLoopEnabled: ctx.env.V2_CODE_LOOP_ENABLED,
     financeEnabled: ctx.env.V2_FINANCE_ENABLED,
-    schemaUiEnabled: ctx.env.V2_SCHEMA_UI_ENABLED
+    schemaUiEnabled: ctx.env.V2_SCHEMA_UI_ENABLED,
+    hyperAgentEnabled: ctx.env.V2_HYPERAGENT_ENABLED
   };
 }

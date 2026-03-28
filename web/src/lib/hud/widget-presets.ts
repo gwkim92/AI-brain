@@ -74,5 +74,5 @@ export function buildHudWorkspaceHref(
     }
   }
 
-  return `/?${params.toString()}`;
+  return `/studio?${params.toString()}`;
 }

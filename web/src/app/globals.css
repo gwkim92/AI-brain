@@ -8,6 +8,9 @@
 }
 
 :root {
+  --font-geist-sans: "Avenir Next", "SF Pro Display", "Segoe UI", "Helvetica Neue", sans-serif;
+  --font-geist-mono: "SFMono-Regular", "JetBrains Mono", "SF Mono", "Roboto Mono", "Menlo", monospace;
+
   /* Base Neutral Scale (Expert Console) */
   --background: #0a0a0f;
   /* Very dark gray/black */

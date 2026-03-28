@@ -1361,6 +1361,30 @@ export async function initializePostgresStore({
     ADD COLUMN IF NOT EXISTS last_error TEXT
   `);
   await pool.query(`
+    ALTER TABLE IF EXISTS council_runs
+    ADD COLUMN IF NOT EXISTS workflow_version TEXT NOT NULL DEFAULT 'structured_v1'
+  `);
+  await pool.query(`
+    ALTER TABLE IF EXISTS council_runs
+    ADD COLUMN IF NOT EXISTS phase_status JSONB
+  `);
+  await pool.query(`
+    ALTER TABLE IF EXISTS council_runs
+    ADD COLUMN IF NOT EXISTS exploration_summary TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE IF EXISTS council_runs
+    ADD COLUMN IF NOT EXISTS exploration_transcript JSONB
+  `);
+  await pool.query(`
+    ALTER TABLE IF EXISTS council_runs
+    ADD COLUMN IF NOT EXISTS synthesis_error TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE IF EXISTS council_runs
+    ADD COLUMN IF NOT EXISTS structured_result JSONB
+  `);
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_telegram_reports_status_next_attempt_at
     ON telegram_reports(status, next_attempt_at ASC)
   `);
@@ -2512,6 +2536,77 @@ export async function initializePostgresStore({
       UNIQUE (module_record_id, module_version)
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS hyperagent_artifact_snapshots (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      artifact_key TEXT NOT NULL,
+      artifact_version TEXT NOT NULL,
+      scope TEXT NOT NULL CHECK (scope IN ('world_model')),
+      payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_by TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_hyperagent_artifact_snapshots_scope_created
+    ON hyperagent_artifact_snapshots(scope, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_hyperagent_artifact_snapshots_key_created
+    ON hyperagent_artifact_snapshots(artifact_key, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS hyperagent_variants (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      artifact_snapshot_id UUID NOT NULL REFERENCES hyperagent_artifact_snapshots(id) ON DELETE CASCADE,
+      strategy TEXT NOT NULL CHECK (strategy IN ('bounded_json_mutation', 'manual_seed')),
+      payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      parent_variant_id UUID REFERENCES hyperagent_variants(id) ON DELETE SET NULL,
+      lineage_run_id TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_hyperagent_variants_snapshot_created
+    ON hyperagent_variants(artifact_snapshot_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_hyperagent_variants_lineage_created
+    ON hyperagent_variants(lineage_run_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS hyperagent_eval_runs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      variant_id UUID NOT NULL REFERENCES hyperagent_variants(id) ON DELETE CASCADE,
+      evaluator_key TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'completed', 'failed', 'blocked')),
+      summary_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_hyperagent_eval_runs_variant_created
+    ON hyperagent_eval_runs(variant_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS hyperagent_recommendations (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      eval_run_id UUID NOT NULL REFERENCES hyperagent_eval_runs(id) ON DELETE CASCADE,
+      variant_id UUID NOT NULL REFERENCES hyperagent_variants(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed', 'accepted', 'rejected', 'applied')),
+      summary_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      decided_by TEXT,
+      decided_at TIMESTAMPTZ,
+      applied_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_hyperagent_recommendations_status_updated
+    ON hyperagent_recommendations(status, updated_at DESC)
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS policy_rules (
@@ -2585,6 +2680,7 @@ export async function initializePostgresStore({
   await pool.query(`
     CREATE TABLE IF NOT EXISTS lineage_nodes (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      run_id TEXT,
       node_type TEXT NOT NULL,
       reference_id TEXT NOT NULL,
       metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -2594,12 +2690,23 @@ export async function initializePostgresStore({
   await pool.query(`
     CREATE TABLE IF NOT EXISTS lineage_edges (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      run_id TEXT,
       source_node_id UUID NOT NULL REFERENCES lineage_nodes(id) ON DELETE CASCADE,
       target_node_id UUID NOT NULL REFERENCES lineage_nodes(id) ON DELETE CASCADE,
       edge_type TEXT NOT NULL,
       metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
+  `);
+  await pool.query(`ALTER TABLE lineage_nodes ADD COLUMN IF NOT EXISTS run_id TEXT`);
+  await pool.query(`ALTER TABLE lineage_edges ADD COLUMN IF NOT EXISTS run_id TEXT`);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_lineage_nodes_run_created
+    ON lineage_nodes(run_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_lineage_edges_run_created
+    ON lineage_edges(run_id, created_at DESC)
   `);
 
   await pool.query(

@@ -26,9 +26,12 @@ import { startIntelligenceCatalogSyncWorker } from './intelligence/catalog-sync-
 import { startIntelligenceScannerWorker } from './intelligence/scanner-worker';
 import { startIntelligenceSemanticWorker } from './intelligence/semantic-worker';
 import { startIntelligenceStaleMaintenanceWorker } from './intelligence/stale-maintenance-worker';
+import { hydrateAppliedHyperAgentOverrides } from './hyperagent/runtime';
 import { startRadarScannerWorker } from './radar/scanner-worker';
 import { registerRoutes } from './routes';
 import { createStore } from './store';
+import { getSharedMemoryV2Repository } from './store/memory/v2-repositories';
+import { createPostgresV2Repository } from './store/postgres/v2-repositories';
 import type { JarvisStore } from './store/types';
 import { startWorldModelOutcomeWorker } from './world-model/outcome-worker';
 import { getWorkspaceRuntimeManager } from './workspaces/runtime-manager';
@@ -77,6 +80,8 @@ export async function buildServer() {
   const env = loadEnv();
   const store = await createStore(env);
   await ensureBootstrapAdmin(store, env);
+  const v2Repo = store.getPool() ? createPostgresV2Repository(store.getPool()!) : getSharedMemoryV2Repository();
+  await hydrateAppliedHyperAgentOverrides(v2Repo);
   const providerRouter = createProviderRouter(env);
 
   const loggerConfig = env.NODE_ENV === 'development'

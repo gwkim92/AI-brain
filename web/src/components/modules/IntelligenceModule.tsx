@@ -2039,10 +2039,27 @@ export function IntelligenceModule() {
                 </div>
 
                 <div className="grid gap-4 lg:grid-cols-2">
-                  <DetailBlock title={locale === "ko" ? "토론 결과" : "Deliberations"} locale={locale} items={selectedEvent.deliberations.map((row) => `${genericStatusLabel(row.status, locale)} · ${executionStatusLabel(row.executionStance, locale)} · ${row.weakestLink}`)} />
+                  <DetailBlock
+                    title={locale === "ko" ? "토론 결과" : "Deliberations"}
+                    locale={locale}
+                    items={selectedEvent.deliberations.map((row) => {
+                      const weakestLink = row.weakestLink || row.explorationSummary || text(locale, "요약 없음", "no summary");
+                      const escalation = row.escalatedToHuman ? ` · ${text(locale, "사람 검토", "human review")}` : "";
+                      return `${genericStatusLabel(row.status, locale)} · ${executionStatusLabel(row.executionStance, locale)} · ${weakestLink}${escalation}`;
+                    })}
+                  />
                   <DetailBlock title={locale === "ko" ? "결과 스냅샷" : "Outcome Snapshot"} locale={locale} items={selectedEvent.outcomes.map((row) => `${genericStatusLabel(row.status, locale)} · ${row.summary}`)} />
                 </div>
                 <div className="grid gap-4 lg:grid-cols-2">
+                  <DetailBlock
+                    title={locale === "ko" ? "토론 transcript" : "Deliberation Transcript"}
+                    locale={locale}
+                    items={selectedEvent.deliberations.flatMap((row) =>
+                      (row.explorationTranscript ?? []).map(
+                        (entry) => `R${entry.round} · ${entry.participant} · ${entry.content}`
+                      )
+                    )}
+                  />
                   <DetailBlock title={locale === "ko" ? "브리지 디스패치 로그" : "Bridge Dispatch Log"} locale={locale} items={(selectedEventDetail?.bridgeDispatches ?? []).map((row) => `${bridgeKindLabel(row.kind, locale)} · ${genericStatusLabel(row.status, locale)} · ${row.targetId ?? text(locale, "대상 없음", "no target")}`)} />
                   <DetailBlock title={locale === "ko" ? "실행 감사 로그" : "Execution Audit"} locale={locale} items={(selectedEventDetail?.executionAudit ?? []).map((row) => `${genericStatusLabel(row.status, locale)} · ${row.actionName ?? text(locale, "알수없음", "unknown")} · ${row.summary}`)} />
                 </div>

@@ -73,6 +73,8 @@ export type UserProviderCredentialRecord = {
   has_user_api_key: boolean;
   has_user_oauth_official: boolean;
   has_user_oauth_token: boolean;
+  oauth_supported: boolean;
+  oauth_enabled: boolean;
   user_updated_at: string | null;
   deleted?: boolean;
 };
@@ -1158,11 +1160,38 @@ export type AssistantFeedbackEventData = {
 export type CouncilRole = ApiSchemas["CouncilParticipant"]["role"];
 export type CouncilConsensusStatus = Exclude<ApiSchemas["CouncilRun"]["consensus_status"], null>;
 export type CouncilParticipantRecord = ApiSchemas["CouncilParticipant"];
+export type CouncilWorkflowVersion = "structured_v1" | "hybrid_v1";
+export type CouncilPhaseRunStatus = "pending" | "running" | "completed" | "failed";
+export type CouncilPhaseStatus = {
+  exploration: CouncilPhaseRunStatus;
+  synthesis: CouncilPhaseRunStatus;
+};
+export type CouncilTranscriptEntry = {
+  round: number;
+  participant: Exclude<CouncilRole, "synthesizer">;
+  content: string;
+  createdAt: string;
+};
+export type CouncilStructuredResult = {
+  summary: string;
+  consensusStatus: CouncilConsensusStatus;
+  primaryHypothesis: string;
+  counterHypothesis: string;
+  weakestLink: string;
+  requiredNextSignals: string[];
+  executionStance: "proceed" | "hold" | "reject";
+};
 
 export type CouncilRunRecord = ApiSchemas["CouncilRun"] & {
   selected_credential?: RuntimeSelectedCredential | null;
   resolved_route?: RuntimeResolvedRoute | null;
   attempts: ProviderAttempt[];
+  workflow_version?: CouncilWorkflowVersion;
+  phase_status?: CouncilPhaseStatus;
+  exploration_summary?: string;
+  exploration_transcript?: CouncilTranscriptEntry[];
+  synthesis_error?: string | null;
+  structured_result?: CouncilStructuredResult | null;
   idempotent_replay?: boolean;
   session?: JarvisSessionRecord | null;
 };
@@ -1219,9 +1248,19 @@ export type ProposalDecisionRequest = ApiSchemas["ProposalDecisionRequest"];
 export type TaskStreamEnvelope = ApiSchemas["TaskSseDataEnvelope"];
 export type ExecutionRunStreamEnvelope = ApiSchemas["ExecutionRunSseDataEnvelope"];
 export type CouncilRunStreamEnvelope = ApiSchemas["CouncilRunSseDataEnvelope"];
+export type CouncilPhaseStreamEnvelope = {
+  run_id: string;
+  timestamp: string;
+  phase: "exploration" | "synthesis";
+  phase_status: CouncilPhaseRunStatus;
+  provider: ProviderName | null;
+  model: string;
+  attempt_count: number;
+};
 export type CouncilRoundStartedStreamEnvelope = {
   run_id: string;
   timestamp: string;
+  phase: "exploration" | "synthesis";
   round: number;
   max_rounds: number;
   provider: ProviderName | null;
@@ -1231,6 +1270,7 @@ export type CouncilRoundStartedStreamEnvelope = {
 export type CouncilAgentRespondedStreamEnvelope = {
   run_id: string;
   timestamp: string;
+  phase: "exploration" | "synthesis";
   round: number;
   max_rounds: number;
   agent_index: number;
@@ -1239,6 +1279,7 @@ export type CouncilAgentRespondedStreamEnvelope = {
 export type CouncilRoundCompletedStreamEnvelope = {
   run_id: string;
   timestamp: string;
+  phase: "exploration" | "synthesis";
   round: number;
   max_rounds: number;
   summary: string;
@@ -1878,6 +1919,172 @@ export type V2TaskViewSchemaResponse = {
   };
 };
 
+export type HyperAgentArtifactKey = "radar_domain_pack" | "world_model_dossier_config";
+export type HyperAgentArtifactScope = "world_model";
+export type HyperAgentRecommendationStatus = "proposed" | "accepted" | "rejected" | "applied";
+
+export type HyperAgentEditableArtifact = {
+  artifactKey: HyperAgentArtifactKey;
+  scope: HyperAgentArtifactScope;
+  description: string;
+  mutableFields: string[];
+};
+
+export type AppliedHyperAgentArtifactRecord = {
+  artifactKey: HyperAgentArtifactKey;
+  payload: Record<string, unknown>;
+  recommendationId: string;
+  variantId: string;
+  artifactSnapshotId: string;
+  appliedAt: string;
+};
+
+export type HyperAgentArtifactSnapshotRecord = {
+  id: string;
+  artifactKey: HyperAgentArtifactKey;
+  artifactVersion: string;
+  scope: HyperAgentArtifactScope;
+  payload: Record<string, unknown>;
+  createdBy: string;
+  createdAt: string;
+};
+
+export type HyperAgentVariantRecord = {
+  id: string;
+  artifactSnapshotId: string;
+  strategy: string;
+  payload: Record<string, unknown>;
+  parentVariantId: string | null;
+  lineageRunId: string;
+  createdAt: string;
+};
+
+export type HyperAgentEvalRunRecord = {
+  id: string;
+  variantId: string;
+  evaluatorKey: string;
+  status: string;
+  summary: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type HyperAgentRecommendationRecord = {
+  id: string;
+  evalRunId: string;
+  variantId: string;
+  status: HyperAgentRecommendationStatus;
+  summary: Record<string, unknown>;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  appliedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type HyperAgentArtifactDiffEntry = {
+  path: string;
+  changeType: "added" | "removed" | "changed";
+  before: unknown;
+  after: unknown;
+};
+
+export type HyperAgentArtifactDiff = {
+  changeCount: number;
+  entries: HyperAgentArtifactDiffEntry[];
+};
+
+export type HyperAgentEvalGate = {
+  passed: boolean;
+  reasons: string[];
+};
+
+export type HyperAgentOverviewRun = {
+  artifact: HyperAgentEditableArtifact | null;
+  snapshot: HyperAgentArtifactSnapshotRecord | null;
+  variant: HyperAgentVariantRecord | null;
+  eval_run: HyperAgentEvalRunRecord | null;
+  recommendation: HyperAgentRecommendationRecord;
+  lineage_run_id: string | null;
+  lineage: {
+    nodeCount: number;
+    edgeCount: number;
+  } | null;
+  diff: HyperAgentArtifactDiff | null;
+  gate: HyperAgentEvalGate;
+  applied_override: AppliedHyperAgentArtifactRecord | null;
+  runtime_applied: boolean;
+};
+
+export type HyperAgentOverviewData = {
+  summary: {
+    total: number;
+    applied_count: number;
+    statuses: Record<string, number>;
+  };
+  runs: HyperAgentOverviewRun[];
+};
+
+export type HyperAgentArtifactsData = {
+  artifacts: Array<HyperAgentEditableArtifact & { applied_override: AppliedHyperAgentArtifactRecord | null }>;
+};
+
+export type HyperAgentVariantCreateData = {
+  variant: HyperAgentVariantRecord;
+  archive: Record<string, unknown>;
+  changed_keys: string[];
+};
+
+export type HyperAgentEvalResult = {
+  evaluatedAt: string;
+  metrics: Record<string, unknown>;
+  caseResults: Array<Record<string, unknown>>;
+};
+
+export type HyperAgentEvalCreateData = {
+  eval_run: HyperAgentEvalRunRecord;
+  result: HyperAgentEvalResult;
+};
+
+export type HyperAgentFixtureSetSummary = {
+  key: string;
+  title: string;
+  description: string;
+  fixtureCount: number;
+};
+
+export type HyperAgentWorldModelFixturesData = {
+  default_fixture_set: string;
+  fixture_sets: HyperAgentFixtureSetSummary[];
+};
+
+export type HyperAgentLineageNode = {
+  id: string;
+  runId: string;
+  nodeType: string;
+  referenceId: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type HyperAgentLineageEdge = {
+  id: string;
+  runId: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  edgeType: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type HyperAgentLineageData = {
+  run_id: string;
+  lineage: {
+    nodes: HyperAgentLineageNode[];
+    edges: HyperAgentLineageEdge[];
+  };
+};
+
 export type IntelligenceWorkspaceRole = "owner" | "admin" | "member";
 export type IntelligenceSourceKind = "rss" | "atom" | "json" | "api" | "search" | "headless" | "mcp_connector" | "synthetic";
 export type IntelligenceSourceType =
@@ -2190,6 +2397,12 @@ export type IntelligenceDeliberationResult = {
   requiredNextSignals: string[];
   executionStance: "proceed" | "hold" | "reject";
   rawJson: Record<string, unknown>;
+  workflowVersion?: CouncilWorkflowVersion;
+  phaseStatus?: CouncilPhaseStatus;
+  explorationSummary?: string;
+  explorationTranscript?: CouncilTranscriptEntry[];
+  synthesisError?: string | null;
+  escalatedToHuman?: boolean;
   createdAt: string;
   updatedAt: string;
 };

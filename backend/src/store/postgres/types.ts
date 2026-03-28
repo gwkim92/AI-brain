@@ -745,6 +745,12 @@ export type CouncilRunRow = {
   model: string;
   used_fallback: boolean;
   task_id: string | null;
+  workflow_version: CouncilRunRecord['workflow_version'] | null;
+  phase_status: unknown;
+  exploration_summary: string | null;
+  exploration_transcript: unknown;
+  synthesis_error: string | null;
+  structured_result: unknown;
   user_id: string;
   idempotency_key: string;
   trace_id: string | null;

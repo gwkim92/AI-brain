@@ -19,6 +19,7 @@ import type {
   AuthStaticTokenLoginRequest,
   AuthSignupRequest,
   CouncilAgentRespondedStreamEnvelope,
+  CouncilPhaseStreamEnvelope,
   CouncilRoundCompletedStreamEnvelope,
   CouncilRoundStartedStreamEnvelope,
   CouncilRunRecord,
@@ -111,6 +112,15 @@ import type {
   UpgradeStatus,
   GeneratePlanRequest,
   GeneratePlanResponse,
+  HyperAgentArtifactKey,
+  HyperAgentArtifactsData,
+  HyperAgentEvalCreateData,
+  HyperAgentLineageData,
+  HyperAgentOverviewData,
+  HyperAgentRecommendationRecord,
+  HyperAgentRecommendationStatus,
+  HyperAgentVariantCreateData,
+  HyperAgentWorldModelFixturesData,
   V2CommandCompileResponse,
   V2TaskViewSchemaResponse,
   IntelligenceBridgeDispatchRecord,
@@ -1167,6 +1177,107 @@ export async function applyModelRecommendation(recommendationId: string): Promis
   );
 }
 
+export async function listV2HyperAgentArtifacts(): Promise<HyperAgentArtifactsData> {
+  return apiRequest<HyperAgentArtifactsData>("/api/v2/hyperagents/artifacts", {
+    method: "GET",
+  });
+}
+
+export async function listV2HyperAgentOverview(query: {
+  status?: HyperAgentRecommendationStatus;
+  limit?: number;
+} = {}): Promise<HyperAgentOverviewData> {
+  return apiRequest<HyperAgentOverviewData>("/api/v2/hyperagents/overview", {
+    method: "GET",
+    query,
+  });
+}
+
+export async function decideV2HyperAgentRecommendation(
+  recommendationId: string,
+  payload: {
+    decision: "accept" | "reject";
+    summary?: Record<string, unknown>;
+  }
+): Promise<{ recommendation: HyperAgentRecommendationRecord }> {
+  return apiRequest<{ recommendation: HyperAgentRecommendationRecord }>(
+    `/api/v2/hyperagents/recommendations/${recommendationId}/decision`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function applyV2HyperAgentRecommendation(recommendationId: string): Promise<{
+  recommendation: HyperAgentRecommendationRecord;
+}> {
+  return apiRequest<{ recommendation: HyperAgentRecommendationRecord }>(
+    `/api/v2/hyperagents/recommendations/${recommendationId}/apply`,
+    {
+      method: "POST",
+    }
+  );
+}
+
+export async function createV2HyperAgentWorldModelSnapshot(payload: {
+  artifact_key: HyperAgentArtifactKey;
+  artifact_version?: string;
+}): Promise<{ snapshot: import("@/lib/api/types").HyperAgentArtifactSnapshotRecord }> {
+  return apiRequest<{ snapshot: import("@/lib/api/types").HyperAgentArtifactSnapshotRecord }>(
+    "/api/v2/hyperagents/world-model/snapshots",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function createV2HyperAgentWorldModelVariant(payload: {
+  artifact_snapshot_id: string;
+  mutation_budget?: number;
+  parent_variant_id?: string | null;
+  lineage_run_id?: string;
+}): Promise<HyperAgentVariantCreateData> {
+  return apiRequest<HyperAgentVariantCreateData>("/api/v2/hyperagents/world-model/variants", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function createV2HyperAgentEval(payload: {
+  variant_id: string;
+  evaluator_key?: "world_model_backtest_v1";
+  fixture_set?: string;
+}): Promise<HyperAgentEvalCreateData> {
+  return apiRequest<HyperAgentEvalCreateData>("/api/v2/hyperagents/evals", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function createV2HyperAgentRecommendation(payload: {
+  eval_run_id: string;
+  summary?: Record<string, unknown>;
+}): Promise<{ recommendation: HyperAgentRecommendationRecord }> {
+  return apiRequest<{ recommendation: HyperAgentRecommendationRecord }>("/api/v2/hyperagents/recommendations", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listV2HyperAgentWorldModelFixtures(): Promise<HyperAgentWorldModelFixturesData> {
+  return apiRequest<HyperAgentWorldModelFixturesData>("/api/v2/hyperagents/world-model/fixtures", {
+    method: "GET",
+  });
+}
+
+export async function getV2HyperAgentLineage(runId: string): Promise<HyperAgentLineageData> {
+  return apiRequest<HyperAgentLineageData>(`/api/v2/hyperagents/lineage/${runId}`, {
+    method: "GET",
+  });
+}
+
 export async function listModelControlTraces(query: {
   feature_key?: ModelControlFeatureKey | "diagnostic";
   success?: boolean;
@@ -1282,6 +1393,9 @@ export function streamCouncilRunEvents(
   runId: string,
   handlers: {
     onOpen?: (payload: CouncilRunStreamEnvelope) => void;
+    onPhaseStarted?: (payload: CouncilPhaseStreamEnvelope) => void;
+    onPhaseCompleted?: (payload: CouncilPhaseStreamEnvelope) => void;
+    onPhaseFailed?: (payload: CouncilPhaseStreamEnvelope) => void;
     onRoundStarted?: (payload: CouncilRoundStartedStreamEnvelope) => void;
     onAgentResponded?: (payload: CouncilAgentRespondedStreamEnvelope) => void;
     onRoundCompleted?: (payload: CouncilRoundCompletedStreamEnvelope) => void;
@@ -1296,6 +1410,18 @@ export function streamCouncilRunEvents(
 
   source.addEventListener("stream.open", (event) => {
     handlers.onOpen?.(tryParseSseData((event as MessageEvent).data) as CouncilRunStreamEnvelope);
+  });
+
+  source.addEventListener("council.phase.started", (event) => {
+    handlers.onPhaseStarted?.(tryParseSseData((event as MessageEvent).data) as CouncilPhaseStreamEnvelope);
+  });
+
+  source.addEventListener("council.phase.completed", (event) => {
+    handlers.onPhaseCompleted?.(tryParseSseData((event as MessageEvent).data) as CouncilPhaseStreamEnvelope);
+  });
+
+  source.addEventListener("council.phase.failed", (event) => {
+    handlers.onPhaseFailed?.(tryParseSseData((event as MessageEvent).data) as CouncilPhaseStreamEnvelope);
   });
 
   source.addEventListener("council.round.started", (event) => {

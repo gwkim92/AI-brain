@@ -1,22 +1,9 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { AppShell } from "@/components/layout/AppShell";
-import { HUDProvider } from "@/components/providers/HUDProvider";
 import { LocaleProvider } from "@/components/providers/LocaleProvider";
 import { ToastProvider } from "@/components/providers/ToastProvider";
 import { detectLocaleFromAcceptLanguage } from "@/lib/locale";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   title: "JARVIS - AI Assistant",
@@ -33,14 +20,10 @@ export default async function RootLayout({
 
   return (
     <html lang={initialLocale} className="dark" suppressHydrationWarning>
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen bg-background text-foreground`}
-      >
+      <body className="antialiased min-h-screen bg-background text-foreground">
         <LocaleProvider initialLocale={initialLocale}>
           <ToastProvider>
-            <HUDProvider>
-              <AppShell>{children}</AppShell>
-            </HUDProvider>
+            {children}
           </ToastProvider>
         </LocaleProvider>
       </body>

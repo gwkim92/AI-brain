@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
+import type { AppEnv } from '../config/env';
 import { decryptSecretValue, encryptSecretValue } from '../auth/secrets';
 import { sendError, sendSuccess } from '../lib/http';
 import { withAiInvocationTrace } from '../observability/ai-trace';
@@ -70,6 +71,8 @@ type UserCredentialView = {
   has_user_api_key: boolean;
   has_user_oauth_official: boolean;
   has_user_oauth_token: boolean;
+  oauth_supported: boolean;
+  oauth_enabled: boolean;
   user_updated_at: string | null;
 };
 
@@ -108,7 +111,24 @@ function safeParseUserPayload(encryptedPayload: string, secret: string) {
   }
 }
 
+function isOauthSupportedProvider(provider: ProviderName): provider is z.infer<typeof OauthProviderSchema> {
+  return provider === 'openai' || provider === 'gemini';
+}
+
+function isOauthEnabledForProvider(env: AppEnv, provider: ProviderName): boolean {
+  if (!isOauthSupportedProvider(provider)) {
+    return false;
+  }
+
+  try {
+    return getProviderOauthConfig(env, provider) !== null;
+  } catch {
+    return false;
+  }
+}
+
 function buildCredentialView(input: {
+  env: AppEnv;
   provider: ProviderName;
   resolved: NonNullable<Awaited<ReturnType<typeof resolveEffectiveProviderCredentials>>['credentialsByProvider'][ProviderName]>;
   userSnapshot?: {
@@ -134,6 +154,8 @@ function buildCredentialView(input: {
     has_user_api_key: Boolean(payload?.api_key),
     has_user_oauth_official: Boolean(payload?.oauth_official?.access_token),
     has_user_oauth_token: Boolean(payload?.oauth_official?.access_token),
+    oauth_supported: isOauthSupportedProvider(input.provider),
+    oauth_enabled: isOauthEnabledForProvider(input.env, input.provider),
     user_updated_at: input.userSnapshot?.record.updatedAt ?? null
   };
 }
@@ -223,6 +245,7 @@ export async function providerRoutes(app: FastifyInstance, ctx: RouteContext) {
       const resolved = resolution.credentialsByProvider[provider];
       if (!resolved) {
         return buildCredentialView({
+          env,
           provider,
           resolved: {
             provider,
@@ -235,6 +258,7 @@ export async function providerRoutes(app: FastifyInstance, ctx: RouteContext) {
       }
 
       return buildCredentialView({
+        env,
         provider,
         resolved,
         userSnapshot: resolution.userCredentials[provider]
@@ -265,6 +289,7 @@ export async function providerRoutes(app: FastifyInstance, ctx: RouteContext) {
     };
 
     return sendSuccess(reply, request, 200, buildCredentialView({
+      env,
       provider,
       resolved,
       userSnapshot: resolution.userCredentials[provider]
@@ -336,6 +361,7 @@ export async function providerRoutes(app: FastifyInstance, ctx: RouteContext) {
     };
 
     return sendSuccess(reply, request, 200, buildCredentialView({
+      env,
       provider,
       resolved,
       userSnapshot: resolution.userCredentials[provider]
@@ -373,6 +399,7 @@ export async function providerRoutes(app: FastifyInstance, ctx: RouteContext) {
 
     return sendSuccess(reply, request, 200, {
       ...buildCredentialView({
+        env,
         provider,
         resolved,
         userSnapshot: resolution.userCredentials[provider]
@@ -714,6 +741,7 @@ export async function providerRoutes(app: FastifyInstance, ctx: RouteContext) {
     });
 
     return sendSuccess(reply, request, 200, buildCredentialView({
+      env,
       provider,
       resolved,
       userSnapshot: resolution.userCredentials[provider]

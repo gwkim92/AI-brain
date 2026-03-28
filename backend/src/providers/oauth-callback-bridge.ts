@@ -167,7 +167,7 @@ async function listenBridgeServer(
     };
     server.once('error', onError);
     server.once('listening', onListening);
-    server.listen(config.port, '127.0.0.1');
+    server.listen(config.port, '0.0.0.0');
   });
 
   if (!listened) {

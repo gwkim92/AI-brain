@@ -35,12 +35,19 @@ services:
     container_name: jarvis-backend
     env_file:
       - ./backend/.env.example
+      - ./backend/.env
     environment:
       STORE_BACKEND: postgres
       DATABASE_URL: postgres://jarvis:jarvis@postgres:5432/jarvis
       ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://web:3000
+      PROVIDER_USER_CREDENTIALS_ENABLED: 'true'
+      PROVIDER_OAUTH_OPENAI_ENABLED: 'true'
+      PROVIDER_OAUTH_PUBLIC_CLIENT_FALLBACK: 'true'
+      OPENAI_OAUTH_CLIENT_ID: app_EMoamEEZ73f0CkXaXp7hrann
+      OPENAI_OAUTH_REDIRECT_URI: http://localhost:1455/auth/callback
     ports:
       - '4000:4000'
+      - '1455:1455'
     depends_on:
       postgres:
         condition: service_healthy

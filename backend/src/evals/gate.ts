@@ -27,6 +27,11 @@ export type EvalGateResult = {
   reasons: string[];
 };
 
+export type HyperAgentEvalGateInput = {
+  recommendationStatus: 'proposed' | 'accepted' | 'rejected' | 'applied';
+  summary: Record<string, unknown>;
+};
+
 export type PromptOptimizerDiffInput = {
   baselineScore: number;
   optimizedScore: number;
@@ -103,6 +108,46 @@ export function summarizePromptOptimizerDiff(input: PromptOptimizerDiffInput): P
     delta,
     baselinePrompt: input.baselinePrompt,
     optimizedPrompt: input.optimizedPrompt
+  };
+}
+
+function resolveHyperAgentPromotionScore(summary: Record<string, unknown>): number | null {
+  if (typeof summary.promotionScore === 'number' && Number.isFinite(summary.promotionScore)) {
+    return summary.promotionScore;
+  }
+  const metrics = summary.metrics;
+  if (
+    typeof metrics === 'object' &&
+    metrics !== null &&
+    !Array.isArray(metrics) &&
+    typeof (metrics as Record<string, unknown>).promotionScore === 'number' &&
+    Number.isFinite((metrics as Record<string, unknown>).promotionScore)
+  ) {
+    return (metrics as Record<string, unknown>).promotionScore as number;
+  }
+  return null;
+}
+
+export function evaluateHyperAgentRecommendationGate(
+  input: HyperAgentEvalGateInput,
+  threshold = 0.8
+): EvalGateResult {
+  const reasons: string[] = [];
+  const promotionScore = resolveHyperAgentPromotionScore(input.summary);
+
+  if (input.recommendationStatus !== 'accepted' && input.recommendationStatus !== 'applied') {
+    reasons.push('hyperagent_recommendation_not_accepted');
+  }
+
+  if (promotionScore === null) {
+    reasons.push('hyperagent_promotion_score_missing');
+  } else if (promotionScore < threshold) {
+    reasons.push('hyperagent_promotion_score_below_threshold');
+  }
+
+  return {
+    passed: reasons.length === 0,
+    reasons,
   };
 }
 

@@ -81,6 +81,7 @@ const EnvSchema = z.object({
   WORLD_MODEL_OUTCOME_WORKER_ENABLED: EnvBooleanSchema.default(true),
   WORLD_MODEL_OUTCOME_WORKER_POLL_MS: z.coerce.number().int().min(1000).default(300000),
   WORLD_MODEL_OUTCOME_WORKER_BATCH: z.coerce.number().int().min(1).max(200).default(20),
+  COUNCIL_WORKFLOW_MODE: z.enum(['structured', 'hybrid']).default('hybrid'),
   WORKSPACE_DEVCONTAINER_ENABLED: EnvBooleanSchema.default(true),
   WORKSPACE_DEVCONTAINER_IMAGE: z.string().default('node:24-alpine'),
   WORKSPACE_DEVCONTAINER_WORKDIR: z.string().default('/workspace'),
@@ -147,6 +148,7 @@ const EnvSchema = z.object({
   V2_CODE_LOOP_ENABLED: EnvBooleanSchema.default(false),
   V2_FINANCE_ENABLED: EnvBooleanSchema.default(false),
   V2_SCHEMA_UI_ENABLED: EnvBooleanSchema.default(false),
+  V2_HYPERAGENT_ENABLED: EnvBooleanSchema.default(false),
 
   BRAVE_API_KEY: z.string().optional(),
   CROSSREF_MAILTO: z.string().email().optional(),

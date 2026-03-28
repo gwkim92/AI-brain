@@ -6,10 +6,10 @@ import { SettingsModule } from "@/components/modules/SettingsModule";
 
 export default function SettingsPage() {
   return (
-    <main className="w-full h-full min-h-0 overflow-hidden bg-black/40 text-white p-6">
+    <main className="min-h-0 overflow-hidden rounded-[32px] border border-black/10 bg-[#fffdf8] p-6 text-neutral-950 shadow-sm">
       <div
         data-testid="settings-scroll-container"
-        className="h-full min-h-0 overflow-y-auto rounded-xl border border-white/10 bg-black/30 backdrop-blur-sm"
+        className="h-full min-h-0 overflow-y-auto rounded-[24px] border border-black/10 bg-white"
       >
         <SettingsModule />
       </div>

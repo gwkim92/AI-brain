@@ -7,6 +7,7 @@ import { registerV2CodeLoopRoutes } from './code-loops';
 import { registerV2CommandRoutes } from './command';
 import { registerV2EvalRoutes } from './evals';
 import { registerV2FinanceRoutes } from './finance';
+import { registerV2HyperAgentRoutes } from './hyperagents';
 import { registerV2IncidentRoutes } from './incidents';
 import { registerV2KgRoutes } from './kg';
 import { registerV2PolicyRoutes } from './policies';
@@ -45,6 +46,7 @@ export async function registerV2Routes(app: FastifyInstance, ctx: RouteContext):
   await registerV2TeamRoutes(app, v2Ctx);
   await registerV2CodeLoopRoutes(app, v2Ctx);
   await registerV2FinanceRoutes(app, v2Ctx);
+  await registerV2HyperAgentRoutes(app, v2Ctx);
   await registerV2TaskViewRoutes(app, v2Ctx);
   await registerV2PolicyRoutes(app, v2Ctx);
   await registerV2EvalRoutes(app, v2Ctx);

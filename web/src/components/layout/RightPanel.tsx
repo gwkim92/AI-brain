@@ -287,13 +287,13 @@ export function RightPanel() {
                 workspacePreset: restore.workspacePreset,
             });
         }
-        if (pathname !== "/") {
+        if (pathname !== "/studio") {
             const nextSearchParams = new URLSearchParams();
             nextSearchParams.set("widgets", restore.mountedWidgets.join(","));
             nextSearchParams.set("focus", restore.focus);
             nextSearchParams.set("replace", "1");
             nextSearchParams.set("activation", restore.activation);
-            const nextPath = nextSearchParams.size > 0 ? `/?${nextSearchParams.toString()}` : "/";
+            const nextPath = nextSearchParams.size > 0 ? `/studio?${nextSearchParams.toString()}` : "/studio";
             router.push(nextPath);
         }
     };
@@ -321,13 +321,13 @@ export function RightPanel() {
             activate: "focus_only",
             workspacePreset: null,
         });
-        if (pathname !== "/") {
+        if (pathname !== "/studio") {
             const nextSearchParams = new URLSearchParams();
             nextSearchParams.set("widgets", fallbackWidgets.join(","));
             nextSearchParams.set("focus", "assistant");
             nextSearchParams.set("replace", "1");
             nextSearchParams.set("activation", "focus_only");
-            router.push(`/?${nextSearchParams.toString()}`);
+            router.push(`/studio?${nextSearchParams.toString()}`);
         }
     };
 

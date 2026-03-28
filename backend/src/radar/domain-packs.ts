@@ -1,3 +1,4 @@
+import { getAppliedHyperAgentArtifactOverride, resolveAppliedArtifactOverride } from '../hyperagent/runtime';
 import type { RadarDomainId, RadarDomainPackDefinition } from '../store/types';
 
 export const RADAR_DOMAIN_PACKS: RadarDomainPackDefinition[] = [
@@ -167,8 +168,8 @@ export const RADAR_DOMAIN_PACKS: RadarDomainPackDefinition[] = [
   },
 ];
 
-export function listRadarDomainPacks(): RadarDomainPackDefinition[] {
-  return RADAR_DOMAIN_PACKS.map((pack) => ({
+function clonePack(pack: RadarDomainPackDefinition): RadarDomainPackDefinition {
+  return {
     ...pack,
     ontology: [...pack.ontology],
     mechanismTemplates: [...pack.mechanismTemplates],
@@ -177,21 +178,46 @@ export function listRadarDomainPacks(): RadarDomainPackDefinition[] {
     watchMetrics: [...pack.watchMetrics],
     keywordLexicon: [...pack.keywordLexicon],
     actionMapping: { ...pack.actionMapping },
-  }));
+  };
+}
+
+function resolveRuntimeRadarDomainPacks(): RadarDomainPackDefinition[] {
+  const applied = getAppliedHyperAgentArtifactOverride('radar_domain_pack');
+  const resolved = resolveAppliedArtifactOverride({
+    artifactKey: 'radar_domain_pack',
+    applied,
+    fallback: {
+      domainPacks: RADAR_DOMAIN_PACKS.map((pack) => clonePack(pack)),
+    },
+  });
+  const domainPacks = resolved.domainPacks;
+  if (!Array.isArray(domainPacks)) {
+    return RADAR_DOMAIN_PACKS.map((pack) => clonePack(pack));
+  }
+
+  return domainPacks
+    .filter((pack): pack is RadarDomainPackDefinition => {
+      return (
+        typeof pack === 'object' &&
+        pack !== null &&
+        typeof (pack as RadarDomainPackDefinition).id === 'string' &&
+        Array.isArray((pack as RadarDomainPackDefinition).ontology) &&
+        Array.isArray((pack as RadarDomainPackDefinition).mechanismTemplates) &&
+        Array.isArray((pack as RadarDomainPackDefinition).stateVariables) &&
+        Array.isArray((pack as RadarDomainPackDefinition).invalidationTemplates) &&
+        Array.isArray((pack as RadarDomainPackDefinition).watchMetrics) &&
+        Array.isArray((pack as RadarDomainPackDefinition).keywordLexicon) &&
+        typeof (pack as RadarDomainPackDefinition).actionMapping === 'object'
+      );
+    })
+    .map((pack) => clonePack(pack));
+}
+
+export function listRadarDomainPacks(): RadarDomainPackDefinition[] {
+  return resolveRuntimeRadarDomainPacks();
 }
 
 export function getRadarDomainPack(domainId: RadarDomainId): RadarDomainPackDefinition | null {
-  const match = RADAR_DOMAIN_PACKS.find((pack) => pack.id === domainId);
-  return match
-    ? {
-        ...match,
-        ontology: [...match.ontology],
-        mechanismTemplates: [...match.mechanismTemplates],
-        stateVariables: [...match.stateVariables],
-        invalidationTemplates: [...match.invalidationTemplates],
-        watchMetrics: [...match.watchMetrics],
-        keywordLexicon: [...match.keywordLexicon],
-        actionMapping: { ...match.actionMapping },
-      }
-    : null;
+  const match = resolveRuntimeRadarDomainPacks().find((pack) => pack.id === domainId);
+  return match ? clonePack(match) : null;
 }

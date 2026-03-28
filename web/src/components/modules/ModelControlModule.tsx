@@ -392,10 +392,12 @@ export function ModelControlModule() {
               has_user_api_key: false,
               has_user_oauth_official: false,
               has_user_oauth_token: false,
+              oauth_supported: false,
+              oauth_enabled: false,
               user_updated_at: null,
             };
             const draftMode = credentialModeDrafts[provider] ?? row.selected_user_credential_mode;
-            const oauthModesAllowed = provider === "openai" || provider === "gemini";
+            const oauthModesAllowed = row.oauth_enabled || row.has_user_oauth_official || row.has_user_oauth_token;
             return (
               <div key={`mode-${provider}`} className="rounded-lg border border-white/10 bg-black/40 p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">

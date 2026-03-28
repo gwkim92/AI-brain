@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import { startCouncilRun } from '../council/run-service';
-import type { CouncilRunRecord } from '../store/types';
+import type { CouncilPhaseStatusRecord, CouncilRunRecord } from '../store/types';
 import { sendError, sendSuccess } from '../lib/http';
 import type { RouteContext } from './types';
 import {
@@ -94,6 +94,19 @@ function withRunCredential(
     ...run,
     selected_credential: resolveSelectedCredentialForRun(run),
     resolved_route: resolveRunRoute(run, resolvedRoute)
+  };
+}
+
+function normalizePhaseStatus(status?: CouncilPhaseStatusRecord): CouncilPhaseStatusRecord {
+  return status
+    ? { exploration: status.exploration, synthesis: status.synthesis }
+    : { exploration: 'pending', synthesis: 'pending' };
+}
+
+function toCouncilRunListView(run: CouncilRunRecord): CouncilRunRecord {
+  return {
+    ...run,
+    exploration_transcript: undefined
   };
 }
 
@@ -190,7 +203,7 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
     const runs = await store.listCouncilRuns(parsed.data.limit);
 
     return sendSuccess(reply, request, 200, {
-      runs: runs.map((run) => withRunCredential(run))
+      runs: runs.map((run) => withRunCredential(toCouncilRunListView(run)))
     });
   });
 
@@ -221,6 +234,7 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
     let lastStatus: string | null = null;
     let lastAttemptCount = 0;
     let lastRoundSummary: string | null = null;
+    let lastPhaseStatus: CouncilPhaseStatusRecord = { exploration: 'pending', synthesis: 'pending' };
     const startedRounds = new Set<number>();
     const completedRounds = new Set<number>();
 
@@ -243,7 +257,25 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
       emitEvent(eventName, {
         run_id: runId,
         timestamp: new Date().toISOString(),
-          data: withRunCredential(row)
+        data: withRunCredential(row)
+      });
+    };
+
+    const emitPhaseEvent = (
+      eventName: 'council.phase.started' | 'council.phase.completed' | 'council.phase.failed',
+      row: NonNullable<Awaited<ReturnType<typeof store.getCouncilRunById>>>,
+      phase: 'exploration' | 'synthesis',
+      phaseStatus: CouncilPhaseStatusRecord['exploration']
+    ) => {
+      emitEvent(eventName, {
+        run_id: runId,
+        timestamp: new Date().toISOString(),
+        phase,
+        phase_status: phaseStatus,
+        provider: row.provider,
+        model: row.model,
+        selected_credential: resolveSelectedCredentialForRun(row),
+        attempt_count: row.attempts.length
       });
     };
 
@@ -260,6 +292,7 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
       emitEvent('council.round.started', {
         run_id: runId,
         timestamp: new Date().toISOString(),
+        phase: 'exploration',
         round,
         max_rounds: maxRounds,
         provider: row.provider,
@@ -282,6 +315,7 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
       emitEvent('council.round.completed', {
         run_id: runId,
         timestamp: new Date().toISOString(),
+        phase: 'exploration',
         round,
         max_rounds: maxRounds,
         summary: row.summary,
@@ -303,6 +337,7 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
         emitEvent('council.agent.responded', {
           run_id: runId,
           timestamp: new Date().toISOString(),
+          phase: 'exploration',
           round,
           max_rounds: maxRounds,
           agent_index: lastAttemptCount + index + 1,
@@ -313,16 +348,43 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
     };
 
     const emitFallbackRoundProgress = (row: NonNullable<Awaited<ReturnType<typeof store.getCouncilRunById>>>) => {
-      if (row.attempts.length <= lastAttemptCount) {
+      if (row.attempts.length <= lastAttemptCount && !row.exploration_transcript?.length) {
         return;
       }
 
-      const maxRounds = parseRoundLogCount(row.summary) ?? 1;
+      const transcriptRounds = row.exploration_transcript?.map((entry) => entry.round) ?? [];
+      const maxRounds = transcriptRounds.length > 0 ? Math.max(...transcriptRounds) : parseRoundLogCount(row.summary) ?? 1;
       const round = Math.max(1, maxRounds);
       emitRoundStarted(row, round, maxRounds);
       emitAgentResponses(row, round, maxRounds);
       emitRoundCompleted(row, round, maxRounds);
       lastRoundSummary = row.summary;
+    };
+
+    const emitPhaseChanges = (row: NonNullable<Awaited<ReturnType<typeof store.getCouncilRunById>>>) => {
+      const currentPhaseStatus = normalizePhaseStatus(row.phase_status);
+      (['exploration', 'synthesis'] as const).forEach((phase) => {
+        const previous = lastPhaseStatus[phase];
+        const next = currentPhaseStatus[phase];
+        if (previous === next) {
+          return;
+        }
+
+        // Late subscribers may attach after the phase already finished. Reconstruct
+        // the missing "started" transition before emitting the terminal state.
+        if (previous === 'pending' && (next === 'completed' || next === 'failed')) {
+          emitPhaseEvent('council.phase.started', row, phase, 'running');
+        }
+
+        if (next === 'running') {
+          emitPhaseEvent('council.phase.started', row, phase, next);
+        } else if (next === 'completed') {
+          emitPhaseEvent('council.phase.completed', row, phase, next);
+        } else if (next === 'failed') {
+          emitPhaseEvent('council.phase.failed', row, phase, next);
+        }
+      });
+      lastPhaseStatus = currentPhaseStatus;
     };
 
     const poll = async () => {
@@ -338,11 +400,19 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
 
       const roundProgress = parseRoundProgress(current.summary);
       const summaryChanged = lastRoundSummary !== current.summary;
+      const currentPhaseStatus = normalizePhaseStatus(current.phase_status);
+      const phaseChanged =
+        currentPhaseStatus.exploration !== lastPhaseStatus.exploration
+        || currentPhaseStatus.synthesis !== lastPhaseStatus.synthesis;
+
+      emitPhaseChanges(current);
 
       if (current.status === 'running' && roundProgress && (summaryChanged || current.attempts.length > lastAttemptCount)) {
         emitRoundStarted(current, roundProgress.round, roundProgress.maxRounds);
         emitAgentResponses(current, roundProgress.round, roundProgress.maxRounds);
-        emitRoundCompleted(current, roundProgress.round, roundProgress.maxRounds);
+        if (roundProgress.state === 'complete') {
+          emitRoundCompleted(current, roundProgress.round, roundProgress.maxRounds);
+        }
         lastRoundSummary = current.summary;
       } else if (
         (current.status === 'completed' || current.status === 'failed') &&
@@ -351,7 +421,10 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
         emitFallbackRoundProgress(current);
       }
 
-      if (current.status !== lastStatus) {
+      if (
+        current.status !== lastStatus
+        || (current.status === 'running' && (summaryChanged || phaseChanged || current.attempts.length > lastAttemptCount))
+      ) {
         const eventName =
           current.status === 'completed'
             ? 'council.run.completed'

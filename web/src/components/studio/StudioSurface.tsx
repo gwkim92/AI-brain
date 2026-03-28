@@ -14,12 +14,12 @@ type StudioSurfaceProps = {
 };
 
 const NAV_ITEMS = [
-  { href: "/mission", label: "MISSION" },
+  { href: "/studio", label: "WORKSPACE" },
   { href: "/studio/code", label: "CODE" },
   { href: "/studio/research", label: "RESEARCH" },
   { href: "/studio/finance", label: "FINANCE" },
   { href: "/studio/news", label: "NEWS" },
-  { href: "/?widget=inbox", label: "HUD" },
+  { href: "/studio?widget=inbox", label: "HUD" },
 ];
 
 export function StudioSurface({ title, subtitle, baseMode, children }: StudioSurfaceProps) {

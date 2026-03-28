@@ -376,12 +376,15 @@ export async function registerRoutes(
     }
 
     const requestPath = request.url.split('?')[0] ?? request.url;
-    if (!requestPath.startsWith('/api/v1/')) return;
+    const isV1Route = requestPath.startsWith('/api/v1/');
+    const isV2Route = requestPath.startsWith('/api/v2/');
+    if (!isV1Route && !isV2Route) return;
     if (
       requestPath === '/api/v1/auth/config' ||
       requestPath === '/api/v1/auth/signup' ||
       requestPath === '/api/v1/auth/login' ||
-      requestPath === '/api/v1/auth/static-token/login'
+      requestPath === '/api/v1/auth/static-token/login' ||
+      requestPath === '/api/v2/health'
     ) {
       return;
     }

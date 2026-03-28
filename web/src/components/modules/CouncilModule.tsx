@@ -14,7 +14,9 @@ import { dispatchJarvisDataRefresh } from "@/lib/hud/data-refresh";
 import type { AgentRole } from "@/components/ui/AgentArgumentCard";
 import type {
   CouncilConsensusStatus,
+  CouncilPhaseStatus,
   CouncilRole,
+  CouncilTranscriptEntry,
   ProviderAttempt,
   ProviderAvailability,
   ProviderModelCatalogEntry,
@@ -68,15 +70,19 @@ function attemptStatusClass(status: ProviderAttempt["status"]): string {
   return "text-amber-300 border-amber-500/30 bg-amber-500/10";
 }
 
-function parseRoundProgress(summary: string): { round: number; maxRounds: number } | null {
-  const match = summary.match(/^Round\s+(\d+)\/(\d+)\s+complete:/u);
+function parseRoundProgress(summary: string): { round: number; maxRounds: number; state: "in_progress" | "complete" } | null {
+  const match = summary.match(/^Round\s+(\d+)\/(\d+)\s+(in progress|complete):/u);
   if (!match) return null;
   const round = Number.parseInt(match[1] ?? "", 10);
   const maxRounds = Number.parseInt(match[2] ?? "", 10);
   if (!Number.isFinite(round) || !Number.isFinite(maxRounds) || round <= 0 || maxRounds <= 0) {
     return null;
   }
-  return { round, maxRounds };
+  return {
+    round,
+    maxRounds,
+    state: match[3] === "complete" ? "complete" : "in_progress",
+  };
 }
 
 function parseRoundLogCount(summary: string): number | null {
@@ -88,6 +94,14 @@ function parseRoundLogCount(summary: string): number | null {
   const matches = logSection.match(/^\d+\.\s+/gmu);
   if (!matches || matches.length === 0) return null;
   return matches.length;
+}
+
+function normalizePhaseStatus(status?: CouncilPhaseStatus): CouncilPhaseStatus {
+  return status ?? { exploration: "pending", synthesis: "pending" };
+}
+
+function maxTranscriptRound(transcript?: CouncilTranscriptEntry[]): number {
+  return transcript?.reduce((max, entry) => Math.max(max, entry.round), 0) ?? 0;
 }
 
 function describeCapabilityKey(capability: string) {
@@ -141,6 +155,10 @@ export function CouncilModule() {
   const [summary, setSummary] = useState(() => t("council.summary.idle"));
   const [status, setStatus] = useState<ConsensusStatus>("Escalated to Human");
   const [rounds, setRounds] = useState(0);
+  const [phaseStatus, setPhaseStatus] = useState<CouncilPhaseStatus>({ exploration: "pending", synthesis: "pending" });
+  const [explorationSummary, setExplorationSummary] = useState("");
+  const [explorationTranscript, setExplorationTranscript] = useState<CouncilTranscriptEntry[]>([]);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastTaskId, setLastTaskId] = useState<string | null>(null);
@@ -194,8 +212,12 @@ export function CouncilModule() {
     return t("council.session.state.ready");
   }, [error, rounds, running, t]);
   const councilPhase = useMemo(() => {
+    const normalized = normalizePhaseStatus(phaseStatus);
     if (!running && rounds === 0 && providerAttempts.length === 0 && !hasResult) {
       return null;
+    }
+    if (normalized.synthesis === "running" || normalized.synthesis === "completed" || normalized.synthesis === "failed") {
+      return "synthesis" as const;
     }
     if (!running && hasResult) {
       return "synthesis" as const;
@@ -210,7 +232,7 @@ export function CouncilModule() {
       return "risks" as const;
     }
     return "synthesis" as const;
-  }, [hasResult, providerAttempts.length, providerFailures.length, rounds, running]);
+  }, [hasResult, phaseStatus, providerAttempts.length, providerFailures.length, rounds, running]);
   const councilStages = useMemo(
     () =>
       (["framing", "pros", "risks", "synthesis"] as const).map((phase) => {
@@ -291,6 +313,9 @@ export function CouncilModule() {
     if (!running && rounds === 0 && providerAttempts.length === 0) {
       setCards(defaultCards);
       setSummary(t("council.summary.idle"));
+      setPhaseStatus({ exploration: "pending", synthesis: "pending" });
+      setExplorationSummary("");
+      setExplorationTranscript([]);
     }
   }, [defaultCards, providerAttempts.length, rounds, running, t]);
 
@@ -322,6 +347,9 @@ export function CouncilModule() {
     status: "queued" | "running" | "completed" | "failed";
     consensus_status: CouncilConsensusStatus | null;
     attempts: ProviderAttempt[];
+    phase_status?: CouncilPhaseStatus;
+    exploration_summary?: string;
+    exploration_transcript?: CouncilTranscriptEntry[];
     selected_credential?: {
       source: string;
       selected_credential_mode: string | null;
@@ -340,9 +368,14 @@ export function CouncilModule() {
     const credentialSummary = result.selected_credential?.selected_credential_mode
       ? `${result.selected_credential.selected_credential_mode} (${result.selected_credential.source}) · ${result.selected_credential.credential_priority}`
       : "none";
+    const normalizedPhaseStatus = normalizePhaseStatus(result.phase_status);
+    const transcript = result.exploration_transcript ?? [];
     if (result.resolved_route) {
       setResolvedRoute(result.resolved_route);
     }
+    setPhaseStatus(normalizedPhaseStatus);
+    setExplorationSummary(result.exploration_summary ?? "");
+    setExplorationTranscript(transcript);
 
     if (result.status === "queued" || result.status === "running") {
       const progress = parseRoundProgress(result.summary);
@@ -355,7 +388,7 @@ export function CouncilModule() {
         }))
       );
       setStatus("Escalated to Human");
-      setRounds(progress?.round ?? 1);
+      setRounds(progress?.round ?? Math.max(1, maxTranscriptRound(transcript)));
       setSummary(result.summary || t("council.summary.running"));
       setLastTaskId(result.task_id);
       setProviderAttempts(result.attempts);
@@ -389,12 +422,15 @@ export function CouncilModule() {
       };
     });
 
+    const transcriptRoundCount = maxTranscriptRound(transcript);
     setCards(mappedCards);
     setStatus(result.consensus_status ? CONSENSUS_MAP[result.consensus_status] : "Escalated to Human");
     setRounds(
-      parseRoundLogCount(result.summary) ??
-        parseRoundProgress(result.summary)?.round ??
-        Math.max(1, Math.min(5, result.attempts.length || 1))
+      transcriptRoundCount > 0
+        ? transcriptRoundCount
+        : (parseRoundLogCount(result.summary) ??
+          parseRoundProgress(result.summary)?.round ??
+          Math.max(1, Math.min(5, result.attempts.length || 1)))
     );
     setSummary(result.summary);
     setLastTaskId(result.task_id);
@@ -405,6 +441,33 @@ export function CouncilModule() {
   const attachCouncilStream = React.useCallback((runId: string) => {
     streamRef.current?.close();
     streamRef.current = streamCouncilRunEvents(runId, {
+      onPhaseStarted: (payload) => {
+        if (!payload || typeof payload !== "object" || !("phase" in payload)) return;
+        const data = payload as { phase: "exploration" | "synthesis" };
+        setPhaseStatus((current) => ({
+          ...current,
+          [data.phase]: "running",
+        }));
+        if (data.phase === "synthesis") {
+          setSummary("Synthesis in progress: consolidating exploration transcript.");
+        }
+      },
+      onPhaseCompleted: (payload) => {
+        if (!payload || typeof payload !== "object" || !("phase" in payload)) return;
+        const data = payload as { phase: "exploration" | "synthesis" };
+        setPhaseStatus((current) => ({
+          ...current,
+          [data.phase]: "completed",
+        }));
+      },
+      onPhaseFailed: (payload) => {
+        if (!payload || typeof payload !== "object" || !("phase" in payload)) return;
+        const data = payload as { phase: "exploration" | "synthesis" };
+        setPhaseStatus((current) => ({
+          ...current,
+          [data.phase]: "failed",
+        }));
+      },
       onRoundStarted: (payload) => {
         if (payload && typeof payload === "object" && "round" in payload) {
           const data = payload as { round: number; max_rounds: number };
@@ -512,6 +575,10 @@ export function CouncilModule() {
     setLastExcludedProviders(options?.excludeProviders ?? []);
     setSelectedCredentialSummary("pending");
     setResolvedRoute(null);
+    setPhaseStatus({ exploration: "pending", synthesis: "pending" });
+    setExplorationSummary("");
+    setExplorationTranscript([]);
+    setTranscriptOpen(false);
 
     const clientSessionId = startSession(prompt, {
       activeWidgets: ["council", "tasks"],
@@ -604,6 +671,15 @@ export function CouncilModule() {
     if (resolvedRoute.source !== "feature_preference" && resolvedRoute.source !== "global_default") return null;
     return t("providerRoute.pinnedByPreference");
   }, [resolvedRoute, selectedProvider, t]);
+  const transcriptRounds = useMemo(() => {
+    const grouped = new Map<number, CouncilTranscriptEntry[]>();
+    explorationTranscript.forEach((entry) => {
+      const current = grouped.get(entry.round) ?? [];
+      current.push(entry);
+      grouped.set(entry.round, current);
+    });
+    return Array.from(grouped.entries()).sort(([left], [right]) => left - right);
+  }, [explorationTranscript]);
 
   return (
     <main className="w-full h-full relative overflow-hidden bg-transparent text-white flex">
@@ -804,6 +880,47 @@ export function CouncilModule() {
 
           <div className="flex-[3] flex flex-col gap-6 overflow-y-auto lg:overflow-visible">
             <CouncilConsensusPanel status={status} rounds={rounds} summary={summary} />
+
+            {(explorationSummary || transcriptRounds.length > 0) && (
+              <div className="glass-panel p-5 rounded-lg border-l-4 border-cyan-500">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h4 className="font-mono text-xs font-bold text-cyan-300 tracking-widest">
+                      EXPLORATION TRANSCRIPT
+                    </h4>
+                    {explorationSummary ? (
+                      <p className="mt-2 text-xs leading-5 text-white/70">{explorationSummary}</p>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setTranscriptOpen((current) => !current)}
+                    className="rounded border border-white/15 px-3 py-1.5 text-[11px] font-mono text-white/75 transition hover:border-cyan-400/35 hover:text-cyan-100"
+                  >
+                    {transcriptOpen ? "HIDE" : "SHOW"}
+                  </button>
+                </div>
+                {transcriptOpen && (
+                  <div className="mt-4 space-y-3">
+                    {transcriptRounds.map(([round, entries]) => (
+                      <div key={`transcript-round-${round}`} className="rounded border border-white/10 bg-black/25 p-3">
+                        <p className="text-[10px] font-mono uppercase tracking-[0.24em] text-cyan-200">
+                          ROUND {round}
+                        </p>
+                        <div className="mt-3 space-y-2">
+                          {entries.map((entry, index) => (
+                            <div key={`transcript-entry-${round}-${entry.participant}-${index}`} className="rounded border border-white/8 bg-black/20 px-3 py-2">
+                              <p className="text-[10px] font-mono uppercase tracking-[0.22em] text-white/55">{entry.participant}</p>
+                              <p className="mt-1 text-xs leading-5 text-white/80">{entry.content}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="glass-panel p-5 rounded-lg border-l-4 border-red-500">
               <h4 className="font-mono text-xs font-bold text-red-400 tracking-widest mb-2">{t("council.providerFailureReasons")}</h4>

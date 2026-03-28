@@ -2,6 +2,7 @@ import { resolveResearchProfile, type ResearchProfile } from '../retrieval/resea
 import type { DossierClaimRecord, DossierRecord, DossierSourceRecord } from '../store/types';
 
 import { extractWorldModelCandidateFacts } from './extraction';
+import { resolveWorldModelDossierConfig, type WorldModelDossierConfigOverride } from './config';
 import { buildHypothesisLedger } from './hypothesis-ledger';
 import { buildWorldModelState } from './state-model';
 
@@ -91,14 +92,16 @@ export function buildStoredDossierWorldModelExtraction(input: {
 export function buildWorldModelBlockFromExtraction(input: {
   extraction: ReturnType<typeof extractWorldModelCandidateFacts>;
   now?: string;
+  configOverride?: WorldModelDossierConfigOverride;
 }): DossierWorldModelBlock {
+  const config = resolveWorldModelDossierConfig(input.configOverride);
   const state = buildWorldModelState({ extraction: input.extraction });
   const ledger = buildHypothesisLedger({ extraction: input.extraction, state, now: input.now });
 
   const bottlenecks = Object.values(state.variables)
-    .filter((variable) => variable.score >= 0.3)
+    .filter((variable) => variable.score >= config.bottleneckScoreThreshold)
     .sort((left, right) => right.score - left.score)
-    .slice(0, 4)
+    .slice(0, config.maxBottlenecks)
     .map((variable) => ({
       key: variable.key,
       score: variable.score,
@@ -115,7 +118,7 @@ export function buildWorldModelBlockFromExtraction(input: {
       severity: condition.severity,
       matched_evidence: condition.matchedEvidence,
     }))
-  );
+  ).slice(0, config.maxInvalidationConditions);
 
   const nextWatchSignals = invalidationConditions
     .filter((condition) => condition.observed_status === 'pending')
@@ -125,7 +128,7 @@ export function buildWorldModelBlockFromExtraction(input: {
       severity: condition.severity,
       stance: condition.stance,
     }))
-    .slice(0, 5);
+    .slice(0, config.maxNextWatchSignals);
 
   return {
     state_snapshot: {
@@ -168,6 +171,7 @@ export function buildDossierWorldModel(input: {
   sources: DossierSourceRecord[];
   claims: DossierClaimRecord[];
   now?: string;
+  configOverride?: WorldModelDossierConfigOverride;
 }): DossierWorldModelBlock {
   const extraction = buildStoredDossierWorldModelExtraction({
     dossier: input.dossier,
@@ -177,5 +181,6 @@ export function buildDossierWorldModel(input: {
   return buildWorldModelBlockFromExtraction({
     extraction,
     now: input.now,
+    configOverride: input.configOverride,
   });
 }

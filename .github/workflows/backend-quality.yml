@@ -44,3 +44,64 @@ jobs:
 
       - name: Lint
         run: pnpm lint
+
+  backend-hyperagent-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          cache-dependency-path: backend/pnpm-lock.yaml
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Start isolated v2 backend
+        run: |
+          env HOST=127.0.0.1 PORT=4100 STORE_BACKEND=memory V2_ROUTES_ENABLED=true V2_HYPERAGENT_ENABLED=true JARVIS_WATCHER_WORKER_ENABLED=false RADAR_SCANNER_WORKER_ENABLED=false INTELLIGENCE_SCANNER_WORKER_ENABLED=false INTELLIGENCE_SEMANTIC_WORKER_ENABLED=false INTELLIGENCE_STALE_MAINTENANCE_WORKER_ENABLED=false INTELLIGENCE_MODEL_SYNC_WORKER_ENABLED=false WORLD_MODEL_OUTCOME_WORKER_ENABLED=false TELEGRAM_REPORT_WORKER_ENABLED=false PROVIDER_TOKEN_REFRESH_WORKER_ENABLED=false LOCAL_LLM_ENABLED=false pnpm start >/tmp/backend-hyperagent.log 2>&1 &
+          echo $! >/tmp/backend-hyperagent.pid
+
+      - name: Wait for v2 health
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:4100/api/v2/health >/tmp/backend-hyperagent-health.json; then
+              cat /tmp/backend-hyperagent-health.json
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "backend-hyperagent-smoke failed to start" >&2
+          cat /tmp/backend-hyperagent.log >&2 || true
+          exit 1
+
+      - name: Run HyperAgent live smoke
+        run: env JARVIS_BASE_URL=http://127.0.0.1:4100 pnpm run hyperagent:smoke
+
+      - name: Upload smoke artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-hyperagent-smoke-artifacts
+          path: |
+            /tmp/backend-hyperagent.log
+            output/hyperagent-smoke/result.json
+          if-no-files-found: ignore
+
+      - name: Stop isolated v2 backend
+        if: always()
+        run: |
+          if [ -f /tmp/backend-hyperagent.pid ]; then
+            kill "$(cat /tmp/backend-hyperagent.pid)" || true
+          fi

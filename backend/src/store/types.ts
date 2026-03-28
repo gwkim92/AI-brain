@@ -1422,6 +1422,27 @@ export type ProviderAttemptRecord = {
 export type CouncilRole = 'planner' | 'researcher' | 'critic' | 'risk' | 'synthesizer';
 export type CouncilConsensusStatus = 'consensus_reached' | 'contradiction_detected' | 'escalated_to_human';
 export type CouncilRunStatus = 'queued' | 'running' | 'completed' | 'failed';
+export type CouncilWorkflowVersion = 'structured_v1' | 'hybrid_v1';
+export type CouncilPhaseRunStatus = 'pending' | 'running' | 'completed' | 'failed';
+export type CouncilPhaseStatusRecord = {
+  exploration: CouncilPhaseRunStatus;
+  synthesis: CouncilPhaseRunStatus;
+};
+export type CouncilTranscriptEntry = {
+  round: number;
+  participant: Exclude<CouncilRole, 'synthesizer'>;
+  content: string;
+  createdAt: string;
+};
+export type CouncilStructuredResult = {
+  summary: string;
+  consensusStatus: CouncilConsensusStatus;
+  primaryHypothesis: string;
+  counterHypothesis: string;
+  weakestLink: string;
+  requiredNextSignals: string[];
+  executionStance: 'proceed' | 'hold' | 'reject';
+};
 export type ExecutionRunStatus = 'queued' | 'running' | 'completed' | 'failed';
 
 export type CouncilParticipantRecord = {
@@ -1445,6 +1466,12 @@ export type CouncilRunRecord = {
   model: string;
   used_fallback: boolean;
   task_id: string | null;
+  workflow_version?: CouncilWorkflowVersion;
+  phase_status?: CouncilPhaseStatusRecord;
+  exploration_summary?: string;
+  exploration_transcript?: CouncilTranscriptEntry[];
+  synthesis_error?: string | null;
+  structured_result?: CouncilStructuredResult | null;
   created_at: string;
   updated_at: string;
 };
@@ -1482,6 +1509,12 @@ export type UpdateCouncilRunInput = {
   model?: string;
   used_fallback?: boolean;
   task_id?: string | null;
+  workflow_version?: CouncilWorkflowVersion;
+  phase_status?: CouncilPhaseStatusRecord;
+  exploration_summary?: string;
+  exploration_transcript?: CouncilTranscriptEntry[];
+  synthesis_error?: string | null;
+  structured_result?: CouncilStructuredResult | null;
 };
 
 export type CreateExecutionRunInput = Omit<ExecutionRunRecord, 'id' | 'created_at' | 'updated_at'> & {
@@ -1889,6 +1922,53 @@ export type V2CapabilityModuleRegistrationRecord = {
   version: V2CapabilityModuleVersionRecord;
 };
 
+export type V2HyperAgentArtifactScope = 'world_model';
+export type V2HyperAgentVariantStrategy = 'bounded_json_mutation' | 'manual_seed';
+export type V2HyperAgentRecommendationStatus = 'proposed' | 'accepted' | 'rejected' | 'applied';
+
+export type V2HyperAgentArtifactSnapshotRecord = {
+  id: string;
+  artifactKey: string;
+  artifactVersion: string;
+  scope: V2HyperAgentArtifactScope;
+  payload: Record<string, unknown>;
+  createdBy: string;
+  createdAt: string;
+};
+
+export type V2HyperAgentVariantRecord = {
+  id: string;
+  artifactSnapshotId: string;
+  strategy: V2HyperAgentVariantStrategy;
+  payload: Record<string, unknown>;
+  parentVariantId: string | null;
+  lineageRunId: string;
+  createdAt: string;
+};
+
+export type V2HyperAgentEvalRunRecord = {
+  id: string;
+  variantId: string;
+  evaluatorKey: string;
+  status: V2RunStatus;
+  summary: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type V2HyperAgentRecommendationRecord = {
+  id: string;
+  evalRunId: string;
+  variantId: string;
+  status: V2HyperAgentRecommendationStatus;
+  summary: Record<string, unknown>;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  appliedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type V2PolicyRuleRecord = {
   id: string;
   policyKey: string;
@@ -1951,6 +2031,7 @@ export type V2RollbackActionRecord = {
 
 export type V2LineageNodeRecord = {
   id: string;
+  runId: string;
   nodeType: string;
   referenceId: string;
   metadata: Record<string, unknown>;
@@ -1959,6 +2040,7 @@ export type V2LineageNodeRecord = {
 
 export type V2LineageEdgeRecord = {
   id: string;
+  runId: string;
   sourceNodeId: string;
   targetNodeId: string;
   edgeType: string;
@@ -1978,6 +2060,50 @@ export type V2RepositoryContract = {
   listCapabilityModules: () => Promise<V2CapabilityModuleRecord[]>;
   listCapabilityModuleVersions: (input: { moduleId: string }) => Promise<V2CapabilityModuleVersionRecord[]>;
   saveTaskViewSchema: (input: Omit<V2TaskViewSchemaRecord, 'id' | 'createdAt'>) => Promise<V2TaskViewSchemaRecord>;
+  createHyperAgentArtifactSnapshot: (
+    input: Omit<V2HyperAgentArtifactSnapshotRecord, 'id' | 'createdAt'>
+  ) => Promise<V2HyperAgentArtifactSnapshotRecord>;
+  getHyperAgentArtifactSnapshotById: (input: { artifactSnapshotId: string }) => Promise<V2HyperAgentArtifactSnapshotRecord | null>;
+  listHyperAgentArtifactSnapshots: (input: {
+    scope?: V2HyperAgentArtifactScope;
+    artifactKey?: string;
+    limit: number;
+  }) => Promise<V2HyperAgentArtifactSnapshotRecord[]>;
+  createHyperAgentVariant: (input: Omit<V2HyperAgentVariantRecord, 'id' | 'createdAt'>) => Promise<V2HyperAgentVariantRecord>;
+  getHyperAgentVariantById: (input: { variantId: string }) => Promise<V2HyperAgentVariantRecord | null>;
+  listHyperAgentVariants: (input: {
+    artifactSnapshotId?: string;
+    lineageRunId?: string;
+    limit: number;
+  }) => Promise<V2HyperAgentVariantRecord[]>;
+  createHyperAgentEvalRun: (input: Omit<V2HyperAgentEvalRunRecord, 'id' | 'createdAt' | 'updatedAt'>) => Promise<V2HyperAgentEvalRunRecord>;
+  updateHyperAgentEvalRun: (input: {
+    evalRunId: string;
+    status?: V2RunStatus;
+    summary?: Record<string, unknown>;
+  }) => Promise<V2HyperAgentEvalRunRecord | null>;
+  getHyperAgentEvalRunById: (input: { evalRunId: string }) => Promise<V2HyperAgentEvalRunRecord | null>;
+  createHyperAgentRecommendation: (
+    input: Omit<V2HyperAgentRecommendationRecord, 'id' | 'decidedBy' | 'decidedAt' | 'appliedAt' | 'createdAt' | 'updatedAt'>
+  ) => Promise<V2HyperAgentRecommendationRecord>;
+  getHyperAgentRecommendationById: (input: { recommendationId: string }) => Promise<V2HyperAgentRecommendationRecord | null>;
+  listHyperAgentRecommendations: (input: {
+    status?: V2HyperAgentRecommendationStatus;
+    limit: number;
+  }) => Promise<V2HyperAgentRecommendationRecord[]>;
+  decideHyperAgentRecommendation: (input: {
+    recommendationId: string;
+    status: V2HyperAgentRecommendationStatus;
+    decidedBy?: string | null;
+    summary?: Record<string, unknown>;
+    appliedAt?: string | null;
+  }) => Promise<V2HyperAgentRecommendationRecord | null>;
+  createLineageNode: (input: Omit<V2LineageNodeRecord, 'id' | 'createdAt'>) => Promise<V2LineageNodeRecord>;
+  createLineageEdge: (input: Omit<V2LineageEdgeRecord, 'id' | 'createdAt'>) => Promise<V2LineageEdgeRecord>;
+  listLineageByRun: (input: { runId: string }) => Promise<{
+    nodes: V2LineageNodeRecord[];
+    edges: V2LineageEdgeRecord[];
+  }>;
 };
 
 export type IntelligenceWorkspaceRole = 'owner' | 'admin' | 'member';
@@ -2577,6 +2703,12 @@ export type DeliberationResult = {
   requiredNextSignals: string[];
   executionStance: 'proceed' | 'hold' | 'reject';
   rawJson: Record<string, unknown>;
+  workflowVersion?: CouncilWorkflowVersion;
+  phaseStatus?: CouncilPhaseStatusRecord;
+  explorationSummary?: string;
+  explorationTranscript?: CouncilTranscriptEntry[];
+  synthesisError?: string | null;
+  escalatedToHuman?: boolean;
   createdAt: string;
   updatedAt: string;
 };

@@ -49,3 +49,124 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  web-hyperagent-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run HyperAgent operator e2e
+        run: npm run e2e:hyperagents
+
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-hyperagent-e2e-artifacts
+          path: |
+            web/playwright-report
+            web/test-results
+          if-no-files-found: ignore
+
+  web-hyperagent-live-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          cache-dependency-path: backend/pnpm-lock.yaml
+
+      - name: Enable Corepack
+        working-directory: backend
+        run: corepack enable
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pnpm install --frozen-lockfile
+
+      - name: Start isolated HyperAgent backend
+        working-directory: backend
+        run: |
+          env HOST=127.0.0.1 PORT=4100 STORE_BACKEND=memory V2_ROUTES_ENABLED=true V2_HYPERAGENT_ENABLED=true JARVIS_WATCHER_WORKER_ENABLED=false RADAR_SCANNER_WORKER_ENABLED=false INTELLIGENCE_SCANNER_WORKER_ENABLED=false INTELLIGENCE_SEMANTIC_WORKER_ENABLED=false INTELLIGENCE_STALE_MAINTENANCE_WORKER_ENABLED=false INTELLIGENCE_MODEL_SYNC_WORKER_ENABLED=false WORLD_MODEL_OUTCOME_WORKER_ENABLED=false TELEGRAM_REPORT_WORKER_ENABLED=false PROVIDER_TOKEN_REFRESH_WORKER_ENABLED=false LOCAL_LLM_ENABLED=false pnpm start >/tmp/web-hyperagent-live-backend.log 2>&1 &
+          echo $! >/tmp/web-hyperagent-live-backend.pid
+
+      - name: Wait for backend v2 health
+        working-directory: backend
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:4100/api/v2/health >/tmp/web-hyperagent-live-health.json; then
+              cat /tmp/web-hyperagent-live-health.json
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "web-hyperagent-live backend failed to start" >&2
+          cat /tmp/web-hyperagent-live-backend.log >&2 || true
+          exit 1
+
+      - name: Setup web dependencies
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Run live HyperAgent operator e2e
+        working-directory: web
+        run: PLAYWRIGHT_BACKEND_BASE_URL=http://127.0.0.1:4100 HYPERAGENT_REVIEW_PACKET_DIR=${{ github.workspace }}/output/hyperagent-review-packets npm run e2e:hyperagents:live
+
+      - name: Upload live Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-hyperagent-live-e2e-artifacts
+          path: |
+            /tmp/web-hyperagent-live-backend.log
+            output/hyperagent-review-packets
+            web/playwright-report
+            web/test-results
+          if-no-files-found: ignore
+
+      - name: Stop isolated HyperAgent backend
+        if: always()
+        working-directory: backend
+        run: |
+          if [ -f /tmp/web-hyperagent-live-backend.pid ]; then
+            kill "$(cat /tmp/web-hyperagent-live-backend.pid)" || true
+          fi
