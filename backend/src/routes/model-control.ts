@@ -67,7 +67,7 @@ export async function modelControlRoutes(app: FastifyInstance, ctx: RouteContext
 
   const ensureEnabled = (request: FastifyRequest, reply: FastifyReply) => {
     if (!env.MODEL_CONTROL_ENABLED) {
-      return sendError(reply, request as any, 403, 'FORBIDDEN', 'model control feature is disabled');
+      return sendError(reply, request, 403, 'FORBIDDEN', 'model control feature is disabled');
     }
     return null;
   };

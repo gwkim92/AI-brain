@@ -54,7 +54,6 @@ export function buildWorldModelExtractionFromRadarEvent(input: {
     }
   }
 
-  const itemById = new Map(input.items.map((item) => [item.id, item]));
   const sourceUrls = input.items.map((item) => item.sourceUrl);
   const eventChannel = inferChannel(input.event.eventType);
   const entities = [...entityMap.values()].map((entity) => ({

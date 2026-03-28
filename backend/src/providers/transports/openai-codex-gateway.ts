@@ -131,15 +131,13 @@ export async function generateViaOpenAICodexGateway(input: OpenAICodexGatewayInp
     }
   );
 
-  let outputText = '';
-  let payload: OpenAICodexResponsePayload | null = null;
   const trimmed = payloadText.trimStart();
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-    payload = JSON.parse(payloadText) as OpenAICodexResponsePayload;
-    outputText = extractOutputTextFromPayload(payload);
-  } else {
-    outputText = extractOutputTextFromSse(payloadText);
-  }
+  const payload =
+    trimmed.startsWith('{') || trimmed.startsWith('[')
+      ? (JSON.parse(payloadText) as OpenAICodexResponsePayload)
+      : null;
+  const outputText =
+    payload ? extractOutputTextFromPayload(payload) : extractOutputTextFromSse(payloadText);
 
   if (!outputText) {
     throw new Error('openai codex gateway returned empty output');

@@ -93,13 +93,6 @@ export function inferRadarSourceTier(input: {
   return 'tier_1';
 }
 
-function tokenize(text: string): string[] {
-  return text
-    .split(/[^a-z0-9]+/i)
-    .map((value) => value.trim())
-    .filter((value) => value.length >= 3);
-}
-
 function extractEntityHints(item: RadarItemRecord): string[] {
   const seeded = item.entityHints ?? [];
   const text = `${item.title} ${item.summary}`.trim();

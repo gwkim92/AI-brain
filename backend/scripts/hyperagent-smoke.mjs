@@ -27,12 +27,13 @@ async function requestJson(method, pathname, { token, body } = {}) {
   });
 
   const text = await response.text();
-  let json = null;
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch {
-    json = { raw: text };
-  }
+  const json = (() => {
+    try {
+      return text ? JSON.parse(text) : null;
+    } catch {
+      return { raw: text };
+    }
+  })();
 
   return { response, json };
 }

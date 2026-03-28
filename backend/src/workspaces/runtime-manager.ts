@@ -970,12 +970,12 @@ export function buildDevcontainerFeaturePlan(features: string[]): DevcontainerFe
     if (normalized === 'ghcr.io/devcontainers/features/git') {
       appliedFeatures.push(featureId);
       dockerfileLines.push(
-        'RUN if command -v git >/dev/null 2>&1; then git --version >/dev/null; ' +
-          'elif command -v apt-get >/dev/null 2>&1; then apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git && rm -rf /var/lib/apt/lists/*; ' +
-          'elif command -v apk >/dev/null 2>&1; then apk add --no-cache git; ' +
-          'elif command -v dnf >/dev/null 2>&1; then dnf install -y git && dnf clean all; ' +
-          'elif command -v yum >/dev/null 2>&1; then yum install -y git && yum clean all; ' +
-          'else echo \"unsupported package manager for git feature\" >&2; exit 1; fi'
+          'RUN if command -v git >/dev/null 2>&1; then git --version >/dev/null; ' +
+            'elif command -v apt-get >/dev/null 2>&1; then apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git && rm -rf /var/lib/apt/lists/*; ' +
+            'elif command -v apk >/dev/null 2>&1; then apk add --no-cache git; ' +
+            'elif command -v dnf >/dev/null 2>&1; then dnf install -y git && dnf clean all; ' +
+            'elif command -v yum >/dev/null 2>&1; then yum install -y git && yum clean all; ' +
+          'else echo "unsupported package manager for git feature" >&2; exit 1; fi'
       );
       continue;
     }
@@ -1156,7 +1156,7 @@ class WorkspaceRuntimeManager {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'failed to create git worktree';
-      throw new Error(message);
+      throw new Error(message, { cause: error });
     }
 
     const workspace: WorkspaceRecord = {
@@ -1243,7 +1243,7 @@ class WorkspaceRuntimeManager {
         imageManaged = true;
       } catch (error) {
         const message = error instanceof Error ? error.message : 'failed to build devcontainer image';
-        throw new Error(message);
+        throw new Error(message, { cause: error });
       }
     }
     const featurePlan = buildDevcontainerFeaturePlan(devcontainerDescriptor.features);
@@ -1282,7 +1282,7 @@ class WorkspaceRuntimeManager {
           }
         }
         const message = error instanceof Error ? error.message : 'failed to materialize devcontainer features';
-        throw new Error(message);
+        throw new Error(message, { cause: error });
       }
     }
     const containerWorkdir = devcontainerDescriptor.workspaceFolder
@@ -1327,7 +1327,7 @@ class WorkspaceRuntimeManager {
         }
       }
       const message = error instanceof Error ? error.message : 'failed to create devcontainer workspace';
-      throw new Error(message);
+      throw new Error(message, { cause: error });
     }
 
     const workspace: WorkspaceRecord = {
@@ -1443,7 +1443,8 @@ class WorkspaceRuntimeManager {
         });
       }
     } catch (error) {
-      throw new Error(error instanceof Error ? error.message : 'failed to spawn pty process');
+      const message = error instanceof Error ? error.message : 'failed to spawn pty process';
+      throw new Error(message, { cause: error });
     }
     state.child = child;
     state.workspace.status = 'running';
@@ -1544,7 +1545,7 @@ class WorkspaceRuntimeManager {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'failed to delete git worktree';
-        throw new Error(message);
+        throw new Error(message, { cause: error });
       }
     }
     if (state.workspace.kind === 'devcontainer' && state.workspace.containerName) {

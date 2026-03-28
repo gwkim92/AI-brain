@@ -32,7 +32,6 @@ import type {
   IntelligenceWorkspaceMemberRecord,
   IntelligenceWorkspaceRecord,
   ModelRegistryEntryRecord,
-  ProviderHealthRecord,
   RawDocumentRecord,
   SignalEnvelopeRecord,
 } from '../types';

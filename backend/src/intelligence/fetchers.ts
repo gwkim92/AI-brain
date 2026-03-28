@@ -191,13 +191,6 @@ function extractCandidateUrlsFromHtml(html: string, baseUrl: string): string[] {
   return uniqueUrls(urls);
 }
 
-function normalizeFetchHeaders(response: Response): { etag: string | null; lastModified: string | null } {
-  return {
-    etag: response.headers.get('etag'),
-    lastModified: response.headers.get('last-modified'),
-  };
-}
-
 function mapRadarDocuments(source: IntelligenceSourceRecord, fetched: Awaited<ReturnType<typeof fetchRadarFeed>>): IntelligenceFetchedDocument[] {
   return fetched.items.map((item) => {
     const canonicalUrl = canonicalizeUrl(item.sourceUrl);

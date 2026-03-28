@@ -3,7 +3,6 @@ import type {
   IntelligenceCapabilityAlias,
   IntelligenceDomainId,
   IntelligenceEventFamily,
-  IntelligenceExecutionStatus,
   IntelligenceScanRunStatus,
   IntelligenceSourceKind,
   CouncilRunRecord,

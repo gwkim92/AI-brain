@@ -3,7 +3,6 @@ import { z } from 'zod';
 
 import { getSharedEvalRunner } from '../../evals/v2/runner';
 import { sendError, sendSuccess } from '../../lib/http';
-import type { V2RouteContext } from './types';
 
 const EvalRunCreateSchema = z.object({
   suite: z.string().min(1).max(120).default('smoke'),
@@ -17,7 +16,7 @@ const EvalRunParamsSchema = z.object({
 
 const evalRunner = getSharedEvalRunner();
 
-export async function registerV2EvalRoutes(app: FastifyInstance, _ctx: V2RouteContext): Promise<void> {
+export async function registerV2EvalRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/v2/evals/runs', async (request, reply) => {
     const parsed = EvalRunCreateSchema.safeParse(request.body);
     if (!parsed.success) {

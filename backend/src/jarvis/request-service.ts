@@ -1215,7 +1215,7 @@ export async function executeJarvisRequest(
     plan = generated;
     plannerMode = 'llm';
   } catch {
-    plannerMode = 'fallback';
+    // Planner failures are non-fatal; keep the heuristic fallback plan.
   }
 
   const mission = await store.createMission({

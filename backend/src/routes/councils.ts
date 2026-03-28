@@ -189,7 +189,7 @@ export async function councilRoutes(app: FastifyInstance, ctx: RouteContext): Pr
         idempotent_replay: result.idempotentReplay
         }
       );
-    } catch (error) {
+    } catch {
       return sendError(reply, request, 503, 'INTERNAL_ERROR', 'council run failed');
     }
   });

@@ -604,23 +604,24 @@ function selectBalancedRetrievalItems(
     ranked.find((item) => predicate(item) && !selectedUrls.has(item.url));
 
   for (const topic of preferredTopicOrder) {
+    const preferredMajorPublisherCandidate = highestByPredicate(
+      (item) =>
+        detectBriefingTopic(`${item.title} ${item.snippet} ${item.domain}`) === topic &&
+        !isGoogleNewsDomain(item.domain) &&
+        isPreferredMajorPublisher(item.domain) &&
+        item.scores.significance >= 0.62
+    );
+    if (pushCandidate(preferredMajorPublisherCandidate)) {
+      continue;
+    }
     pushCandidate(
       highestByPredicate(
         (item) =>
           detectBriefingTopic(`${item.title} ${item.snippet} ${item.domain}`) === topic &&
           !isGoogleNewsDomain(item.domain) &&
-          isPreferredMajorPublisher(item.domain) &&
-          item.scores.significance >= 0.62
+          item.scores.significance >= 0.6
       )
-    ) ||
-      pushCandidate(
-        highestByPredicate(
-          (item) =>
-            detectBriefingTopic(`${item.title} ${item.snippet} ${item.domain}`) === topic &&
-            !isGoogleNewsDomain(item.domain) &&
-            item.scores.significance >= 0.6
-        )
-      );
+    );
   }
   if (profile === 'major_with_war') {
     pushCandidate(

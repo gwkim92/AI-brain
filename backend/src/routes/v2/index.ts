@@ -49,7 +49,7 @@ export async function registerV2Routes(app: FastifyInstance, ctx: RouteContext):
   await registerV2HyperAgentRoutes(app, v2Ctx);
   await registerV2TaskViewRoutes(app, v2Ctx);
   await registerV2PolicyRoutes(app, v2Ctx);
-  await registerV2EvalRoutes(app, v2Ctx);
+  await registerV2EvalRoutes(app);
   await registerV2IncidentRoutes(app, v2Ctx);
   await registerV2ActionRoutes(app, v2Ctx);
   await registerV2KgRoutes(app, v2Ctx);

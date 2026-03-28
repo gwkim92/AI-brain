@@ -23,7 +23,6 @@ import type {
   IntelligenceNarrativeClusterMembershipRecord,
   IntelligenceNarrativeClusterRecord,
   IntelligenceNarrativeClusterLedgerEntryRecord,
-  IntelligenceNarrativeClusterTimelineRecord,
   LinkedClaimEdgeRecord,
   LinkedClaimRecord,
   IntelligenceOutcomeRecord,
@@ -36,7 +35,6 @@ import type {
   ResetIntelligenceDerivedWorkspaceStateResult,
   IntelligenceTemporalNarrativeState,
   SemanticClaim,
-  IntelligenceSignalProcessingStatus,
   ProviderCredentialProvider,
   IntelligenceSourceCursorRecord,
   IntelligenceSourceRecord,
@@ -4139,7 +4137,6 @@ export async function runIntelligenceSourceScanPass(input: {
   let fetchedCount = 0;
   let storedDocumentCount = 0;
   let signalCount = 0;
-  let executionCount = 0;
   let failedCount = 0;
   const failedSources: string[] = [];
 
@@ -5987,7 +5984,7 @@ export async function executeIntelligenceCandidate(input: {
     throw new Error('execution candidate not found');
   }
   const toolName = typeof candidate.payload.mcp_tool_name === 'string' ? candidate.payload.mcp_tool_name : null;
-  let status: IntelligenceExecutionStatus = candidate.status;
+  let status: IntelligenceExecutionStatus;
   let resultJson: Record<string, unknown> = { ...candidate.resultJson };
   let executedAt = candidate.executedAt;
   const toolArguments =

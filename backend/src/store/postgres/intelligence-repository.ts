@@ -12,8 +12,6 @@ import type {
   IntelligenceFetchFailureRecord,
   IntelligenceBridgeDispatchRecord,
   IntelligenceEventClusterRecord,
-  IntelligenceEventGraphNeighborhood,
-  IntelligenceEventGraphSummary,
   IntelligenceExpectedSignalEntryRecord,
   IntelligenceInvalidationEntryRecord,
   IntelligenceNarrativeClusterLedgerEntryRecord,

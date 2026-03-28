@@ -303,7 +303,6 @@ function sourcePolicyStats(
   let repoSourceCount = 0;
   let mediaSourceCount = 0;
   let authoritySourceCount = 0;
-  let authorityDomainCount = 0;
   let releaseLikeCount = 0;
   let issueLikeCount = 0;
   let effectiveDateSourceCount = 0;
